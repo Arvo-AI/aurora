@@ -12,8 +12,11 @@ from a user's request, and an incident can be continued a bounded number of
 times.
 """
 
+import json
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
+
+from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 
 from utils.auth.stateless_auth import set_rls_context
 from utils.db.connection_pool import db_pool
@@ -76,39 +79,40 @@ def continue_investigation(incident_id: str, requested_by: str) -> Dict[str, Any
     owner, like the original RCA, so it uses the same connectors and session.
     Raises ContinueRefused when the investigation cannot be continued.
     """
+    # A refusal is raised after the connection is released: raised inside, the
+    # pool would log it as a database error.
+    refusal: Optional[ContinueRefused] = None
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cursor:
-            if not set_rls_context(cursor, conn, requested_by, log_prefix="[ContinueRCA]"):
-                raise ContinueRefused("Incident not found", 404)
-            # The row lock makes two clicks start one continuation, not two.
-            cursor.execute(
-                """SELECT user_id, aurora_chat_session_id, aurora_status, status,
-                          rca_unfinished_reason, rca_continuations, aurora_summary
-                   FROM incidents WHERE id = %s FOR UPDATE""",
-                (incident_id,),
-            )
-            row = cursor.fetchone()
-            if not row:
-                raise ContinueRefused("Incident not found", 404)
-            owner_id, session_id, aurora_status, status, reason, used, report = row
-            if status == "merged":
-                raise ContinueRefused("This incident was merged into another investigation")
-            if aurora_status in ("running", "summarizing"):
-                raise ContinueRefused("The investigation is already running")
-            if not reason or not session_id:
-                raise ContinueRefused("The investigation already finished")
-            if continuations_left(used) <= 0:
-                raise ContinueRefused(
-                    f"This investigation was already continued {MAX_CONTINUATIONS} times"
+            row = None
+            if set_rls_context(cursor, conn, requested_by, log_prefix="[ContinueRCA]"):
+                # The row lock makes two clicks start one continuation, not two.
+                cursor.execute(
+                    """SELECT user_id, aurora_chat_session_id, aurora_status, status,
+                              rca_unfinished_reason, rca_continuations, aurora_summary
+                       FROM incidents WHERE id = %s FOR UPDATE""",
+                    (incident_id,),
                 )
-            cursor.execute(
-                """UPDATE incidents
-                   SET aurora_status = 'running', rca_continuations = rca_continuations + 1,
-                       updated_at = NOW()
-                   WHERE id = %s""",
-                (incident_id,),
-            )
-        conn.commit()
+                row = cursor.fetchone()
+            if row:
+                owner_id, session_id, aurora_status, status, reason, used, report = row
+                refusal = _refusal(status, aurora_status, reason, session_id, used)
+            else:
+                refusal = ContinueRefused("Incident not found", 404)
+            if refusal is None:
+                cursor.execute(
+                    """UPDATE incidents
+                       SET aurora_status = 'running', rca_continuations = rca_continuations + 1,
+                           updated_at = NOW()
+                       WHERE id = %s""",
+                    (incident_id,),
+                )
+        if refusal is None:
+            conn.commit()
+        else:
+            conn.rollback()
+    if refusal is not None:
+        raise refusal
 
     from chat.background.task import run_background_chat
 
@@ -130,6 +134,73 @@ def continue_investigation(incident_id: str, requested_by: str) -> Dict[str, Any
         raise
     logger.info("[ContinueRCA] Continuing incident %s (continuation %s)", incident_id, int(used or 0) + 1)
     return {"continuationsLeft": continuations_left(int(used or 0) + 1)}
+
+
+# Tool calls that coordinate rather than gather evidence.
+_NOT_EVIDENCE = frozenset({"dispatch_subagent", "write_findings", "load_skill", "trigger_rca"})
+# The most recent steps replayed into a continuation; older ones are in the report.
+_MAX_REPLAYED_STEPS = 150
+
+
+def history_from_execution_steps(incident_id: str, user_id: str) -> List[BaseMessage]:
+    """The investigation's tool calls and results, as agent messages.
+
+    An interrupted run never saves its own context, but each tool call is
+    recorded in execution_steps as it starts and ends, sub-agents' included.
+    Replaying them lets a continuation see what was already checked and what
+    it returned. Returns [] when nothing can be read.
+    """
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                if not set_rls_context(cursor, conn, user_id, log_prefix="[ContinueRCA]"):
+                    return []
+                cursor.execute(
+                    """SELECT id, tool_name, tool_call_id, tool_input, tool_output
+                       FROM (SELECT * FROM execution_steps
+                             WHERE incident_id = %s AND tool_output IS NOT NULL
+                             ORDER BY step_index DESC LIMIT %s) recent
+                       ORDER BY step_index""",
+                    (incident_id, _MAX_REPLAYED_STEPS),
+                )
+                rows = cursor.fetchall()
+    except Exception:
+        logger.exception("[ContinueRCA] Could not read execution steps for incident %s", incident_id)
+        return []
+
+    messages: List[BaseMessage] = []
+    seen = set()
+    for step_id, tool_name, tool_call_id, tool_input, tool_output in rows:
+        if tool_name in _NOT_EVIDENCE or not (tool_output or "").strip():
+            continue
+        call_id = tool_call_id or f"step_{step_id}"
+        if call_id in seen:
+            continue
+        seen.add(call_id)
+        args = tool_input
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except ValueError:
+                pass
+        if not isinstance(args, dict):
+            args = {"input": args}
+        messages.append(AIMessage(content="", tool_calls=[{"id": call_id, "name": tool_name, "args": args}]))
+        messages.append(ToolMessage(content=tool_output, tool_call_id=call_id, name=tool_name))
+    return messages
+
+
+def _refusal(status, aurora_status, reason, session_id, used) -> Optional[ContinueRefused]:
+    """Why this incident cannot be continued now, or None when it can."""
+    if status == "merged":
+        return ContinueRefused("This incident was merged into another investigation")
+    if aurora_status in ("running", "summarizing"):
+        return ContinueRefused("The investigation is already running")
+    if not reason or not session_id:
+        return ContinueRefused("The investigation already finished")
+    if continuations_left(used) <= 0:
+        return ContinueRefused(f"This investigation was already continued {MAX_CONTINUATIONS} times")
+    return None
 
 
 def _undo_claim(incident_id: str, requested_by: str) -> None:

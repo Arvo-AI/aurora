@@ -260,3 +260,41 @@ def test_the_summary_knows_every_reason(reason):
 
     assert reason in UNFINISHED_REASONS
     assert UNFINISHED_REASONS[reason] in _unfinished_investigation_note(reason)
+
+
+# --- the continuation's history ------------------------------------------------------
+
+def test_history_is_rebuilt_from_execution_steps(monkeypatch):
+    from langchain_core.messages import AIMessage, ToolMessage
+
+    cursor = MagicMock()
+    cursor.fetchall.return_value = [
+        (1, "cloud_exec", "c1", {"command": "kubectl get pods"}, "pod-a CrashLoopBackOff"),
+        (2, "dispatch_subagent", "c2", {}, "rollup"),  # coordination, not evidence
+        (3, "query_datadog", None, '{"query": "errors"}', "500s at 13:40"),  # no call id recorded
+        (4, "cloud_exec", "c1", {"command": "kubectl get pods"}, "duplicate"),
+        (5, "cloud_exec", "c5", {}, "  "),  # no output
+    ]
+    conn = MagicMock()
+    conn.cursor.return_value.__enter__.return_value = cursor
+    pool = MagicMock()
+    pool.get_admin_connection.return_value.__enter__.return_value = conn
+    monkeypatch.setattr(continuation, "db_pool", pool)
+    monkeypatch.setattr(continuation, "set_rls_context", lambda *a, **k: "org-1")
+
+    history = continuation.history_from_execution_steps(INCIDENT, OWNER)
+
+    assert [type(m) for m in history] == [AIMessage, ToolMessage, AIMessage, ToolMessage]
+    assert history[0].tool_calls[0]["id"] == "c1"
+    assert history[0].tool_calls[0]["args"] == {"command": "kubectl get pods"}
+    assert history[1].tool_call_id == "c1" and "CrashLoopBackOff" in history[1].content
+    assert history[2].tool_calls[0]["id"] == "step_3"
+    assert history[2].tool_calls[0]["args"] == {"query": "errors"}
+    assert history[3].tool_call_id == "step_3"
+
+
+def test_no_history_when_steps_cannot_be_read(monkeypatch):
+    pool = MagicMock()
+    pool.get_admin_connection.side_effect = RuntimeError("db down")
+    monkeypatch.setattr(continuation, "db_pool", pool)
+    assert continuation.history_from_execution_steps(INCIDENT, OWNER) == []

@@ -932,8 +932,21 @@ class Workflow:
         # Slack progress reads this object, not the Agent slot a concurrent turn can replace
         self.tool_capture = tool_capture
         
+        # A continuation resumes an investigation that was interrupted, whose
+        # context was never saved: its history is rebuilt from the tool calls
+        # recorded as they ran. The partial report is in the new prompt.
+        continuing = getattr(input_state, "trigger_source", None) == "continue_investigation"
+        if continuing and input_state.incident_id and input_state.user_id:
+            from chat.background.continuation import history_from_execution_steps
+
+            history = history_from_execution_steps(input_state.incident_id, input_state.user_id)
+            input_state.messages = [*history, *input_state.messages]
+            logger.info(
+                "[RCA-Context] Continuing incident %s with %d messages rebuilt from its execution steps",
+                input_state.incident_id, len(history),
+            )
         # Load existing context if session_id is provided
-        if input_state.session_id and input_state.user_id:
+        elif input_state.session_id and input_state.user_id:
             import time as _time
             _ctx_start = _time.perf_counter()
             existing_context = LLMContextManager.load_context_history(
@@ -944,12 +957,7 @@ class Workflow:
             logger.info(f"Context load took {_ctx_ms:.1f} ms for session {input_state.session_id}")
 
             if existing_context:
-                # A continuation picks up the same investigation, so it keeps the
-                # full history: compressing it would drop the evidence (and its
-                # citations) the run already gathered. Context trimming still
-                # keeps each model call within its window.
-                continuing = getattr(input_state, "trigger_source", None) == "continue_investigation"
-                rca_info = None if continuing else self._get_rca_context_for_session(
+                rca_info = self._get_rca_context_for_session(
                     input_state.session_id, input_state.user_id
                 )
                 compressed = self._compress_rca_context(existing_context, rca_info) if rca_info else None
@@ -1295,12 +1303,8 @@ class Workflow:
                 
             logger.info(f"[WORKFLOW STREAM] Completed: {_event_count} events, {_token_count} tokens streamed")
 
-        except (Exception, asyncio.CancelledError) as stream_exception:
-            if isinstance(stream_exception, Exception):
-                logger.exception(f"[WORKFLOW STREAM ERROR] Exception in workflow stream for session {input_state.session_id}: {stream_exception}")
-            # A stall cancel, the time limit or an error ends the run here. Keep
-            # what it gathered so the incident summary can still cite it.
-            self._save_interrupted_context(tool_capture)
+        except Exception as stream_exception:
+            logger.exception(f"[WORKFLOW STREAM ERROR] Exception in workflow stream for session {input_state.session_id}: {stream_exception}")
             raise
 
         # Consolidate message chunks and save final state
@@ -1361,30 +1365,6 @@ class Workflow:
                 logger.debug(f"[WORKFLOW FINAL] Skipping save - only user message present (already saved immediately)")
             else:
                 logger.debug(f"[WORKFLOW FINAL] Skipping save - no messages to save")
-
-    def _save_interrupted_context(self, tool_capture) -> None:
-        """Save the context of a run that did not finish. Best effort; never raises.
-
-        Skips context compression and memory extraction: both can call a model,
-        and an interrupted run may have only seconds left before the worker
-        kills it.
-        """
-        try:
-            self._consolidate_message_chunks()
-            state = self._last_state
-            if not state:
-                return
-            session_id = self._get_state_attr(state, 'session_id')
-            user_id = self._get_state_attr(state, 'user_id')
-            messages = self._get_state_attr(state, 'messages', [])
-            if session_id and user_id and messages and len(messages) > 1:
-                saved = LLMContextManager.save_context_history(session_id, user_id, messages, tool_capture)
-                logger.info(
-                    "[WORKFLOW INTERRUPTED] Saved context of interrupted run for session %s "
-                    "(%d messages, saved=%s)", session_id, len(messages), saved,
-                )
-        except Exception:
-            logger.warning("[WORKFLOW INTERRUPTED] Could not save context of interrupted run", exc_info=True)
 
     def _consolidate_message_chunks(self):
         """Consolidate AIMessageChunk objects into proper AIMessage objects."""
