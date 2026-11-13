@@ -27,6 +27,7 @@ import {
 import { useGitHubStatus, computeInstallationState, type InstallationState } from '@/hooks/use-github-status';
 import { GitHubAppService, type GitHubInstallation, type GitHubDiscoveredInstallation } from '@/lib/github-app';
 import { queryClient } from '@/lib/query';
+import { RevertReplayPanel } from '@/components/revert-replay-panel';
 
 const setGithubConnectedOptimistically = (connected: boolean) => {
   const key = '/api/connectors/status';
@@ -1188,6 +1189,13 @@ export default function GitHubProviderIntegration() {
                           data-testid={`repo-change-gating-${repo.repo_full_name}`}
                         />
                       </div>
+                    )}
+                    {/* Mounted only after the toggle's PUT settles: the backend
+                        queues the replay inside that request, so the first GET
+                        already sees it. */}
+                    {repo.installation_id != null && authConfig.incident_prevention_enabled
+                      && repo.change_gating_enabled && !gatingUpdating.has(repo.repo_full_name) && (
+                      <RevertReplayPanel repoFullName={repo.repo_full_name} />
                     )}
                   </div>
                 );
