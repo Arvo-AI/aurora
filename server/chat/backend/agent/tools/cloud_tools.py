@@ -1098,6 +1098,9 @@ def get_cloud_tools():
     is_hpa_vpa_action = getattr(state_context, 'is_hpa_vpa_action', False) if state_context else False
     is_pr_review = getattr(state_context, 'is_pr_review', False) if state_context else False
     is_rca_context = _is_background_rca(state_context, is_background)
+    from chat.backend.agent.access.outbound_policy import drop_outbound_tools, source_allows_outbound
+    _trigger_source = getattr(state_context, 'trigger_source', None) if state_context else None
+    no_outbound = not source_allows_outbound(_trigger_source)
     _action_id = getattr(state_context, 'trigger_action_id', None) if state_context else None
     _incident_id = getattr(state_context, 'incident_id', None) if state_context else None
     capture_tag = "capture" if tool_capture else "nocapture"
@@ -1115,7 +1118,7 @@ def get_cloud_tools():
     from utils.auth.connector_access import access_for
     access = access_for(user_id)
 
-    cache_key = f"{user_id}:{capture_tag}:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}:hpa_vpa={is_hpa_vpa_action}:is_rca_ctx={is_rca_context}:pr_review={is_pr_review}:action_id={_action_id}:incident={_incident_id}:mcp={mcp_fingerprint(user_id)}:access={access.revision()}:rabbitmq={int(rabbitmq_connected)}"
+    cache_key = f"{user_id}:{capture_tag}:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}:hpa_vpa={is_hpa_vpa_action}:is_rca_ctx={is_rca_context}:pr_review={is_pr_review}:action_id={_action_id}:incident={_incident_id}:mcp={mcp_fingerprint(user_id)}:access={access.revision()}:rabbitmq={int(rabbitmq_connected)}:no_outbound={int(no_outbound)}"
     
     current_time = time.time()
     if (
@@ -3443,7 +3446,8 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     ))
     
     tools = ModeAccessController.filter_tools(mode, tools)
-    
+    tools = drop_outbound_tools(tools, _trigger_source)
+
     # Deduplicate tools by name to prevent "Tool names must be unique" errors with Claude
     seen_tool_names = set()
     deduplicated_tools = []

@@ -309,8 +309,14 @@ def investigate_pr(
     head_sha: str,
     action: str,
     delivery_id: str,
+    retrospective: bool = False,
 ) -> dict[str, Any]:
-    """Run an agentic risk review on a GitHub PR and post a GitHub review."""
+    """Run an agentic risk review on a GitHub PR and post a GitHub review.
+
+    ``retrospective=True`` reviews an already-merged PR once (install-time
+    first review when a repo has no open PRs) and posts the result as a PR
+    conversation comment instead of a review.
+    """
     from billiard.exceptions import SoftTimeLimitExceeded
     from celery.exceptions import Retry
 
@@ -319,6 +325,7 @@ def investigate_pr(
         return _run_investigation(
             self, start, user_id, installation_id, repo_full_name,
             pr_number, head_sha, action, delivery_id,
+            retrospective=retrospective,
         )
     except _PermanentProviderError:
         return {"status": "github_error"}
@@ -352,6 +359,7 @@ def _run_investigation(
     head_sha: str,
     action: str,
     delivery_id: str,
+    retrospective: bool = False,
 ) -> dict[str, Any]:
     """GitHub wrapper: build the adapter + enrollment probe, run the core.
 
@@ -371,6 +379,7 @@ def _run_investigation(
             ),
             provider="github",
             log_key="investigate_pr",
+            retrospective=retrospective,
             post_review_reject_hint=(
                 "on 403 the GitHub App likely lacks the 'Pull requests: "
                 "write' permission (upgrade in App settings, org admin must "
@@ -491,6 +500,7 @@ def _run_investigation_core(
     provider: str = "github",
     log_key: str = "investigate_pr",
     post_review_reject_hint: str = "",
+    retrospective: bool = False,
 ) -> dict[str, Any]:
     """Provider-neutral investigation flow; see module docstring for steps.
 
@@ -498,11 +508,18 @@ def _run_investigation_core(
     (:class:`services.change_gating.protocol.PRAdapter`). Providers that
     return ``None`` from ``get_compare`` simply never take the incremental
     path — every review is a full-PR review.
+
+    ``retrospective`` reviews a MERGED PR (install-time first review): it
+    must be merged rather than open, is always a full-PR review, posts no
+    transient progress comment and no inline threads, supersedes nothing,
+    and lands as a PR conversation comment.
     """
     log_ctx = (
         f"repo={repo_full_name} pr={pr_number} head_sha={head_sha} "
         f"action={action} delivery_id={delivery_id}"
     )
+    if retrospective:
+        log_ctx += " retrospective=True"
 
     def _skip(reason: str) -> dict[str, Any]:
         logger.info("change_gating=%s %s status=%s", log_key, log_ctx, reason)
@@ -590,7 +607,10 @@ def _run_investigation_core(
         return _skip("stale_head")
     if pr.get("draft"):
         return _skip("draft")
-    if pr.get("state") != "open":
+    if retrospective:
+        if not pr.get("merged_at"):
+            return _skip("not_merged")
+    elif pr.get("state") != "open":
         return _skip("not_open")
     default_branch = ((pr.get("base") or {}).get("repo") or {}).get("default_branch")
     if not default_branch or ((pr.get("base") or {}).get("ref")) != default_branch:
@@ -633,7 +653,9 @@ def _run_investigation_core(
         render_review_body,
     )
 
-    incremental = bool(prior_head_sha) and prior_head_sha != head_sha
+    incremental = (
+        bool(prior_head_sha) and prior_head_sha != head_sha and not retrospective
+    )
     compare_files: Optional[list] = None
     if incremental:
         compare = _gh(
@@ -661,8 +683,10 @@ def _run_investigation_core(
     # the fast cached-verdict retry path. Its id lives only in this local and
     # is cleared in the finally below on EVERY exit (return, skip, retry, or
     # failure) — so it can never leak; a Celery retry just posts a fresh one.
+    # Not on a merged PR: a comment created then deleted there would still
+    # email every participant, for no live benefit.
     progress_comment_id = None
-    if cached_verdict is None:
+    if cached_verdict is None and not retrospective:
         progress_comment_id = _post_progress_comment(adapter, pr_number, log_ctx, log_key)
 
     try:
@@ -693,6 +717,7 @@ def _run_investigation_core(
             prompt = build_review_prompt(
                 repo_full_name, pr, files, diff,
                 prior_findings=prior_findings, incremental=incremental,
+                retrospective=retrospective,
             )
 
             # Session + synchronous agent run. rail_text carries only the
@@ -707,10 +732,14 @@ def _run_investigation_core(
                 "pr_number": pr_number,
                 "head_sha": head_sha,
                 "delivery_id": delivery_id,
+                "retrospective": retrospective,
             }
             session_id = create_background_chat_session(
                 user_id=user_id,
-                title=f"PR Risk Review: {repo_full_name}#{pr_number}",
+                title=(
+                    f"PR Risk Review: {repo_full_name}#{pr_number}"
+                    + (" (merged, retrospective)" if retrospective else "")
+                ),
                 trigger_metadata=trigger_metadata,
             )
             rail_text = (pr.get("title") or "") + "\n\n" + (pr.get("body") or "")
@@ -872,10 +901,15 @@ def _run_investigation_core(
             for f in new_findings
         ]
         kept = len(anchored) - len(new_findings)
+        if retrospective:
+            # A merged PR gets one conversation comment; its findings stay in
+            # the body table rather than opening inline threads after merge.
+            comments = []
 
         body = render_review_body(
             verdict["verdict"], verdict.get("summary", ""), verdict["findings"],
             head_sha, incremental=incremental,
+            retrospective=retrospective,
         )
         # --------------------------------------------------------------
         # 11. Post the new review — always a COMMENT, never an approval
@@ -890,14 +924,19 @@ def _run_investigation_core(
         #     (first pass / fallback) supersedes prior stale whole-PR
         #     tables.
         # --------------------------------------------------------------
-        _gh(
-            "post_review",
-            lambda: adapter.post_review(
-                pr_number, commit_id=head_sha, body=body, comments=comments
-            ),
-        )
+        if retrospective:
+            _gh("post_review", lambda: adapter.post_issue_comment(pr_number, body))
+        else:
+            _gh(
+                "post_review",
+                lambda: adapter.post_review(
+                    pr_number, commit_id=head_sha, body=body, comments=comments
+                ),
+            )
 
-        if prior_aurora_reviews and not incremental:
+        if retrospective:
+            pass  # one-off comment on a merged PR: nothing to supersede/dismiss
+        elif prior_aurora_reviews and not incremental:
             # Full-PR re-review replaces prior whole-PR verdicts: supersede
             # their stale tables. Per-review isolation — a transient failure
             # on one must not skip the rest (each is best-effort).
@@ -993,6 +1032,7 @@ def _run_investigation_core(
             "status": "completed",
             "verdict": verdict["verdict"],
             "incremental": incremental,
+            "retrospective": retrospective,
             "findings": len(verdict["findings"]),
             "session_id": session_id,
         }

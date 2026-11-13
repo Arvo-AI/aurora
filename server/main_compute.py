@@ -146,6 +146,9 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
                         "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                           "Authorization", "X-Provider-Preference"],
                         "methods": ["GET", "POST", "DELETE", "OPTIONS"]},
+        r"/pipeline/*": {"origins": FRONTEND_URL, "supports_credentials": True,
+                         "allow_headers": ["Content-Type", "X-Requested-With", "X-User-ID", "Authorization"],
+                         "methods": ["GET", "POST", "OPTIONS"]},
         r"/rabbitmq/*": {"origins": FRONTEND_URL, "supports_credentials": True,
                          "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                            "Authorization", "X-Provider-Preference"],
@@ -268,6 +271,7 @@ _OPEN_PREFIXES = (
     "/pagerduty/webhook/",
     "/opsgenie/webhook/",
     "/jenkins/webhook/",
+    "/pipeline/webhook/",
     "/cloudbees/webhook/",
     "/spinnaker/webhook/",
     "/jira/webhook/",
@@ -485,6 +489,11 @@ app.register_blueprint(google_chat_events_bp, url_prefix="/google-chat")
 from routes.jenkins import bp as jenkins_bp  # noqa: F401
 import routes.jenkins.tasks  # noqa: F401
 app.register_blueprint(jenkins_bp, url_prefix="/jenkins")
+
+# --- Pipeline door: zero-credential dbt/Airflow/log failure intake ---
+from routes.pipeline import bp as pipeline_bp  # noqa: F401
+import routes.pipeline.tasks  # noqa: F401
+app.register_blueprint(pipeline_bp, url_prefix="/pipeline")
 
 # --- CloudBees CI Integration Routes (reuses Jenkins connector) ---
 from routes.cloudbees import bp as cloudbees_bp  # noqa: F401

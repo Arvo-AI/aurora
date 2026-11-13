@@ -44,6 +44,10 @@ def _render_mcp_servers(user_id: str) -> str:
 INTEGRATIONS_DIR = os.path.join(os.path.dirname(__file__), "integrations")
 RCA_DIR = os.path.join(os.path.dirname(__file__), "rca")
 
+# RCA playbooks keyed by alert source rather than by a connected provider:
+# the evidence arrives with the alert, so no connector gates them.
+_SOURCE_RCA_SKILLS = {"pipeline": "data_pipelines"}
+
 def _get_rca_token_budget() -> int:
     """Resolve RCA skill token budget from env, with a safe default."""
     raw = (
@@ -452,6 +456,13 @@ class SkillRegistry:
         extra_ctx = self._build_rca_context(
             user_id, source, alert_details or {}, integrations
         )
+
+        # 0. Source playbook first (e.g. data pipelines), ahead of integrations.
+        source_skill = _SOURCE_RCA_SKILLS.get((source or "").lower())
+        if source_skill and self._rca_bodies.get(source_skill):
+            rendered = resolve_template(self._rca_bodies[source_skill], extra_ctx)
+            parts.append(rendered)
+            tokens_used += estimate_tokens(rendered)
 
         # 1. Load connected integration skills, ordered by rca_priority.
         # One access load covers every skill. check_connection asks again per skill.
