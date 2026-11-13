@@ -6,7 +6,8 @@ edits follow their own switches; admins can always edit memory.
 
 Chat history audit (Monitor → Chat history, and the agent tools that answer
 the same questions) is admins only by default; the org can extend it to
-editors. Viewers and Slack guests never get it.
+editors. Viewers and Slack guests never get it. The same rule decides who may
+open another person's chat by id (``may_read_chat``).
 """
 
 from __future__ import annotations
@@ -105,6 +106,43 @@ def may_audit_chats(user_id: str, org_id: str) -> bool:
     if ROLE_EDITOR in names:
         return org_allows_editor_audit(org_id)
     return False
+
+
+# Over chat_sessions ``cs``: whether a chat belongs to an incident (its own link,
+# or the RCA session the incident points at) and whether it is an action run.
+# Selected with the chat so ``may_read_chat`` needs no second query.
+CHAT_SCOPE_SQL = """(cs.incident_id IS NOT NULL OR EXISTS (
+        SELECT 1 FROM incidents i
+        WHERE i.org_id = cs.org_id AND i.aurora_chat_session_id::text = cs.id)) AS incident_linked,
+    EXISTS (SELECT 1 FROM action_runs ar
+            WHERE ar.org_id = cs.org_id AND ar.chat_session_id = cs.id) AS action_run"""
+
+
+def may_read_chat(user_id: str, org_id: str, owner_id, incident_linked: bool, action_run: bool) -> bool:
+    """Whether this person may open one chat by its id.
+
+    The owner always may. Otherwise only someone the org lets read other
+    people's chats (``may_audit_chats``), except that an incident's chats
+    follow the incident (``incidents:read``: the incident page already shows
+    them) and an action run's chat follows the action (``actions:read``: the
+    actions page lists its runs). Callers answer "not found" on False, so an
+    id can't be probed. Fails closed.
+    """
+    if not user_id or not org_id:
+        return False
+    if owner_id and owner_id == user_id:
+        return True
+    try:
+        from utils.auth.enforcer import enforce_with_reload
+
+        if incident_linked and enforce_with_reload(user_id, org_id, "incidents", "read"):
+            return True
+        if action_run and enforce_with_reload(user_id, org_id, "actions", "read"):
+            return True
+    except Exception:
+        logger.exception("Could not resolve chat access for org %s", sanitize(org_id))
+        return False
+    return may_audit_chats(user_id, org_id)
 
 
 def _viewer_allowed(user_id: str, org_id: str, org_flag) -> bool:

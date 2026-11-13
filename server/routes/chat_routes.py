@@ -9,6 +9,7 @@ from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.web.limiter_ext import limiter
 from utils.db.connection_pool import db_pool
+from utils.auth.viewer_run import CHAT_SCOPE_SQL, may_audit_chats, may_read_chat
 
 
 # Configure logging
@@ -54,11 +55,14 @@ def get_chat_sessions(user_id):
     """Get all chat sessions visible to the user.
     
     Returns the user's own sessions. Pass ?scope=org to include
-    all sessions in the org (available to any org member).
+    all sessions in the org, for people who may audit chats
+    (``may_audit_chats``); anyone else gets their own sessions.
     """
-    
+
     org_id = get_org_id_from_request()
     scope = request.args.get('scope', 'user')
+    if scope == 'org' and not may_audit_chats(user_id, org_id):
+        scope = 'user'
 
     try:
         conn = connect_to_db_as_user()
@@ -190,7 +194,7 @@ def create_chat_session(user_id):
 @limiter.exempt
 @require_permission("chat", "read")
 def get_chat_session(user_id, session_id):
-    """Get a specific chat session. Any org member can read any session in the org."""
+    """Get a specific chat session: the caller's own, or one ``may_read_chat`` allows."""
     org_id = get_org_id_from_request()
 
     try:
@@ -199,21 +203,22 @@ def get_chat_session(user_id, session_id):
         
         set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
         
-        # Any org member can read sessions in their org (not restricted to own user_id)
-        cursor.execute("""
-            SELECT id, title, messages, created_at, updated_at,
-                   CASE WHEN ui_state IS NULL THEN '{}'::jsonb ELSE ui_state END as ui_state,
-                   COALESCE(status, 'active') as status,
-                   user_id,
-                   incident_id,
-                   pending_turn
-            FROM chat_sessions 
-            WHERE id = %s AND org_id = %s AND is_active = true AND status != 'cancelled'
+        cursor.execute(f"""
+            SELECT cs.id, cs.title, cs.messages, cs.created_at, cs.updated_at,
+                   CASE WHEN cs.ui_state IS NULL THEN '{{}}'::jsonb ELSE cs.ui_state END as ui_state,
+                   COALESCE(cs.status, 'active') as status,
+                   cs.user_id,
+                   cs.incident_id,
+                   cs.pending_turn,
+                   {CHAT_SCOPE_SQL}
+            FROM chat_sessions cs
+            WHERE cs.id = %s AND cs.org_id = %s AND cs.is_active = true AND cs.status != 'cancelled'
         """, (session_id, org_id))
-        
+
         session_data = cursor.fetchone()
-        
-        if not session_data:
+
+        # Someone else's chat the caller may not read is "not found", so ids can't be probed.
+        if not session_data or not may_read_chat(user_id, org_id, session_data[7], *session_data[10:12]):
             return jsonify({'error': 'Chat session not found'}), 404
         
         # Parse messages and extract images from multimodal content
@@ -310,15 +315,16 @@ def get_chat_session_status(user_id, session_id):
 
         set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
 
-        cursor.execute("""
-            SELECT COALESCE(status, 'active'),
-                   COALESCE(jsonb_array_length(messages), 0)
-            FROM chat_sessions
-            WHERE id = %s AND org_id = %s AND is_active = true AND status != 'cancelled'
+        cursor.execute(f"""
+            SELECT COALESCE(cs.status, 'active'),
+                   COALESCE(jsonb_array_length(cs.messages), 0),
+                   cs.user_id, {CHAT_SCOPE_SQL}
+            FROM chat_sessions cs
+            WHERE cs.id = %s AND cs.org_id = %s AND cs.is_active = true AND cs.status != 'cancelled'
         """, (session_id, org_id))
 
         row = cursor.fetchone()
-        if not row:
+        if not row or not may_read_chat(user_id, org_id, *row[2:5]):
             return jsonify({'error': 'Chat session not found'}), 404
 
         return jsonify({'status': row[0], 'message_count': row[1]}), 200
@@ -634,16 +640,17 @@ def get_chat_messages(user_id, session_id):
             with conn.cursor() as cursor:
                 set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
                 cursor.execute(
-                    """
-                    SELECT messages,
-                           COALESCE(status, 'active') AS status
-                    FROM chat_sessions
-                    WHERE id = %s AND org_id = %s AND is_active = true
+                    f"""
+                    SELECT cs.messages,
+                           COALESCE(cs.status, 'active') AS status,
+                           cs.user_id, {CHAT_SCOPE_SQL}
+                    FROM chat_sessions cs
+                    WHERE cs.id = %s AND cs.org_id = %s AND cs.is_active = true
                     """,
                     (session_id, org_id),
                 )
                 row = cursor.fetchone()
-                if not row:
+                if not row or not may_read_chat(user_id, org_id, *row[2:5]):
                     return jsonify({'error': 'session not found'}), 404
 
                 messages = row[0] or []
