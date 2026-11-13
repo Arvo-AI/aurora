@@ -174,12 +174,12 @@ def _env_value(env_var: str) -> str | None:
     return None
 
 
-def _webhook_secret_from_env() -> tuple[str, str] | None:
-    """(env var name, value) of the first webhook secret env var that is set."""
+def _webhook_secret_env_value() -> str | None:
+    """Value of the first webhook secret env var that is set, else None."""
     for env_var in _WEBHOOK_SECRET_ENV_VARS:
         value = _env_value(env_var)
         if value is not None:
-            return env_var, value
+            return value
     return None
 
 
@@ -193,12 +193,19 @@ def _read_backend_or_explain(logical_name: str, *, secret_label: str, env_hint: 
         ) from exc
 
 
-def _cache_once(cache_key: str, value: str, *, secret_label: str, source: str) -> str:
-    """Cache the value; the first writer logs where it came from (never the value)."""
+def _cache_once(cache_key: str, value: str) -> tuple[str, bool]:
+    """Cache the value unless another thread got there first.
+
+    Returns (cached value, whether this call stored it), so only the first
+    reader logs the source.
+    """
     cached = _cache.setdefault(cache_key, value)
-    if cached is value:
-        logger.info("GitHub App %s loaded from %s", secret_label, source)
-    return cached
+    return cached, cached is value
+
+
+# The source log lines below are fixed strings on purpose: nothing derived from
+# the secret (or from the env lookup that returned it) is interpolated, so the
+# value can never reach a log line.
 
 
 def get_app_private_key() -> str:
@@ -208,19 +215,21 @@ def get_app_private_key() -> str:
         return cached
 
     raw = _env_value(_PRIVATE_KEY_ENV_VAR)
+    from_env = raw is not None
     if raw is not None:
         value = _normalize_private_key(raw)
-        source = f"environment ({_PRIVATE_KEY_ENV_VAR})"
     else:
         value = _read_backend_or_explain(
             _PRIVATE_KEY_LOGICAL_NAME,
             secret_label="private key",
             env_hint=_PRIVATE_KEY_ENV_VAR,
         )
-        source = "secrets backend"
-    return _cache_once(
-        _PRIVATE_KEY_CACHE_KEY, value, secret_label="private key", source=source
-    )
+    cached, stored = _cache_once(_PRIVATE_KEY_CACHE_KEY, value)
+    if stored and from_env:
+        logger.info("GitHub App private key loaded from environment (GITHUB_APP_PRIVATE_KEY)")
+    elif stored:
+        logger.info("GitHub App private key loaded from secrets backend")
+    return cached
 
 
 def get_app_webhook_secret() -> str:
@@ -229,17 +238,19 @@ def get_app_webhook_secret() -> str:
     if cached is not None:
         return cached
 
-    from_env = _webhook_secret_from_env()
-    if from_env is not None:
-        env_var, value = from_env
-        source = f"environment ({env_var})"
+    env_value = _webhook_secret_env_value()
+    from_env = env_value is not None
+    if env_value is not None:
+        value = env_value
     else:
         value = _read_backend_or_explain(
             _WEBHOOK_SECRET_LOGICAL_NAME,
             secret_label="webhook secret",
             env_hint=_WEBHOOK_SECRET_ENV_VARS[0],
         )
-        source = "secrets backend"
-    return _cache_once(
-        _WEBHOOK_SECRET_CACHE_KEY, value, secret_label="webhook secret", source=source
-    )
+    cached, stored = _cache_once(_WEBHOOK_SECRET_CACHE_KEY, value)
+    if stored and from_env:
+        logger.info("GitHub App webhook secret loaded from environment")
+    elif stored:
+        logger.info("GitHub App webhook secret loaded from secrets backend")
+    return cached
