@@ -685,7 +685,9 @@ secrets:
   # Leave both empty to skip it.
   githubAppKey:
     # Use a pre-existing Kubernetes Secret holding the key under
-    # GITHUB_APP_PRIVATE_KEY instead of a chart-managed one.
+    # GITHUB_APP_PRIVATE_KEY instead of a chart-managed one. The chart cannot
+    # checksum an external Secret, so after rotating it restart the pods:
+    #   kubectl rollout restart deploy/<fullname>-server deploy/<fullname>-celery-worker deploy/<fullname>-chatbot
     # existingSecret: ""
     GITHUB_APP_PRIVATE_KEY: ""   # base64 of the .pem (base64 -w0 key.pem), or the PEM text
 
