@@ -292,7 +292,8 @@ def _selector_from_body() -> Tuple[Optional[str], bool]:
     """(selector, valid). A selector that is present must be a non-blank string."""
     data = request.get_json(silent=True)
     if data is None:
-        return None, True
+        # An empty body means "no selector". A body that isn't JSON is a mistake.
+        return None, not request.get_data()
     if not isinstance(data, dict):
         return None, False
     for key in ("accountId", "account"):

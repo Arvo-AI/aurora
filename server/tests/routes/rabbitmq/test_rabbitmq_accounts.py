@@ -601,3 +601,26 @@ def test_citation_label_survives_a_truncated_result():
         json.loads(excerpt)
     label = CitationExtractor._rabbitmq_broker_label({}, excerpt)
     assert label == "10.0.0.1:15672, 10.0.0.2:15672"
+
+
+@pytest.mark.parametrize("raw, content_type", [('{"accountId": "x"', "application/json"), ('{"accountId": "x"}', "text/plain")])
+def test_disconnect_post_rejects_a_non_json_body(monkeypatch, routes, raw, content_type):
+    retired = []
+    monkeypatch.setattr(routes, "retire_rabbitmq_connections", lambda user_id: retired.append(user_id))
+    with _app().test_request_context("/rabbitmq/disconnect", method="POST", data=raw, content_type=content_type):
+        _body, status = _call(routes.disconnect_post)
+    assert status == 400
+    assert retired == []
+
+
+def test_truncated_tool_output_keeps_brokers_first(monkeypatch):
+    from chat.backend.agent.tools import rabbitmq_tool
+    from chat.background.citation_extractor import CitationExtractor
+
+    monkeypatch.setattr(rabbitmq_tool, "MAX_OUTPUT_CHARS", 200)
+    brokers = [{"account_id": "10.0.0.1:15672"}, {"account_id": "10.0.0.2:15672"}]
+    out = rabbitmq_tool._dump({"brokers": brokers, "results_by_account": {"x": "y" * 1000}})
+    parsed = json.loads(out)
+    assert parsed["truncated"] is True
+    assert list(parsed)[0] == "brokers"
+    assert CitationExtractor._rabbitmq_broker_label({}, out) == "10.0.0.1:15672, 10.0.0.2:15672"

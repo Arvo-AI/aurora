@@ -99,7 +99,12 @@ def _dump(payload: Any) -> str:
     text = json.dumps(payload, default=str)
     if len(text) <= MAX_OUTPUT_CHARS:
         return text
+    wrapper: Dict[str, Any] = {}
+    # Keep the broker list first and parseable, so findings still name their source.
+    if isinstance(payload, dict) and isinstance(payload.get("brokers"), list):
+        wrapper["brokers"] = payload["brokers"]
     return json.dumps({
+        **wrapper,
         "truncated": True,
         "message": "Response exceeded the output cap. Narrow with account_id, vhost, or name.",
         "preview": text[:MAX_OUTPUT_CHARS],
