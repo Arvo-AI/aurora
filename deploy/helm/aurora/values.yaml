@@ -589,7 +589,6 @@ secrets:
     GITHUB_APP_SETUP_URL: ""               # https://<your-host>/github
     GITHUB_APP_CLIENT_SECRET: ""            # OAuth client secret (for hosted signup flow)
     GITHUB_APP_WEBHOOK_SECRET: ""          # openssl rand -hex 32 (also stored in secrets backend)
-    GITHUB_APP_PRIVATE_KEY: ""             # Fallback when the key is not in the secrets backend: base64 of the .pem (base64 -w0 key.pem)
 
     # --- GitHub OAuth (only when GITHUB_AUTH_MODE=oauth or hybrid) ---
     GH_OAUTH_CLIENT_ID: ""       # Get from: https://github.com/settings/developers
@@ -677,6 +676,18 @@ secrets:
     BEDROCK_ACCESS_KEY_ID: ""        # native mode; falls back to AWS_ACCESS_KEY_ID or an IRSA role
     BEDROCK_SECRET_ACCESS_KEY: ""    # native mode; falls back to AWS_SECRET_ACCESS_KEY
     BEDROCK_SESSION_TOKEN: ""        # native mode; only for temporary / STS credentials
+
+  # --- GitHub App private key fallback (secret-github-app-key.yaml) ---
+  # Mounted by: server, celery-worker, chatbot only (the services that sign App
+  # JWTs), as a single secretKeyRef rather than envFrom. Kept out of `backend`
+  # because that Secret is envFrom'd into every backend pod.
+  # Only used when the key is not in the secrets backend, which takes precedence.
+  # Leave both empty to skip it.
+  githubAppKey:
+    # Use a pre-existing Kubernetes Secret holding the key under
+    # GITHUB_APP_PRIVATE_KEY instead of a chart-managed one.
+    # existingSecret: ""
+    GITHUB_APP_PRIVATE_KEY: ""   # base64 of the .pem (base64 -w0 key.pem), or the PEM text
 
 # ------------------------------------------------------------------------------
 # Security contexts

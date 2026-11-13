@@ -30,6 +30,9 @@ spec:
         {{- if not .Values.secrets.app.existingSecret }}
         checksum/secret-app: {{ include (print $.Template.BasePath "/secret-app.yaml") . | sha256sum }}
         {{- end }}
+        {{- with (include (print $.Template.BasePath "/secret-github-app-key.yaml") .) | trim }}
+        checksum/secret-github-app-key: {{ . | sha256sum }}
+        {{- end }}
         {{- if not .Values.secrets.llm.existingSecret }}
         checksum/secret-llm: {{ include (print $.Template.BasePath "/secret-llm.yaml") . | sha256sum }}
         {{- end }}
@@ -68,6 +71,9 @@ spec:
             # Explicit, so a Secret cannot override the value the grace period was built from.
             - name: INVESTIGATION_TIMEOUT_SECONDS
               value: {{ include "aurora.investigationTimeoutSeconds" . | trim | quote }}
+            {{- with include "aurora.githubAppKeyEnv" . | trim }}
+            {{- . | nindent 12 }}
+            {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
