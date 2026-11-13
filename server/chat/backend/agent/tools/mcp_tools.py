@@ -23,6 +23,8 @@ from pydantic import BaseModel, Field
 # Import required classes
 from langchain_core.tools import StructuredTool
 
+from utils.security.subprocess_env import deny_same_uid_proc_access, mcp_base_env
+
 # Real MCP client integration
 REAL_MCP_SERVER_PATHS = {
     "aws": "aws-api-mcp-server",  # Not used for path, just for type
@@ -243,11 +245,13 @@ class RealMCPServerManager:
                 # Fallback to node for other servers
                 node_cmd = shutil.which("node") or "/usr/bin/node"
                 cmd = [node_cmd, full_path]
-            # Set up environment with cloud provider credentials
-            env = os.environ.copy()
-            # Third-party MCP servers must not inherit the GitHub App signing
-            # key: with it they could mint installation tokens for every install.
-            env.pop("GITHUB_APP_PRIVATE_KEY", None)
+            # MCP servers include third-party packages (npx), so they get an
+            # allowlisted env plus their own credentials, never the server's
+            # secrets (VAULT_TOKEN, DB password, GitHub App key, ...). Marking
+            # this process non-dumpable stops a same-uid child from reading
+            # those secrets back out of /proc/<ppid>/environ.
+            deny_same_uid_proc_access()
+            env = mcp_base_env()
             # Add cloud provider credentials to environment
             if user_credentials:
                 if server_type == "aws" and "aws" in user_credentials:
