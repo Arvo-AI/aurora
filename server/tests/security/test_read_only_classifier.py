@@ -629,6 +629,19 @@ _HOST = "admin@198.51.100.1"
         '-W %h:%p user@bastion -p 22" '
         f'{_HOST} uptime'
     ),
+    # A read verb still clears the CLIs that have verbs, and a host tool still
+    # reads an operand that happens to be spelled like one.
+    f"ssh {_HOST} 'helm list -A'",
+    f"ssh {_HOST} 'aws ec2 describe-instances'",
+    f"ssh {_HOST} 'systemctl list-units --failed'",
+    f"ssh {_HOST} 'timedatectl status'",
+    f"ssh {_HOST} 'service nginx status'",
+    f"ssh {_HOST} 'docker logs web'",
+    f"ssh {_HOST} 'docker container ls'",
+    f"ssh {_HOST} 'docker compose logs web'",
+    f"ssh {_HOST} 'cat config'",
+    f"ssh {_HOST} 'ps aux | grep status'",
+    f"ssh {_HOST} 'ssh inner uptime'",
 ])
 def test_diagnostic_ssh_is_read_only(is_read_only, command):
     assert is_read_only(command) is True, describe_rejection(command)
@@ -692,3 +705,93 @@ def test_diagnostic_ssh_is_read_only(is_read_only, command):
 ])
 def test_ssh_writes_and_interactive_sessions_are_blocked(is_read_only, command):
     assert is_read_only(command) is False, command
+
+
+# ---------------------------------------------------------------------------
+# The remote program. The verb scan accepts a read verb in any positional and
+# drops option values, which only describes a CLI whose arguments are
+# operations. Over ssh the program is whatever the command names, so one stray
+# word used to clear an interpreter, a shutdown, or a SQL client.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("command", [
+    # Interpreters: the payload is an option value, the verb is a spare argv.
+    f"ssh {_HOST} \"python3 -c 'import os;os.system(\\\"systemctl kill nginx\\\")' status\"",
+    f"ssh {_HOST} \"perl -e 'unlink(\\\"/etc/nginx/nginx.conf\\\")' list\"",
+    f"ssh {_HOST} 'python3 check'",
+    # `status` is the wall message. The host still goes down.
+    f"ssh {_HOST} 'shutdown now status'",
+    # The verb is a database name, a file name, or a process name.
+    f"ssh {_HOST} \"psql -c 'DROP TABLE orders' logs\"",
+    f"ssh {_HOST} 'redis-cli config rewrite'",
+    f"ssh {_HOST} 'crontab config'",
+    f"ssh {_HOST} 'tee /etc/cron.d/x log'",
+    f"ssh {_HOST} 'mv /etc/nginx/nginx.conf config'",
+    f"ssh {_HOST} 'chmod 000 /etc/nginx/nginx.conf config'",
+    f"ssh {_HOST} 'shred /var/log/syslog log'",
+    f"ssh {_HOST} 'dd if=/dev/zero of=/dev/sda status'",
+    f"ssh {_HOST} 'mkfs.ext4 /dev/sdb1 check'",
+    f"ssh {_HOST} 'find /var/lib/app get -delete'",
+    f"ssh {_HOST} 'curl -X DELETE http://localhost:9200/orders status'",
+    f"ssh {_HOST} 'kill -9 1 status'",
+    f"ssh {_HOST} 'killall top'",
+    f"ssh {_HOST} status",
+    # A known CLI whose read verb is an operand, not the subcommand.
+    f"ssh {_HOST} 'docker kill web logs'",
+    f"ssh {_HOST} 'docker compose up logs'",
+    f"ssh {_HOST} 'systemctl kill nginx status'",
+    f"ssh {_HOST} 'systemctl log-level debug'",
+    f"ssh {_HOST} 'service nginx stop status'",
+    # Behind a read, a pipe or `sh -c` it is the same program.
+    f"ssh {_HOST} 'uptime; shutdown now status'",
+    f"ssh {_HOST} \"sh -c 'shutdown now status'\"",
+    # An environment prefix runs code through a program that is itself a read.
+    f"ssh {_HOST} 'LESSOPEN=\"|id\" less /etc/hosts'",
+    f"ssh {_HOST} 'LD_PRELOAD=/tmp/x.so ls logs'",
+    f"ssh {_HOST} 'BASH_ENV=/tmp/x bash -c uptime'",
+])
+def test_a_read_verb_does_not_clear_an_arbitrary_remote_program(is_read_only, command):
+    assert is_read_only(command) is False, command
+
+
+@pytest.mark.parametrize("command, expected", [
+    (f"ssh {_HOST} 'shutdown now status'",
+     "'shutdown' is not a program Ask mode can verify as read-only on a remote "
+     "host (a read verb among its arguments does not make it one)"),
+    (f"ssh {_HOST} 'docker kill web logs'",
+     "'docker kill web logs' does not run a read-only 'docker' subcommand"),
+    (f"ssh {_HOST} 'LD_PRELOAD=/tmp/x.so ls logs'",
+     "it sets an environment variable for the remote program, which can change "
+     "what that program runs"),
+])
+def test_remote_program_rejection_names_the_cause(command, expected):
+    assert describe_rejection(command) == expected
+
+
+# Property: a read-verb word must never turn a refused remote command into a
+# read. The verb scan reads a read word from any positional, so each of these
+# commands is refused on its own and must stay refused with one added before
+# or after it.
+_REFUSED_ALONE = [
+    "shutdown now",
+    "reboot",
+    "kill -9 1",
+    "crontab -r",
+    "python3 -c 'import os; os.system(\"id\")'",
+    "perl -e 'unlink(\"/etc/hosts\")'",
+    "psql -c 'DROP TABLE orders'",
+    "docker kill web",
+    "systemctl stop nginx",
+    "tee /etc/cron.d/x",
+    "rm -rf /tmp/x",
+    "dd if=/dev/zero of=/dev/sda",
+]
+_READ_WORDS = ["status", "list", "logs", "config", "get", "describe", "show", "info", "view"]
+
+
+@pytest.mark.parametrize("remote", _REFUSED_ALONE)
+def test_a_read_word_never_unlocks_a_refused_remote_command(is_read_only, remote):
+    assert is_read_only(f"ssh {_HOST} '{remote}'") is False, f"baseline: {remote}"
+    for word in _READ_WORDS:
+        for variant in (f"{remote} {word}", f"{word} {remote}"):
+            command = f"ssh {_HOST} '{variant}'"
+            assert is_read_only(command) is False, command
