@@ -173,7 +173,8 @@ def _selector_keys(selector: str) -> set:
         if parsed.netloc:
             keys.add(parsed.netloc.lower())
     except ValueError:
-        pass
+        # A malformed host (bad port, stray bracket) still matches by name or exact id.
+        logger.debug("RabbitMQ selector is not a URL; matching it as written")
     return keys
 
 

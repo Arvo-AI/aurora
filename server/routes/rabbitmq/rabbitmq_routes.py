@@ -28,6 +28,8 @@ logger = logging.getLogger(__name__)
 
 rabbitmq_bp = Blueprint("rabbitmq", __name__)
 
+_VALIDATION_FAILED = "Failed to validate RabbitMQ connection"
+
 
 def _clean_username(raw: Any) -> str:
     username = raw.strip() if isinstance(raw, str) else ""
@@ -115,7 +117,7 @@ def _status_summary(user_id: str, account: Dict[str, Any]) -> Dict[str, Any]:
     except ValueError:
         logger.warning("[RABBITMQ] Stored management URL is not usable")
         summary["valid"] = False
-        summary["error"] = "Failed to validate RabbitMQ connection"
+        summary["error"] = _VALIDATION_FAILED
         return summary
     try:
         # whoami only proves the password. The vhost list proves this user can see queues.
@@ -131,7 +133,7 @@ def _status_summary(user_id: str, account: Dict[str, Any]) -> Dict[str, Any]:
         # The account dict carries the password, so nothing from it is logged.
         logger.warning("[RABBITMQ] Status validation failed")
         summary["valid"] = False
-        summary["error"] = "Failed to validate RabbitMQ connection"
+        summary["error"] = _VALIDATION_FAILED
         return summary
     finally:
         client.close()
@@ -276,7 +278,7 @@ def status(user_id):
     body = _payload(summaries)
     if not any(item.get("valid") for item in summaries):
         # Every stored password failed — still list them so they can be removed.
-        body["error"] = "Failed to validate RabbitMQ connection"
+        body["error"] = _VALIDATION_FAILED
     elif len(summaries) == 1 and summaries[0].get("error"):
         # One broker keeps the top-level permission hint the page already shows.
         body["error"] = summaries[0]["error"]

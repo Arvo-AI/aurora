@@ -138,8 +138,9 @@ def test_ungranted_broker_is_refused(monkeypatch):
 def test_unknown_broker_does_not_list_hidden_ones(monkeypatch):
     accounts_mod = sys.modules["utils.rabbitmq_accounts"]
     monkeypatch.setattr(accounts_mod, "account_allowed", lambda user_id, account_id: account_id == "10.0.0.1:15672")
+    stored = [_broker("10.0.0.1:15672"), _broker("10.0.0.2:15672")]
     with pytest.raises(RabbitMQAccessError) as exc:
-        resolve_targets("user", [_broker("10.0.0.1:15672"), _broker("10.0.0.2:15672")], "10.9.9.9:15672")
+        resolve_targets("user", stored, "10.9.9.9:15672")
     assert exc.value.code is None
     assert "10.0.0.1:15672" in exc.value.message
     assert "10.0.0.2" not in exc.value.message
@@ -148,8 +149,9 @@ def test_unknown_broker_does_not_list_hidden_ones(monkeypatch):
 def test_every_broker_ungranted_is_a_denial(monkeypatch):
     accounts_mod = sys.modules["utils.rabbitmq_accounts"]
     monkeypatch.setattr(accounts_mod, "account_allowed", lambda user_id, account_id: False)
+    stored = [_broker("10.0.0.1:15672")]
     with pytest.raises(RabbitMQAccessError) as exc:
-        resolve_targets("user", [_broker("10.0.0.1:15672")], None)
+        resolve_targets("user", stored, None)
     assert exc.value.code == "CONNECTOR_DENIED"
 
 
@@ -344,7 +346,8 @@ def test_status_migrates_a_legacy_connection(monkeypatch, routes):
     assert body["connected"] is True
     assert body["vhost"] == "orders"
     assert body["accounts"][0]["accountId"] == "10.0.0.1:15672"
-    assert synced and synced[0][0]["account_id"] == "10.0.0.1:15672"
+    assert synced
+    assert synced[0][0]["account_id"] == "10.0.0.1:15672"
 
 
 def test_status_with_nothing_stored(monkeypatch, routes):

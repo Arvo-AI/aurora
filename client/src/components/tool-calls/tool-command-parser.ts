@@ -364,7 +364,8 @@ export function parseRabbitMQCommand(toolName: string, toolInput: string): strin
   // Several brokers can be connected. Name the one the call targeted.
   const broker = asText(args.account_id)
   const on = broker ? ` on ${broker}` : ""
-  const where = `${vhost ? ` (${vhost})` : ""}${on}`
+  const inVhost = vhost ? ` (${vhost})` : ""
+  const where = inVhost + on
 
   switch (toolName) {
     case "rabbitmq_list_brokers":

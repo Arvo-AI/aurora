@@ -495,19 +495,22 @@ class CitationExtractor:
                 parsed = json.loads(content)
             except (json.JSONDecodeError, TypeError):
                 parsed = None
-        if isinstance(parsed, dict) and isinstance(parsed.get("brokers"), list):
-            labels = []
-            for item in parsed["brokers"]:
-                if isinstance(item, dict) and item.get("account_id"):
-                    labels.append(CitationExtractor._format_splunk_label(
-                        str(item["account_id"]), str(item.get("broker") or "")
-                    ))
-            if labels:
-                return ", ".join(labels)
+        brokers = parsed.get("brokers") if isinstance(parsed, dict) else None
+        labels = CitationExtractor._rabbitmq_labels(brokers) if isinstance(brokers, list) else []
+        if labels:
+            return ", ".join(labels)
         # Result not stored yet — use the broker the model asked for.
         if isinstance(args, dict) and isinstance(args.get("account_id"), str):
             return args["account_id"]
         return ""
+
+    @staticmethod
+    def _rabbitmq_labels(brokers: list) -> list:
+        return [
+            CitationExtractor._format_splunk_label(str(item["account_id"]), str(item.get("broker") or ""))
+            for item in brokers
+            if isinstance(item, dict) and item.get("account_id")
+        ]
 
     @staticmethod
     def _one_splunk_label(item: Any) -> str:
