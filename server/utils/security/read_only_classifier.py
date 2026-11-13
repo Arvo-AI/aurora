@@ -450,6 +450,250 @@ def _write_rejection(facts: list) -> str:
     return ''
 
 
+# A downstream text filter is allowed because it reads stdin and prints. Several
+# of them can also write a file or run a program through an argument, and none
+# of those has a write verb for the checks above to see: `sed '1e id'`,
+# `awk 'BEGIN{system("id")}'`, `sort -o f`, `rg --pre sh`. The filter's
+# arguments are therefore validated, not just its name.
+_FILTER_SHORT_DENY = {
+    'sort': 'o',
+    'less': 'oO',
+    'yq': 'is',
+}
+# GNU getopt_long accepts any unambiguous prefix, so `sort --outp=f` is
+# `sort --output=f`. A prefix of a denied name is treated as that name.
+_FILTER_LONG_DENY = {
+    'sort': ('output', 'compress-program'),
+    'less': ('log-file',),
+    'rg': ('pre', 'pre-glob', 'hostname-bin'),
+    'ag': ('pager',),
+    'ack': ('pager',),
+    'yq': ('inplace', 'in-place', 'split-exp', 'split-exp-file', 'from-file'),
+}
+
+_AWK_PROGRAMS = frozenset({'awk', 'gawk'})
+_AWK_LONG_OPTIONS = frozenset({'field-separator', 'assign'})
+# Program text that runs a command, reads a command's output, redirects or
+# pipes `print`, or leaks the process environment (cloud credentials).
+_AWK_UNSAFE = re.compile(
+    r'\bsystem\s*\(|\bgetline\b|\bENVIRON\b|/inet/|@(?:include|load)\b'
+    r'|\bprint[f]?\b[^;}]*[|>]'
+)
+
+_SED_PROGRAMS = frozenset({'sed'})
+_SED_SHORT_OK = frozenset('nEruzsb')
+_SED_LONG_OK = frozenset({
+    'quiet', 'silent', 'regexp-extended', 'null-data', 'unbuffered',
+    'separate', 'posix', 'binary', 'sandbox',
+})
+_SED_PLAIN_COMMANDS = frozenset('pdqQnNxhHgGDP=')
+_SED_S_FLAGS = frozenset('gIiMmp0123456789')
+
+
+def _sed_script_is_plain(script: str) -> bool:
+    """Whether *script* only selects, substitutes and prints.
+
+    sed can run a command (`e`, `s///e`), write a file (`w`, `s///w`) or read
+    one (`r`, `R`) from inside its script. Rather than hunt for those, only a
+    small grammar is accepted and everything else is refused: addresses, then
+    one of `p d q Q n N x h H g G D P =`, `s///` with plain flags, or `y///`.
+    """
+    n = len(script)
+    i = 0
+
+    def address(pos: int) -> int:
+        if pos < n and script[pos].isdigit():
+            while pos < n and script[pos].isdigit():
+                pos += 1
+            if pos < n and script[pos] == '~':
+                pos += 1
+                while pos < n and script[pos].isdigit():
+                    pos += 1
+            return pos
+        if pos < n and script[pos] == '$':
+            return pos + 1
+        if pos < n and script[pos] == '/':
+            pos += 1
+            while pos < n and script[pos] != '/':
+                pos += 2 if script[pos] == '\\' else 1
+            if pos >= n:
+                return -1
+            pos += 1
+            while pos < n and script[pos] in 'IM':
+                pos += 1
+            return pos
+        return pos
+
+    def delimited(pos: int, delim: str, parts: int) -> int:
+        """Skip *parts* delimiter-terminated sections, honouring backslashes."""
+        for _ in range(parts):
+            while pos < n and script[pos] != delim:
+                pos += 2 if script[pos] == '\\' else 1
+            if pos >= n:
+                return -1
+            pos += 1
+        return pos
+
+    while i < n:
+        if script[i] in ' \t\n;{}':
+            i += 1
+            continue
+        start = i
+        i = address(i)
+        if i < 0:
+            return False
+        if i < n and script[i] == ',':
+            i += 1
+            if i < n and script[i] in '+~':
+                i += 1
+                while i < n and script[i].isdigit():
+                    i += 1
+            else:
+                i = address(i)
+                if i < 0:
+                    return False
+        while i < n and script[i] in ' \t':
+            i += 1
+        if i < n and script[i] == '!':
+            i += 1
+            while i < n and script[i] in ' \t':
+                i += 1
+        if i >= n:
+            # An address with no command is a syntax error for sed anyway.
+            return i == start
+        cmd = script[i]
+        i += 1
+        if cmd in _SED_PLAIN_COMMANDS:
+            while cmd in 'qQ' and i < n and script[i].isdigit():
+                i += 1
+            continue
+        if cmd in 'sy':
+            if i >= n or script[i].isalnum() or script[i] in '\\\n \t':
+                return False
+            i = delimited(i + 1, script[i], 2)
+            if i < 0:
+                return False
+            if cmd == 's':
+                while i < n and script[i] not in ' \t\n;}':
+                    if script[i] not in _SED_S_FLAGS:
+                        return False
+                    i += 1
+            continue
+        return False
+    return True
+
+
+def _awk_rejection(args: list[str]) -> str:
+    program = None
+    i = 0
+    while i < len(args):
+        tok = args[i]
+        i += 1
+        if tok == '--':
+            break
+        if tok.startswith('--'):
+            name = tok[2:].split('=', 1)[0].lower()
+            if name not in _AWK_LONG_OPTIONS:
+                return "awk option '%s' can run code or write files" % tok
+            if '=' not in tok:
+                i += 1
+            continue
+        if tok.startswith('-') and len(tok) > 1:
+            if tok[1] not in 'Fv':
+                return "awk option '%s' can run code or write files" % tok
+            if len(tok) == 2:
+                i += 1
+            continue
+        program = tok
+        break
+    if program is None and i < len(args):
+        program = args[i]
+    if program is not None:
+        # The tokenizer turns every newline, even a quoted one, into ' ; '. A
+        # continued statement (`print $1 \<newline> > "f"`, `print $1,<newline>...`)
+        # would then look like two, so the continuation is put back.
+        program = re.sub(r'([\\,])\s*;\s*', r'\1 ', program)
+    if program is not None and _AWK_UNSAFE.search(program):
+        return ('its awk program can run a command, redirect output or read '
+                'the environment')
+    return ''
+
+
+def _sed_rejection(args: list[str]) -> str:
+    scripts: list[str] = []
+    positional: list[str] = []
+    i = 0
+    while i < len(args):
+        tok = args[i]
+        i += 1
+        if tok == '--':
+            positional.extend(args[i:])
+            break
+        if tok.startswith('--'):
+            name, has_value, value = tok[2:].partition('=')
+            if name == 'expression':
+                if not has_value:
+                    value = args[i] if i < len(args) else ''
+                    i += 1
+                scripts.append(value)
+            elif name not in _SED_LONG_OK:
+                return "sed option '%s' can run code or write files" % tok
+            continue
+        if tok.startswith('-') and len(tok) > 1:
+            letters = tok[1:]
+            for idx, ch in enumerate(letters):
+                if ch == 'e':
+                    value = letters[idx + 1:]
+                    if not value:
+                        value = args[i] if i < len(args) else ''
+                        i += 1
+                    scripts.append(value)
+                    break
+                if ch not in _SED_SHORT_OK:
+                    return "sed option '%s' can run code or write files" % tok
+            continue
+        positional.append(tok)
+    if not scripts and positional:
+        scripts.append(positional[0])
+    for script in scripts:
+        if not _sed_script_is_plain(script):
+            return ('its sed script is not a plain select/substitute/print, '
+                    'so it could run a command or write a file')
+    return ''
+
+
+def _filter_arg_rejection(tokens: list[str]) -> str:
+    """Why this text filter's arguments make it write or exec, or ''."""
+    i = 0
+    while i < len(tokens) and _is_assignment(tokens[i]):
+        i += 1
+    if i >= len(tokens):
+        return ''
+    exe = tokens[i].rsplit('/', 1)[-1].lower()
+    args = tokens[i + 1:]
+    if exe in _AWK_PROGRAMS:
+        return _awk_rejection(args)
+    if exe in _SED_PROGRAMS:
+        return _sed_rejection(args)
+    if exe == 'uniq':
+        # `uniq in out` writes the second operand. One operand is a read.
+        if sum(1 for tok in args if not tok.startswith('-') or tok == '-') > 1:
+            return "'uniq' with an output operand writes a file"
+    short = _FILTER_SHORT_DENY.get(exe, '')
+    long_names = _FILTER_LONG_DENY.get(exe, ())
+    for tok in args:
+        if tok == '--':
+            break
+        if tok.startswith('--'):
+            name = tok[2:].split('=', 1)[0].lower()
+            if name and any(full.startswith(name) for full in long_names):
+                return "'%s' makes %s write a file or run a program" % (tok, exe)
+        elif tok.startswith('-') and len(tok) > 1 and short:
+            if any(ch in short for ch in tok[1:]):
+                return "'%s' makes %s write a file" % (tok, exe)
+    return ''
+
+
 def _pipeline_rejection(facts: list) -> str:
     """Why the command's shape blocks it: a wrapper, or a non-filter downstream."""
     # A wrapper's argument is the command that really runs, so what was
@@ -662,6 +906,8 @@ def _segment_mutates(tokens: list[str]) -> bool:
     ]
     if any(_shell_flag_mutates(exe, flag) for flag in flags):
         return True
+    if _filter_arg_rejection(tokens):
+        return True
     # `hostname` with a name renames the host. A bare `hostname` only prints it.
     if exe == 'hostname' and len(fact.operation) > 1:
         return True
@@ -729,6 +975,8 @@ def _is_shell_diagnostic(command: str) -> bool:
         ]
         # `journalctl --vacuum-time` and `sort -o out` are writes with no write verb.
         if any(_shell_flag_mutates(exe, flag) for flag in flags):
+            return False
+        if _filter_arg_rejection(seg):
             return False
         # `hostname` with a name renames the host. A bare `hostname` only prints it.
         if exe == 'hostname' and len(fact.operation) > 1:
@@ -947,6 +1195,12 @@ def describe_rejection(command: str, _ssh_depth: int = 0) -> str:
     for reason in (_credential_rejection(facts, flag_names),
                    _write_rejection(facts),
                    _pipeline_rejection(facts)):
+        if reason:
+            return reason
+
+    # A text filter is only a filter while its arguments keep it one.
+    for seg in segments[1:]:
+        reason = _filter_arg_rejection(seg)
         if reason:
             return reason
 
