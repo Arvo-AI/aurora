@@ -7,23 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-- Investigations: a model that thinks for a long time before its first token
-  is no longer stopped as stalled. Each model call has its own allowance,
-  `INVESTIGATION_MODEL_CALL_SECONDS` (default 30 minutes), so the stall check
-  only stops a call that is actually hung.
-
 ### Changed
-- Investigations: shortly before the time limit (`INVESTIGATION_WRAPUP_SECONDS`,
-  default 5 minutes), the agent is told to stop investigating and write its
-  conclusions, so it finishes with a report instead of being cut off. If the
-  time limit or the stall check still stops an RCA, the evidence it gathered is
-  summarized as a partial report, marked "Investigation incomplete", instead of
-  the incident failing with nothing.
-- Investigations: the same applies when an RCA stops on an error or its worker
-  dies, so "Investigation Failed" now only appears for a run that gathered no
-  evidence at all. The incident page no longer shows an error on its own after
-  five quiet minutes; it keeps checking while the investigation runs.
+- Investigations: an RCA that stops before it finishes (time limit, stall
+  check, an error, or a worker that died) no longer fails with nothing to
+  show. If it gathered any evidence, that evidence is summarized as a partial
+  report, marked "Investigation incomplete", with what was not checked.
+  "Investigation Failed" now only appears for a run that gathered nothing.
+  A partial report is not used to fold recurrences or added to the Incident
+  Index. The incident page no longer marks a quiet investigation as an error
+  on its own; it keeps checking while it runs.
 
 ### Added
 - Investigations: an RCA that stopped before it finished can be continued from

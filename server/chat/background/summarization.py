@@ -794,6 +794,11 @@ def generate_incident_summary_from_chat(
             session_id, user_id, incident_id=incident_id,
         )
 
+        if not all_citations:
+            # The session's context was not saved (an interrupted run whose
+            # worker died); the tool calls were still recorded as they ran.
+            all_citations = extractor.extract_citations_from_steps(incident_id, user_id)
+
         logger.info(
             f"{_LOG_PREFIX} Extracted {len(all_citations)} potential citations for incident {incident_id}"
         )
@@ -922,6 +927,16 @@ def generate_incident_summary_from_chat(
         # braces so notifications stay guaranteed. On task retry the existing
         # verdict row makes the re-run a no-op.
         recurrence_outcome = None
+        if unfinished_reason:
+            # A partial report is not a root cause: do not fold incidents on it or
+            # record it in the Incident Index. A continuation that finishes does both.
+            _notify_completed()
+            return {
+                "incident_id": incident_id,
+                "status": "completed_partial",
+                "summary_length": len(summary),
+                "citations_count": len(used_citations),
+            }
         try:
             from services.correlation.recurrence_agent import run_recurrence_check
             recurrence_outcome = run_recurrence_check(
@@ -1025,6 +1040,7 @@ def generate_incident_summary_from_chat(
             status="error",
             user_id=user_id,
         )
+        _notify_unwritten_partial_report(user_id, incident_id, unfinished_reason)
         return {
             "incident_id": incident_id,
             "status": "timeout",
@@ -1047,11 +1063,30 @@ def generate_incident_summary_from_chat(
             status="error",
             user_id=user_id,
         )
+        _notify_unwritten_partial_report(user_id, incident_id, unfinished_reason)
         return {
             "incident_id": incident_id,
             "status": "failed",
             "error": str(e),
         }
+
+
+def _notify_unwritten_partial_report(user_id: str, incident_id: str, unfinished_reason: Optional[str]) -> None:
+    """Tell the user when an RCA stopped early and its report could not be written.
+
+    The RCA task handed the failure over to this summary, so without this the
+    incident's card would never hear how the investigation ended.
+    """
+    if not unfinished_reason:
+        return
+    try:
+        from utils.notifications.dispatcher import notify_investigation_failed
+        notify_investigation_failed(
+            user_id, incident_id,
+            error_message="The investigation stopped early and its report could not be written.",
+        )
+    except Exception:
+        logger.exception(f"{_LOG_PREFIX} Failed to notify about unwritten report for {incident_id}")
 
 
 def _update_incident_summary(

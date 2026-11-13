@@ -14,14 +14,8 @@ Two kinds of report:
   its own limit (a command with a timeout, a sub-agent under ``wait_for``).
   While it runs, the stall deadline moves out to that limit plus a grace, so a
   20-minute query with a 20-minute timeout is never mistaken for a hang.
-  Model calls are bounded the same way (``ModelCallBounds``): a model may
-  think for minutes before its first token, which emits no event at all.
 
-The tracker also carries the run's wrap-up time: past it, ``claim_wrap_up``
-tells the agent once to stop investigating and write its conclusions, so it
-finishes before the investigation time limit instead of being cut off.
-
-All of these are no-ops outside a watched investigation (web chats, scripts, tests),
+Both are no-ops outside a watched investigation (web chats, scripts, tests),
 so callers never need to check.
 """
 
@@ -50,66 +44,33 @@ class ProgressTracker:
     thread, so every access takes the lock.
     """
 
-    def __init__(
-        self,
-        idle_seconds: float,
-        clock: Callable[[], float] = time.monotonic,
-        wrap_up_after: Optional[float] = None,
-    ):
+    def __init__(self, idle_seconds: float, clock: Callable[[], float] = time.monotonic):
         self.idle_seconds = idle_seconds
         self._clock = clock
         self._lock = threading.Lock()
         self._last_progress = clock()
         self._bounds: Dict[int, Tuple[float, float, str]] = {}  # id -> (started, deadline, label)
         self._ids = itertools.count()
-        # Monotonic time after which the run should conclude; None means never.
-        self._wrap_up_at = (
-            self._last_progress + wrap_up_after if wrap_up_after and wrap_up_after > 0 else None
-        )
-        self._wrap_up_sent: set = set()
 
     def progress(self) -> None:
         now = self._clock()
         with self._lock:
             self._last_progress = now
 
-    def open_bound(self, seconds: float, label: str) -> int:
-        """Start a call that enforces its own *seconds* limit; returns its id for close_bound."""
+    @contextmanager
+    def bounded(self, seconds: float, label: str) -> Iterator[None]:
         started = self._clock()
         bound_id = next(self._ids)
         with self._lock:
             self._last_progress = started
             self._bounds[bound_id] = (started, started + seconds + BOUND_GRACE_SECONDS, label)
-        return bound_id
-
-    def close_bound(self, bound_id: int) -> None:
-        """End a bounded call. Closing it again, or an unknown id, does nothing."""
-        ended = self._clock()
-        with self._lock:
-            if self._bounds.pop(bound_id, None) is not None:
-                self._last_progress = ended
-
-    @contextmanager
-    def bounded(self, seconds: float, label: str) -> Iterator[None]:
-        bound_id = self.open_bound(seconds, label)
         try:
             yield
         finally:
-            self.close_bound(bound_id)
-
-    def claim_wrap_up(self, key: str) -> bool:
-        """True once per *key* after the wrap-up time has passed, else False.
-
-        The key is the session the notice goes to, so the main agent and each
-        sub-agent are told once each.
-        """
-        if self._wrap_up_at is None or self._clock() < self._wrap_up_at:
-            return False
-        with self._lock:
-            if key in self._wrap_up_sent:
-                return False
-            self._wrap_up_sent.add(key)
-            return True
+            ended = self._clock()
+            with self._lock:
+                self._bounds.pop(bound_id, None)
+                self._last_progress = ended
 
     def stall_reason(self) -> Optional[str]:
         """Why the investigation counts as stuck now, or None while it is not.
@@ -162,39 +123,3 @@ def bounded_call(seconds: Optional[float], label: str) -> Iterator[None]:
         return
     with tracker.bounded(seconds, label):
         yield
-
-
-class ModelCallBounds:
-    """Bounds for model calls seen in a LangChain event stream, keyed by run id.
-
-    A model can think for minutes before its first token without emitting any
-    event. While a call is open it counts as a bounded call, so slow thinking
-    is not taken for a stall; a call that outlives *seconds* still is. No-op
-    when unwatched or when *seconds* is 0.
-    """
-
-    def __init__(self, seconds: Optional[float], label: str = "model call"):
-        self._tracker = _current_tracker.get()
-        self._seconds = seconds or 0
-        self._label = label
-        self._open: Dict[str, int] = {}
-
-    def start(self, run_id: Optional[str]) -> None:
-        if self._tracker is None or self._seconds <= 0 or not run_id or run_id in self._open:
-            return
-        self._open[run_id] = self._tracker.open_bound(self._seconds, self._label)
-
-    def end(self, run_id: Optional[str]) -> None:
-        bound_id = self._open.pop(run_id, None) if run_id else None
-        if bound_id is not None and self._tracker is not None:
-            self._tracker.close_bound(bound_id)
-
-    def close_all(self) -> None:
-        for run_id in list(self._open):
-            self.end(run_id)
-
-
-def claim_wrap_up(key: Optional[str]) -> bool:
-    """True once per *key* when the watched run is past its wrap-up time."""
-    tracker = _current_tracker.get()
-    return bool(tracker is not None and key and tracker.claim_wrap_up(key))

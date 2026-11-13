@@ -16,7 +16,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Optional
 from utils.auth.stateless_auth import set_rls_context
-from utils.progress_watch import ModelCallBounds, note_progress
+from utils.progress_watch import note_progress
 from utils.security.audit_events import emit_block_event
 from utils.security.audit_events import emit_redaction_event as _emit_redaction
 from utils.security.config import config as _guardrails_config
@@ -1069,13 +1069,6 @@ class Workflow:
         }
         _USAGE_UPDATE_INTERVAL = 3  # Yield usage_update every N output chunks
 
-        from chat.investigation_timeout import investigation_model_call_seconds
-
-        # A model can think for minutes before its first token, which emits no
-        # event. Each open model call counts as a bounded call so the stall
-        # watchdog does not take thinking for a hang.
-        _model_bounds = ModelCallBounds(investigation_model_call_seconds())
-
         try:
             async for event in self.app.astream_events(input_state, self.config, version="v2"):
                 _event_count += 1
@@ -1084,10 +1077,6 @@ class Workflow:
                 note_progress()
                 event_type = event.get("event")
                 event_name = event.get("name", "")
-                if event_type == "on_chat_model_start":
-                    _model_bounds.start(event.get("run_id"))
-                elif event_type == "on_chat_model_end":
-                    _model_bounds.end(event.get("run_id"))
                 
                 if _first_event:
                     _first_event = False
@@ -1313,8 +1302,6 @@ class Workflow:
             # what it gathered so the incident summary can still cite it.
             self._save_interrupted_context(tool_capture)
             raise
-        finally:
-            _model_bounds.close_all()
 
         # Consolidate message chunks and save final state
         self._consolidate_message_chunks()

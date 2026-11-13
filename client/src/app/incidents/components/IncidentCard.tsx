@@ -75,7 +75,10 @@ function ContinueInvestigation({ incident, canWrite, onStarted }: {
   const { toast } = useToast();
   const [starting, setStarting] = useState(false);
   const reason = incident.unfinishedReason;
-  if (!reason || incident.auroraStatus !== 'complete' || incident.status === 'merged') return null;
+  // 'error' here means the partial report itself could not be written; the
+  // evidence is still there to continue from.
+  const settled = incident.auroraStatus === 'complete' || incident.auroraStatus === 'error';
+  if (!reason || !settled || incident.status === 'merged') return null;
   const canContinue = canWrite && (incident.continuationsLeft ?? 0) > 0;
 
   const handleContinue = async () => {

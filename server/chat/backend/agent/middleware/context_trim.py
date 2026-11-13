@@ -20,7 +20,7 @@ from langchain_core.messages.utils import trim_messages, count_tokens_approximat
 
 from ..utils.chat_context_manager import ChatContextManager
 from utils.cloud.cloud_utils import get_state_context
-from chat.background.context_updates import apply_rca_context_updates, apply_wrap_up_notice
+from chat.background.context_updates import apply_rca_context_updates
 
 logger = logging.getLogger(__name__)
 
@@ -68,15 +68,7 @@ class ContextSafetyMiddleware(AgentMiddleware):
             except Exception as e:
                 logger.warning(f"[ContextSafety] Failed to append context update: {e}")
 
-        # 2. Near the investigation time limit, tell the agent once to conclude.
-        wrap_up_message = apply_wrap_up_notice(state)
-        if wrap_up_message:
-            try:
-                request = request.override(messages=[*request.messages, wrap_up_message])
-            except Exception as e:
-                logger.warning(f"[ContextSafety] Failed to append wrap-up notice: {e}")
-
-        # 3. Safety net — trim if still over budget despite upstream capping.
+        # 2. Safety net — trim if still over budget despite upstream capping.
         estimated_tokens = count_tokens_approximately(request.messages)
         if estimated_tokens <= self.max_tokens:
             return await handler(request)

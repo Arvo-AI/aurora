@@ -214,6 +214,53 @@ class CitationExtractor:
             )
             return []
 
+    def extract_citations_from_steps(self, incident_id: str, user_id: str) -> List[Citation]:
+        """Citations from the incident's execution_steps, in the order they ran.
+
+        Each tool call is written there as it starts and ends, so this survives a
+        run whose chat context was never saved (its worker died, say). Used when
+        the session has no citations of its own.
+        """
+        from utils.db.connection_pool import db_pool
+        from utils.auth.stateless_auth import set_rls_context
+
+        try:
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cursor:
+                    set_rls_context(cursor, conn, user_id, log_prefix="[CitationExtractor:steps]")
+                    cursor.execute(
+                        """SELECT tool_name, tool_call_id, tool_input, tool_output, started_at
+                           FROM execution_steps
+                           WHERE incident_id = %s AND tool_output IS NOT NULL
+                           ORDER BY step_index""",
+                        (incident_id,),
+                    )
+                    rows = cursor.fetchall()
+        except Exception:
+            logger.exception(f"[CitationExtractor] Failed to read execution steps for incident {incident_id}")
+            return []
+
+        citations: List[Citation] = []
+        for tool_name, tool_call_id, tool_input, tool_output, started_at in rows:
+            if tool_name in _NON_EVIDENCE_TOOLS:
+                continue
+            output = self._extract_output(tool_output or "")
+            if not output.strip():
+                continue
+            args = self._parse_history_args(tool_input)
+            command = self._extract_command(args, tool_output or "", tool_name)
+            command = self._with_splunk_instance(tool_name, command, args, tool_output or "")
+            citations.append(Citation(
+                index=len(citations) + 1,
+                tool_name=self._normalize_tool_name(tool_name),
+                command=command,
+                output=output,
+                timestamp=started_at,
+                tool_call_id=tool_call_id or "",
+            ))
+        logger.info(f"[CitationExtractor] Extracted {len(citations)} citations from execution steps")
+        return citations
+
     def _load_sub_agent_history(
         self, cursor, incident_id: str
     ) -> Dict[str, List[Dict[str, Any]]]:
