@@ -151,13 +151,15 @@ export default function SetupHome({ via: viaProp }: Readonly<{ via?: string }>) 
     connected: set, next, via, joined, slackFailed, orgName,
   })
 
-  // Show the page once the first status answer is in, or once it has failed:
-  // the guide and the connect links work without it.
-  const ready = connected !== null || statusFailed
-  const reveal = (delay: number) => ({
-    initial: reduce ? false : { opacity: 0, y: 10 },
-    animate: ready ? { opacity: 1, y: 0 } : { opacity: 0, y: 10 },
-    transition: reduce ? { duration: 0 } : { delay: 0.35 + delay, duration: 0.5, ease: EASE },
+  // The page arrives in one piece: wait for the connection status (or its
+  // failure) and the guide, so nothing pops in or reflows afterwards. Then
+  // everything rises together, top to bottom, a beat apart; the aurora lines
+  // draw once it has settled.
+  const ready = (connected !== null || statusFailed) && journey !== null
+  const reveal = (step: number) => ({
+    initial: reduce ? false : { opacity: 0, y: 8 },
+    animate: ready ? { opacity: 1, y: 0 } : { opacity: 0, y: 8 },
+    transition: reduce ? { duration: 0 } : { delay: step * 0.04, duration: 0.55, ease: EASE },
   })
 
   return (
@@ -165,36 +167,37 @@ export default function SetupHome({ via: viaProp }: Readonly<{ via?: string }>) 
       <div className="mx-auto flex min-h-full w-full max-w-[640px] flex-col px-5 pb-16 pt-10 sm:pt-16">
         <div className="flex h-5 justify-end">
           {!allDone && (
-            <button
+            <motion.button
+              {...reveal(0)}
               type="button"
               onClick={leave}
               disabled={leaving}
               className="rounded text-sm text-white/45 transition-colors hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/30 disabled:opacity-60"
             >
               Skip for now
-            </button>
+            </motion.button>
           )}
         </div>
 
-        <div className="mt-4">
+        <motion.div {...reveal(0)} className="mt-4">
           {ready ? (
             <StackMap connected={set} initiallyLit={initiallyLit} reduce={reduce} onSelect={focusStep} />
           ) : (
             <div className="mx-auto w-full max-w-[560px]" style={{ aspectRatio: "560 / 220" }} />
           )}
-        </div>
+        </motion.div>
 
         <AnimatePresence mode="wait" initial={false}>
           <motion.h1
             key={headline}
-            {...reveal(0.1)}
+            {...reveal(1)}
             exit={reduce ? { opacity: 0 } : { opacity: 0, y: -6 }}
             className="mt-10 text-balance text-[32px] font-semibold leading-[1.1] tracking-[-0.02em] text-white sm:text-[40px]"
           >
             {headline}
           </motion.h1>
         </AnimatePresence>
-        <motion.p {...reveal(0.18)} className="mt-3 max-w-[56ch] text-[15px] leading-relaxed text-white/55 sm:text-base">
+        <motion.p {...reveal(2)} className="mt-3 max-w-[56ch] text-[15px] leading-relaxed text-white/55 sm:text-base">
           {lede}
         </motion.p>
 
@@ -205,18 +208,18 @@ export default function SetupHome({ via: viaProp }: Readonly<{ via?: string }>) 
         )}
 
         {!joined && (
-          <motion.div {...reveal(0.26)} className="mt-6 flex flex-wrap items-center gap-3 empty:hidden">
+          <motion.div {...reveal(3)} className="mt-6 flex flex-wrap items-center gap-3 empty:hidden">
             <SlackActions slack={slack} failed={via === "slack" && slackFailed} on={slackOn} reduce={reduce} />
           </motion.div>
         )}
 
         {guide && (
-          <motion.div {...reveal(0.34)} className="mt-10">
+          <motion.div {...reveal(3)} className="mt-10">
             <GuideStrip guide={guide} done={allDone} />
           </motion.div>
         )}
 
-        <motion.div {...reveal(0.42)} className={guide ? "mt-4" : "mt-10"}>
+        <motion.div {...reveal(4)} className={guide ? "mt-4" : "mt-10"}>
           <SetupSteps
             connected={set}
             openStep={openStep}
@@ -228,11 +231,11 @@ export default function SetupHome({ via: viaProp }: Readonly<{ via?: string }>) 
           />
         </motion.div>
 
-        <motion.div {...reveal(0.46)} className="mt-4 empty:hidden">
+        <motion.div {...reveal(5)} className="mt-4 empty:hidden">
           <FirstQuestions connected={set} />
         </motion.div>
 
-        <motion.div {...reveal(0.5)} className="mt-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <motion.div {...reveal(6)} className="mt-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <p className="max-w-[46ch] text-[13px] leading-relaxed text-white/45">
             <TeammatesLine slackOn={slackOn} />
           </p>

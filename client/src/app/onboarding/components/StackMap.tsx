@@ -34,7 +34,8 @@ const pct = (v: number, of: number) => `${(v / of) * 100}%`
 // Lit on first load: draw in sequence. Lit later: draw right away.
 function drawDelay(reduce: boolean, sequenceIndex: number): number {
   if (reduce) return 0
-  if (sequenceIndex >= 0) return 0.25 + sequenceIndex * 0.18
+  // After the page's own entrance (about 0.6s) has settled.
+  if (sequenceIndex >= 0) return 0.7 + sequenceIndex * 0.16
   return 0.05
 }
 
@@ -125,9 +126,7 @@ export default function StackMap({ connected, initiallyLit, reduce, onSelect }: 
       >
         <motion.div
           className="relative aspect-square w-full overflow-hidden rounded-[22%] border border-white/10 bg-black shadow-[0_12px_48px_-12px_rgba(0,0,0,0.9)]"
-          initial={reduce ? false : { opacity: 0, scale: 0.9 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ duration: reduce ? 0 : 0.5, ease: EASE }}
+          initial={false}
         >
           <Image src="/arvologo.png" alt="Aurora" fill sizes="80px" className="object-cover" priority />
         </motion.div>

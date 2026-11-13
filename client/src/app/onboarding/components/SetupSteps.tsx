@@ -2,7 +2,7 @@
 
 import Image from "next/image"
 import Link from "next/link"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { AnimatePresence, motion } from "framer-motion"
 import { connectorRegistry } from "@/components/connectors/ConnectorRegistry"
 import { STACK, SETUP_RETURN_KEY, connectHref, connectedIn, type StackPart, type StackPartId } from "@/lib/onboarding/stack"
@@ -12,19 +12,24 @@ const GREEN = "#2eb67d"
 const EASE = [0.22, 1, 0.36, 1] as const
 
 export function Check({ done, reduce, size = 22 }: Readonly<{ done: boolean; reduce: boolean; size?: number }>) {
+  // Only a tick that happens while you watch animates; ticks already there on
+  // first render just appear with the page.
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => { setMounted(true) }, [])
+  const still = reduce || !mounted
   return (
     <svg width={size} height={size} viewBox="0 0 22 22" className="shrink-0" aria-hidden="true">
       <circle cx="11" cy="11" r="10" fill="none" stroke={done ? GREEN : "rgba(255,255,255,0.22)"} strokeWidth="1.5" className="transition-colors duration-500" />
       <AnimatePresence>
         {done && (
           <motion.circle key="fill" cx="11" cy="11" r="10" fill={GREEN}
-            initial={reduce ? false : { scale: 0.4, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
+            initial={still ? false : { scale: 0.4, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
             style={{ transformOrigin: "11px 11px" }} transition={{ duration: reduce ? 0 : 0.3, ease: EASE }} />
         )}
       </AnimatePresence>
       {done && (
         <motion.path d="M6.5 11.5l3 3 6-6.5" fill="none" stroke="#0a0a0a" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-          initial={reduce ? false : { pathLength: 0 }} animate={{ pathLength: 1 }}
+          initial={still ? false : { pathLength: 0 }} animate={{ pathLength: 1 }}
           transition={{ delay: reduce ? 0 : 0.15, duration: reduce ? 0 : 0.35, ease: EASE }} />
       )}
     </svg>
