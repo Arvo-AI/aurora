@@ -8,6 +8,7 @@ connection_check:
   module: chat.backend.agent.tools.rabbitmq_tool
   function: is_rabbitmq_connected
 tools:
+  - rabbitmq_list_brokers
   - rabbitmq_get_overview
   - rabbitmq_list_nodes
   - rabbitmq_list_queues
@@ -19,15 +20,25 @@ tools:
   - rabbitmq_health_checks
 index: "RabbitMQ broker health -- queues, consumers, nodes, alarms, connections, bindings"
 rca_priority: 8
-allowed-tools: rabbitmq_get_overview, rabbitmq_list_nodes, rabbitmq_list_queues, rabbitmq_get_queue, rabbitmq_list_exchanges, rabbitmq_list_bindings, rabbitmq_list_connections, rabbitmq_list_consumers, rabbitmq_health_checks
+allowed-tools: rabbitmq_list_brokers, rabbitmq_get_overview, rabbitmq_list_nodes, rabbitmq_list_queues, rabbitmq_get_queue, rabbitmq_list_exchanges, rabbitmq_list_bindings, rabbitmq_list_connections, rabbitmq_list_consumers, rabbitmq_health_checks
 metadata:
   author: aurora
-  version: "1.0"
+  version: "1.1"
 ---
 
 # RabbitMQ Integration
 
 Read-only management API. The connected user should have the `monitoring` tag and read permission on each vhost. The tag does not grant that permission. Do not try to publish, purge, delete, or fetch message bodies. Fetching bodies dequeues them, and these tools do not expose that endpoint.
+
+## Several brokers
+
+More than one broker can be connected. Each is its own account, identified by its management `host:port` (for example `rabbit-prod.internal:15672`), and may also have a saved name. A role or team may be allowed one broker and not another. Tools only see brokers this user can access.
+
+- `rabbitmq_list_brokers()` lists them with `account_id`, `broker` (name), and the default vhost. It makes no call to RabbitMQ.
+- Omit `account_id` to query every allowed broker. With more than one, the result is `results_by_account`, keyed by account id; one broker's error does not hide the others.
+- Pass `account_id='host:port'` (or the saved name) once you know which broker the failing service uses, and keep passing it.
+- Every result starts with `brokers`: the brokers that call talked to. Say which broker a finding came from.
+- Queue and vhost names can repeat across brokers. `rabbitmq_get_queue` and `rabbitmq_list_bindings` without `account_id` return a not-found error on brokers that lack the queue; that is expected.
 
 ## When a queue looks stuck
 
@@ -48,4 +59,4 @@ Read-only management API. The connected user should have the `monitoring` tag an
 - A failed `amqp_listener` check is expected when the broker listens only on 5671, and the reverse.
 - `list_queues` or `list_exchanges` is empty while `object_totals` is not: this user has no read permission on those vhosts. The monitoring tag does not grant it. A 401 that says the user cannot read that vhost is the same gap, not a bad password.
 
-Omit `vhost` to list every vhost this user can read. Pass it once you know which vhost the failing service uses. The default saved at connect time is `/` unless the user set another.
+Omit `vhost` to list every vhost this user can read. Pass it once you know which vhost the failing service uses. Each broker keeps its own default vhost from connect time, `/` unless the user set another.

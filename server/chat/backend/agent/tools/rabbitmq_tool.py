@@ -1,22 +1,32 @@
 """Read-only RabbitMQ tools for the RCA agent.
 
-Credentials come from Vault via ``get_token_data(user_id, "rabbitmq")``.
+Credentials come from Vault via ``list_rabbitmq_accounts``. Several brokers may be
+connected; each tool takes ``account_id`` to pick one, and fans out to every
+broker this user can access when it is omitted.
 None of these tools publish, purge, or dequeue messages.
 """
 
+import contextvars
 import functools
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict, Optional
 
 from pydantic import BaseModel, Field
 
 from connectors.rabbitmq_connector.client import MAX_PAGE_SIZE, RabbitMQAPIError, RabbitMQClient
-from utils.auth.token_management import get_token_data
+from utils.rabbitmq_accounts import (
+    RabbitMQAccessError,
+    display_name,
+    list_rabbitmq_accounts,
+    resolve_targets,
+)
 
 logger = logging.getLogger(__name__)
 
 MAX_OUTPUT_CHARS = 80_000
+_NOT_CONNECTED = "RabbitMQ not connected. Ask the user to connect RabbitMQ first."
 _PAGE_HELP = "Page number, starting at 1."
 _VISIBILITY_NOTE = (
     "No resources were visible to this user. Overview counts the whole cluster. "
@@ -24,36 +34,44 @@ _VISIBILITY_NOTE = (
 )
 
 
-def _credentials(user_id: str) -> Optional[Dict[str, Any]]:
+def _tool_targets(user_id: str, account_id: Optional[str]):
+    """Granted brokers for this call, or a JSON error string."""
+    accounts = list_rabbitmq_accounts(user_id)
+    if not accounts:
+        return None, json.dumps({"error": _NOT_CONNECTED})
     try:
-        creds = get_token_data(user_id, "rabbitmq")
-    except Exception:
-        logger.exception("[RABBITMQ-TOOL] Failed to get credentials")
-        return None
-    if not creds or not creds.get("url") or not creds.get("username") or not creds.get("password"):
-        return None
-    return creds
+        targets = resolve_targets(user_id, accounts, account_id)
+    except RabbitMQAccessError as exc:
+        body = {"error": exc.message}
+        if exc.code:
+            body["code"] = exc.code
+        return None, json.dumps(body)
+    if not targets:
+        return None, json.dumps({"error": _NOT_CONNECTED})
+    return targets, None
 
 
 def is_rabbitmq_connected(user_id: str) -> bool:
-    return _credentials(user_id) is not None
+    """True when this user can query at least one connected broker."""
+    targets, error = _tool_targets(user_id, None)
+    return error is None and bool(targets)
 
 
-def _build_client(user_id: str) -> Optional[RabbitMQClient]:
-    creds = _credentials(user_id)
-    if not creds:
-        return None
-    vhost = creds.get("vhost")
-    try:
-        return RabbitMQClient(
-            url=creds["url"],
-            username=creds["username"],
-            password=creds["password"],
-            default_vhost=vhost if isinstance(vhost, str) and vhost else "/",
-        )
-    except Exception:
-        logger.exception("[RABBITMQ-TOOL] Failed to build client")
-        return None
+def _build_client(account: Dict[str, Any]) -> RabbitMQClient:
+    return RabbitMQClient(
+        url=account["url"],
+        username=account["username"],
+        password=account["password"],
+        default_vhost=account.get("vhost") or "/",
+    )
+
+
+def _broker_fields(account: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "account_id": account.get("account_id"),
+        "broker": display_name(account),
+        "broker_url": account.get("url"),
+    }
 
 
 def _clamp_page(page: int, page_size: int) -> tuple:
@@ -81,78 +99,150 @@ def _dump(payload: Any) -> str:
     text = json.dumps(payload, default=str)
     if len(text) <= MAX_OUTPUT_CHARS:
         return text
+    wrapper: Dict[str, Any] = {}
+    # Keep the broker list first and parseable, so findings still name their source.
+    if isinstance(payload, dict) and isinstance(payload.get("brokers"), list):
+        wrapper["brokers"] = payload["brokers"]
     return json.dumps({
+        **wrapper,
         "truncated": True,
-        "message": "Response exceeded the output cap. Narrow with vhost or name.",
+        "message": "Response exceeded the output cap. Narrow with account_id, vhost, or name.",
         "preview": text[:MAX_OUTPUT_CHARS],
     })
 
 
+def _run_one(fn: Callable[..., Any], account: Dict[str, Any], user_id: str, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """One broker's result, or an error dict. Never raises."""
+    try:
+        client = _build_client(account)
+    except Exception:
+        logger.warning("[RABBITMQ-TOOL] Stored management URL is not usable")
+        return {"error": "RabbitMQ connection is not usable. Reconnect it in Aurora."}
+    try:
+        result = fn(client=client, user_id=user_id, **kwargs)
+        return result if isinstance(result, dict) else {"result": result}
+    except RabbitMQAPIError as exc:
+        return {"error": str(exc)}
+    except Exception:
+        logger.exception("[RABBITMQ-TOOL] %s failed", fn.__name__)
+        return {"error": "Unexpected error contacting RabbitMQ"}
+    finally:
+        client.close()
+
+
+def _by_account(fn: Callable[..., Any], targets: list, user_id: str, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """Run one call per granted broker. A slow broker does not block the others."""
+
+    def one(account):
+        item = dict(_run_one(fn, account, user_id, kwargs))
+        item.update(_broker_fields(account))
+        return account["account_id"], item
+
+    # A Context cannot be entered on two threads at once, so each worker copies it.
+    def guarded(account):
+        return contextvars.copy_context().run(one, account)
+
+    with ThreadPoolExecutor(max_workers=min(4, len(targets))) as pool:
+        return dict(pool.map(guarded, targets))
+
+
 def _rabbitmq_tool(fn: Callable[..., Any]) -> Callable[..., str]:
-    """Resolve the user, open a client, and return JSON instead of raising."""
+    """Resolve the brokers, run the call on each, and return JSON instead of raising.
+
+    One broker returns its result with the broker fields alongside. Several
+    return ``results_by_account`` keyed by account id. Either way ``brokers``
+    comes first, so a truncated excerpt still names where the data came from.
+    """
 
     @functools.wraps(fn)
-    def wrapper(*, user_id: Optional[str] = None, **kwargs: Any) -> str:
+    def wrapper(*, user_id: Optional[str] = None, account_id: Optional[str] = None, **kwargs: Any) -> str:
         if not user_id:
             return json.dumps({"error": "User context not available"})
-        client = _build_client(user_id)
-        if not client:
-            return json.dumps({"error": "RabbitMQ not connected. Ask the user to connect RabbitMQ first."})
-        try:
-            return _dump(fn(client=client, user_id=user_id, **kwargs))
-        except RabbitMQAPIError as exc:
-            return json.dumps({"error": str(exc)})
-        except Exception as exc:
-            logger.exception("[RABBITMQ-TOOL] %s failed", fn.__name__)
-            return json.dumps({"error": "Unexpected error contacting RabbitMQ"})
-        finally:
-            client.close()
+        targets, error = _tool_targets(user_id, account_id)
+        if error:
+            return error
+        brokers = [_broker_fields(a) for a in targets]
+        if len(targets) == 1:
+            body: Dict[str, Any] = {"brokers": brokers, **brokers[0]}
+            body.update(_run_one(fn, targets[0], user_id, kwargs))
+            return _dump(body)
+        return _dump({"brokers": brokers, "results_by_account": _by_account(fn, targets, user_id, kwargs)})
 
     return wrapper
 
 
-class RabbitMQOverviewArgs(BaseModel):
+_ACCOUNT_HELP = (
+    "Broker to query: its account id (management host:port), URL, or saved name. "
+    "Omit to query every broker this user can access."
+)
+
+
+class _BrokerArgs(BaseModel):
+    account_id: Optional[str] = Field(default=None, description=_ACCOUNT_HELP)
+
+
+class RabbitMQListBrokersArgs(BaseModel):
     pass
 
 
-class RabbitMQNodesArgs(BaseModel):
+def rabbitmq_list_brokers(*, user_id: Optional[str] = None, **kwargs: Any) -> str:
+    """Connected brokers this user can query. Makes no call to RabbitMQ."""
+    if not user_id:
+        return json.dumps({"error": "User context not available"})
+    targets, error = _tool_targets(user_id, None)
+    if error:
+        return error
+    return _dump({
+        "brokers": [
+            {**_broker_fields(a), "default_vhost": a.get("vhost") or "/", "cluster_name": a.get("cluster_name")}
+            for a in targets
+        ],
+        "count": len(targets),
+    })
+
+
+class RabbitMQOverviewArgs(_BrokerArgs):
     pass
 
 
-class RabbitMQListQueuesArgs(BaseModel):
+class RabbitMQNodesArgs(_BrokerArgs):
+    pass
+
+
+class RabbitMQListQueuesArgs(_BrokerArgs):
     vhost: Optional[str] = Field(default=None, description="Limit to one vhost. Omit to scan every vhost.")
     name: Optional[str] = Field(default=None, description="Queue name substring. Not a regex.")
     page: int = Field(default=1, description=_PAGE_HELP)
     page_size: int = Field(default=50, description="Queues per page (max 100). Sorted by depth, deepest first.")
 
 
-class RabbitMQGetQueueArgs(BaseModel):
+class RabbitMQGetQueueArgs(_BrokerArgs):
     name: str = Field(description="Queue name.")
     vhost: Optional[str] = Field(default=None, description="Vhost. Defaults to the vhost saved at connect time.")
 
 
-class RabbitMQListExchangesArgs(BaseModel):
+class RabbitMQListExchangesArgs(_BrokerArgs):
     vhost: Optional[str] = Field(default=None, description="Limit to one vhost. Omit to list every vhost.")
     page: int = Field(default=1, description=_PAGE_HELP)
     page_size: int = Field(default=50, description="Exchanges per page (max 100).")
 
 
-class RabbitMQListBindingsArgs(BaseModel):
+class RabbitMQListBindingsArgs(_BrokerArgs):
     queue: str = Field(description="Queue name whose bindings to list.")
     vhost: Optional[str] = Field(default=None, description="Vhost. Defaults to the vhost saved at connect time.")
 
 
-class RabbitMQListConnectionsArgs(BaseModel):
+class RabbitMQListConnectionsArgs(_BrokerArgs):
     vhost: Optional[str] = Field(default=None, description="Limit to one vhost. Omit to list every connection.")
     page: int = Field(default=1, description=_PAGE_HELP)
     page_size: int = Field(default=50, description="Connections per page (max 100).")
 
 
-class RabbitMQListConsumersArgs(BaseModel):
+class RabbitMQListConsumersArgs(_BrokerArgs):
     vhost: Optional[str] = Field(default=None, description="Limit to one vhost. Omit to list every consumer.")
 
 
-class RabbitMQHealthArgs(BaseModel):
+class RabbitMQHealthArgs(_BrokerArgs):
     pass
 
 

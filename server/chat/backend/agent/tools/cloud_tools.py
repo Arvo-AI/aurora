@@ -122,6 +122,7 @@ from .rabbitmq_tool import (
     rabbitmq_list_connections,
     rabbitmq_list_consumers,
     rabbitmq_health_checks,
+    rabbitmq_list_brokers,
     is_rabbitmq_connected,
     RabbitMQOverviewArgs,
     RabbitMQNodesArgs,
@@ -132,6 +133,7 @@ from .rabbitmq_tool import (
     RabbitMQListConnectionsArgs,
     RabbitMQListConsumersArgs,
     RabbitMQHealthArgs,
+    RabbitMQListBrokersArgs,
 )
 from .coroot_tool import (
     coroot_get_incidents,
@@ -3164,6 +3166,9 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     try:
         if rabbitmq_connected and _open("rabbitmq"):
             _rabbitmq_tools = [
+                (rabbitmq_list_brokers, "rabbitmq_list_brokers", RabbitMQListBrokersArgs,
+                 ("List the RabbitMQ brokers this user can query, with each account_id and name. "
+                  "Every other RabbitMQ tool takes account_id to pick one broker, and queries every broker when it is omitted.")),
                 (rabbitmq_get_overview, "rabbitmq_get_overview", RabbitMQOverviewArgs,
                  ("Read RabbitMQ cluster overview: version, queue totals, message rates, and listeners. "
                   "Start here when a broker or consumer outage is suspected.")),

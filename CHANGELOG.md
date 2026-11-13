@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- RabbitMQ: connect more than one broker. Each broker is its own account,
+  keyed by its management host and port, with an optional name. The connector
+  page lists every broker and can remove one at a time. Agent tools take
+  `account_id` to target one broker, query every broker the caller may use
+  when it is omitted, and `rabbitmq_list_brokers` lists them. Connector access
+  can grant each broker to a role or team on its own. An existing single
+  connection keeps working with no action needed.
+
 ## [1.5.24] - 2026-11-12
 
 ### Fixed
