@@ -369,14 +369,16 @@ def test_disconnect_one_broker_keeps_the_others(monkeypatch, routes):
     monkeypatch.setattr(routes, "list_rabbitmq_accounts", lambda user_id, raise_on_error=False: [
         _broker("10.0.0.1:15672", name="prod"), _broker("10.0.0.2:15672", name="staging"),
     ])
-    monkeypatch.setattr(routes, "store_rabbitmq_accounts", lambda user_id, accounts, **kwargs: stored.append(accounts))
+    monkeypatch.setattr(routes, "store_rabbitmq_accounts", lambda user_id, accounts, **kwargs: stored.append((accounts, kwargs)))
     monkeypatch.setattr(routes, "delete_user_secret", lambda *args: deleted.append(args) or (True, 1))
 
     with _app().test_request_context("/rabbitmq/disconnect?account=staging", method="DELETE"):
         body, status = _call(routes.disconnect)
 
     assert status == 200
-    assert [a["account_id"] for a in stored[0]] == ["10.0.0.1:15672"]
+    accounts, kwargs = stored[0]
+    assert [a["account_id"] for a in accounts] == ["10.0.0.1:15672"]
+    assert kwargs == {"schedule_prediscovery": False}
     assert [a["accountId"] for a in body["accounts"]] == ["10.0.0.1:15672"]
     assert deleted == []
 

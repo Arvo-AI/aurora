@@ -319,7 +319,8 @@ def _disconnect(user_id, selector: Optional[str]):
             remaining = [a for a in accounts if a["account_id"] != match["account_id"]]
             # Other brokers stay stored. Only this one's connection row is retired.
             if remaining:
-                store_rabbitmq_accounts(user_id, remaining)
+                # Removing a broker is not a new connection: never schedule prediscovery.
+                store_rabbitmq_accounts(user_id, remaining, schedule_prediscovery=False)
                 clear_credentials_cache(user_id)
                 logger.info(
                     "[RABBITMQ] Removed one broker for user %s (%d remaining)",
