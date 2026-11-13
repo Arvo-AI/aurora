@@ -742,8 +742,13 @@ def generate_incident_summary_from_chat(
     session_id: str,
     announce_completion: bool = True,
     unfinished_reason: Optional[str] = None,
+    include_recorded_steps: bool = False,
 ) -> Dict[str, Any]:
     """Regenerate incident summary after RCA using the RCA chat transcript with citations.
+
+    include_recorded_steps: also cite every tool call recorded for the
+    incident, not only those in this session's context. Set for a continuation,
+    whose context holds only its own run.
 
     unfinished_reason: set when the RCA was stopped before it finished
     (a key of UNFINISHED_REASONS). The summary then covers the partial evidence
@@ -794,10 +799,13 @@ def generate_incident_summary_from_chat(
             session_id, user_id, incident_id=incident_id,
         )
 
-        if not all_citations:
-            # The session's context was not saved (an interrupted run whose
-            # worker died); the tool calls were still recorded as they ran.
-            all_citations = extractor.extract_citations_from_steps(incident_id, user_id)
+        if not all_citations or unfinished_reason or include_recorded_steps:
+            # An interrupted run never saves its context, and a continuation's
+            # context holds only its own turn: the evidence of every run is in
+            # the tool calls recorded as they ran.
+            all_citations = extractor.merge_citations(
+                all_citations, extractor.extract_citations_from_steps(incident_id, user_id),
+            )
 
         logger.info(
             f"{_LOG_PREFIX} Extracted {len(all_citations)} potential citations for incident {incident_id}"

@@ -882,6 +882,7 @@ def run_background_chat(
                         session_id=session_id,
                         # A continuation's report replaces the card of the run it continued.
                         announce_completion=owns_rca,
+                        include_recorded_steps=is_continued,
                     )
                 except Exception:
                     logger.exception("[BackgroundChat] Failed to enqueue post-RCA summarization for incident %s", incident_id)
@@ -1677,6 +1678,14 @@ async def _execute_background_chat(
                     logger.debug("[BackgroundChat] Slack progress task ended with error", exc_info=True)
                 logger.info("[BackgroundChat] Slack progress updates sent: %d", progress_reporter.updates_sent)
 
+        # The agent turns a model error it could not recover from into a chat
+        # reply. For the incident's RCA that is not a finished investigation:
+        # raise, so it ends with a partial report like any other early stop.
+        _agent_error = wf._get_state_attr(wf._last_state, "agent_error") if wf._last_state else None
+        if (_agent_error and incident_id and not is_action_source
+                and (send_notifications or is_continuation(trigger_metadata))):
+            raise RuntimeError(f"The investigation agent stopped on an error: {_agent_error}")
+
         # Send Slack response immediately — don't wait for post-processing
         _slack_early_sent = False
         if trigger_metadata and trigger_metadata.get('source') in ['slack', 'slack_button']:
@@ -1752,6 +1761,7 @@ async def _execute_background_chat(
                     session_id=session_id,
                     # A continuation's report replaces the card of the run it continued.
                     announce_completion=owns_rca,
+                    include_recorded_steps=is_continuation(trigger_metadata),
                 )
             except Exception as e:
                 logger.exception("[BackgroundChat] Failed to enqueue post-RCA summarization")

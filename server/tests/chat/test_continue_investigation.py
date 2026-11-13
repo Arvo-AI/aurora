@@ -265,15 +265,14 @@ def test_the_summary_knows_every_reason(reason):
 # --- the continuation's history ------------------------------------------------------
 
 def test_history_is_rebuilt_from_execution_steps(monkeypatch):
-    from langchain_core.messages import AIMessage, ToolMessage
+    from langchain_core.messages import HumanMessage
 
     cursor = MagicMock()
     cursor.fetchall.return_value = [
-        (1, "cloud_exec", "c1", {"command": "kubectl get pods"}, "pod-a CrashLoopBackOff"),
-        (2, "dispatch_subagent", "c2", {}, "rollup"),  # coordination, not evidence
-        (3, "query_datadog", None, '{"query": "errors"}', "500s at 13:40"),  # no call id recorded
-        (4, "cloud_exec", "c1", {"command": "kubectl get pods"}, "duplicate"),
-        (5, "cloud_exec", "c5", {}, "  "),  # no output
+        ("cloud_exec", {"command": "kubectl get pods"}, "pod-a CrashLoopBackOff"),
+        ("dispatch_subagent", {}, "rollup"),  # coordination, not evidence
+        ("query_datadog", '{"query": "errors"}', "x" * 5000),
+        ("cloud_exec", {}, "  "),  # no output
     ]
     conn = MagicMock()
     conn.cursor.return_value.__enter__.return_value = cursor
@@ -284,13 +283,13 @@ def test_history_is_rebuilt_from_execution_steps(monkeypatch):
 
     history = continuation.history_from_execution_steps(INCIDENT, OWNER)
 
-    assert [type(m) for m in history] == [AIMessage, ToolMessage, AIMessage, ToolMessage]
-    assert history[0].tool_calls[0]["id"] == "c1"
-    assert history[0].tool_calls[0]["args"] == {"command": "kubectl get pods"}
-    assert history[1].tool_call_id == "c1" and "CrashLoopBackOff" in history[1].content
-    assert history[2].tool_calls[0]["id"] == "step_3"
-    assert history[2].tool_calls[0]["args"] == {"query": "errors"}
-    assert history[3].tool_call_id == "step_3"
+    # One plain message: replayed tool-call messages are rejected by some providers.
+    assert len(history) == 1 and isinstance(history[0], HumanMessage)
+    text = history[0].content
+    assert "2 tool calls" in text
+    assert "### cloud_exec" in text and "kubectl get pods" in text and "CrashLoopBackOff" in text
+    assert "### query_datadog" in text and "[truncated]" in text
+    assert "dispatch_subagent" not in text
 
 
 def test_no_history_when_steps_cannot_be_read(monkeypatch):
@@ -298,3 +297,17 @@ def test_no_history_when_steps_cannot_be_read(monkeypatch):
     pool.get_admin_connection.side_effect = RuntimeError("db down")
     monkeypatch.setattr(continuation, "db_pool", pool)
     assert continuation.history_from_execution_steps(INCIDENT, OWNER) == []
+
+
+def test_session_and_recorded_citations_are_merged():
+    from chat.background.citation_extractor import Citation, CitationExtractor
+
+    def c(i, call, out):
+        return Citation(index=i, tool_name="t", command="c", output=out, timestamp=None, tool_call_id=call)
+
+    steps = [c(1, "a", "step a (truncated)"), c(2, "b", "step b")]
+    session = [c(1, "b", "full b"), c(2, "z", "new z")]
+    merged = CitationExtractor.merge_citations(session, steps)
+    assert [(m.index, m.tool_call_id, m.output) for m in merged] == [
+        (1, "a", "step a (truncated)"), (2, "b", "full b"), (3, "z", "new z"),
+    ]

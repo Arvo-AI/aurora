@@ -16,7 +16,7 @@ import json
 import logging
 from typing import Any, Dict, List, Optional
 
-from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+from langchain_core.messages import BaseMessage, HumanMessage
 
 from utils.auth.stateless_auth import set_rls_context
 from utils.db.connection_pool import db_pool
@@ -140,15 +140,18 @@ def continue_investigation(incident_id: str, requested_by: str) -> Dict[str, Any
 _NOT_EVIDENCE = frozenset({"dispatch_subagent", "write_findings", "load_skill", "trigger_rca"})
 # The most recent steps replayed into a continuation; older ones are in the report.
 _MAX_REPLAYED_STEPS = 150
+_MAX_STEP_OUTPUT_CHARS = 2000
+_MAX_EVIDENCE_CHARS = 150_000
 
 
 def history_from_execution_steps(incident_id: str, user_id: str) -> List[BaseMessage]:
-    """The investigation's tool calls and results, as agent messages.
+    """What the investigation already checked, as one message for the agent.
 
     An interrupted run never saves its own context, but each tool call is
     recorded in execution_steps as it starts and ends, sub-agents' included.
-    Replaying them lets a continuation see what was already checked and what
-    it returned. Returns [] when nothing can be read.
+    They are replayed as text rather than as tool-call messages: providers
+    reject tool calls they did not produce (Gemini wants its own call
+    signatures and turn order). Returns [] when nothing can be read.
     """
     try:
         with db_pool.get_admin_connection() as conn:
@@ -156,7 +159,7 @@ def history_from_execution_steps(incident_id: str, user_id: str) -> List[BaseMes
                 if not set_rls_context(cursor, conn, user_id, log_prefix="[ContinueRCA]"):
                     return []
                 cursor.execute(
-                    """SELECT id, tool_name, tool_call_id, tool_input, tool_output
+                    """SELECT tool_name, tool_input, tool_output
                        FROM (SELECT * FROM execution_steps
                              WHERE incident_id = %s AND tool_output IS NOT NULL
                              ORDER BY step_index DESC LIMIT %s) recent
@@ -168,26 +171,31 @@ def history_from_execution_steps(incident_id: str, user_id: str) -> List[BaseMes
         logger.exception("[ContinueRCA] Could not read execution steps for incident %s", incident_id)
         return []
 
-    messages: List[BaseMessage] = []
-    seen = set()
-    for step_id, tool_name, tool_call_id, tool_input, tool_output in rows:
-        if tool_name in _NOT_EVIDENCE or not (tool_output or "").strip():
+    entries: List[str] = []
+    for tool_name, tool_input, tool_output in rows:
+        output = (tool_output or "").strip()
+        if tool_name in _NOT_EVIDENCE or not output:
             continue
-        call_id = tool_call_id or f"step_{step_id}"
-        if call_id in seen:
-            continue
-        seen.add(call_id)
-        args = tool_input
-        if isinstance(args, str):
-            try:
-                args = json.loads(args)
-            except ValueError:
-                pass
-        if not isinstance(args, dict):
-            args = {"input": args}
-        messages.append(AIMessage(content="", tool_calls=[{"id": call_id, "name": tool_name, "args": args}]))
-        messages.append(ToolMessage(content=tool_output, tool_call_id=call_id, name=tool_name))
-    return messages
+        if len(output) > _MAX_STEP_OUTPUT_CHARS:
+            output = output[:_MAX_STEP_OUTPUT_CHARS] + " [truncated]"
+        args = tool_input if isinstance(tool_input, str) else json.dumps(tool_input, default=str)
+        entries.append(f"### {tool_name}\nInput: {args}\nOutput:\n{output}")
+    if not entries:
+        return []
+    # Keep the newest steps when the whole record is too long.
+    kept: List[str] = []
+    size = 0
+    for entry in reversed(entries):
+        size += len(entry)
+        if size > _MAX_EVIDENCE_CHARS:
+            break
+        kept.append(entry)
+    kept.reverse()
+    header = (
+        "Evidence this investigation already gathered, oldest first "
+        f"({len(kept)} tool calls and their results):\n\n"
+    )
+    return [HumanMessage(content=header + "\n\n".join(kept))]
 
 
 def _refusal(status, aurora_status, reason, session_id, used) -> Optional[ContinueRefused]:

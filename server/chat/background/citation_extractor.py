@@ -261,6 +261,20 @@ class CitationExtractor:
         logger.info(f"[CitationExtractor] Extracted {len(citations)} citations from execution steps")
         return citations
 
+    @staticmethod
+    def merge_citations(session: List[Citation], steps: List[Citation]) -> List[Citation]:
+        """The recorded steps plus any session citation they lack, renumbered.
+
+        A session citation replaces the step with the same tool call: its
+        output was captured in full, a step's may be truncated.
+        """
+        by_call = {c.tool_call_id: c for c in session if c.tool_call_id}
+        merged = [by_call.pop(c.tool_call_id, c) if c.tool_call_id else c for c in steps]
+        merged += [c for c in session if not c.tool_call_id or c.tool_call_id in by_call]
+        for index, citation in enumerate(merged, start=1):
+            citation.index = index
+        return merged
+
     def _load_sub_agent_history(
         self, cursor, incident_id: str
     ) -> Dict[str, List[Dict[str, Any]]]:
