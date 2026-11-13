@@ -26,6 +26,7 @@ from routes.slack.slack_events_helpers import (
 )
 from utils.secrets.secret_ref_utils import get_user_token_data
 from chat.background.task import run_background_chat
+from utils.notifications.slack_notification_service import CONTINUE_ACTION_PREFIX
 from utils.auth.stateless_auth import set_rls_context
 from utils.log_sanitizer import sanitize
 from routes.slack.slack_onboarding import (
@@ -420,6 +421,16 @@ def process_interaction(payload: dict) -> dict:
                     channel_id=channel_id
                 )
 
+            # "Continue investigating" on the card of an RCA that stopped early
+            if action_id.startswith(CONTINUE_ACTION_PREFIX):
+                return _handle_continue_investigation(
+                    payload=payload,
+                    action=action,
+                    slack_user_id=slack_user_id,
+                    team_id=team_id,
+                    channel_id=channel_id,
+                )
+
             # Handle "More details" button
             if action_id.startswith('suggestion_details_'):
                 return _handle_suggestion_details(
@@ -674,6 +685,117 @@ def _handle_run_suggestion(payload: dict, action: dict, slack_user_id: str, team
     except Exception as e:
         logger.error(f"Error handling run_suggestion action: {e}", exc_info=True)
         return {"text": "WARNING: Failed to execute command. Please try again."}
+
+
+def _handle_continue_investigation(payload: dict, action: dict, slack_user_id: str, team_id: str, channel_id: str) -> dict:
+    """Continue an RCA that stopped early, for a clicker who may write incidents.
+
+    Always acks with an empty body. On success the card's button becomes a
+    "continuing" note and a notice goes in the thread; the finished report
+    replaces the card and the notice says how it ended. A refusal goes to the
+    clicker (ephemeral) and leaves the card as it is.
+    """
+    from chat.background.continuation import ContinueRefused, continue_investigation
+    from utils.auth.enforcer import enforce_with_reload
+    from utils.auth.stateless_auth import get_org_id_for_user
+
+    from utils.validation import is_valid_uuid
+
+    incident_id = action.get('value') or action.get('action_id', '')[len(CONTINUE_ACTION_PREFIX):]
+    if not is_valid_uuid(incident_id):
+        logger.warning("Ignoring a Continue click with an invalid incident id")
+        return {"text": ""}
+    clicker_user_id = aurora_user_for_slack_sender(slack_user_id, team_id)
+    feedback = _slack_client_for_feedback(clicker_user_id, team_id) if clicker_user_id else None
+    if not clicker_user_id:
+        workspace_user_id = get_user_id_from_slack_team(team_id)
+        client = get_slack_client_for_user(workspace_user_id) if workspace_user_id else None
+        _send_ephemeral(
+            client, channel_id, slack_user_id,
+            f"Connect your Aurora account to continue investigations: {FRONTEND_URL}/settings/integrations",
+        )
+        return {"text": ""}
+    try:
+        org_id = get_org_id_for_user(clicker_user_id)
+        if not org_id or not enforce_with_reload(clicker_user_id, org_id, "incidents", "write"):
+            _send_ephemeral(feedback, channel_id, slack_user_id,
+                            "Your role can't continue investigations. Ask an admin for access.")
+            return {"text": ""}
+    except Exception:
+        logger.exception("Failed to check who may continue investigation %s from Slack", sanitize(incident_id))
+        _send_ephemeral(feedback, channel_id, slack_user_id,
+                        "Something went wrong continuing the investigation. Please try again.")
+        return {"text": ""}
+
+    # The card and its thread show the continuation before it is queued, so
+    # nothing the run does when it ends can be overwritten by them.
+    message = payload.get('message') or {}
+    clicker_name = (payload.get('user') or {}).get('name', 'someone')
+    marked = _mark_continuing(feedback, channel_id, message, incident_id, clicker_name)
+    try:
+        continue_investigation(incident_id, clicker_user_id, org_id)
+    except ContinueRefused as refused:
+        _unmark_continuing(feedback, channel_id, message, incident_id, marked)
+        _send_ephemeral(feedback, channel_id, slack_user_id, f"Can't continue: {refused}.")
+    except Exception:
+        logger.exception("Failed to continue investigation %s from Slack", sanitize(incident_id))
+        _unmark_continuing(feedback, channel_id, message, incident_id, marked)
+        _send_ephemeral(feedback, channel_id, slack_user_id,
+                        "Something went wrong continuing the investigation. Please try again.")
+    return {"text": ""}
+
+
+def _mark_continuing(feedback, channel_id: str, message: dict, incident_id: str, clicker_name: str) -> dict:
+    """Swap the card's button for a "continuing" note and post the thread notice.
+
+    Returns what was changed, for _unmark_continuing to undo.
+    """
+    from utils.notifications.slack_notification_service import continuing_blocks, remember_continue_notice
+
+    marked: dict = {}
+    message_ts = message.get('ts')
+    if not (feedback and message_ts):
+        return marked
+    if message.get('blocks'):
+        try:
+            feedback.update_message(
+                channel_id, message_ts, message.get('text') or "Investigation",
+                blocks=continuing_blocks(message['blocks'], clicker_name),
+            )
+            marked['card'] = True
+        except Exception:
+            logger.warning("Could not mark the card of incident %s as continuing", sanitize(incident_id))
+    try:
+        notice = feedback.send_message(
+            channel=channel_id,
+            text=f"Continuing the investigation (requested by {clicker_name}). "
+                 "The report above will update when it finishes.",
+            thread_ts=message_ts,
+        )
+        notice_ts = notice.get('ts') if isinstance(notice, dict) else None
+        if notice_ts:
+            marked['notice_ts'] = notice_ts
+            # Updated with the outcome when the continuation ends.
+            remember_continue_notice(incident_id, channel_id, notice_ts, clicker_name,
+                                     card_ts=message_ts, card_blocks=message.get('blocks'))
+    except Exception:
+        logger.warning("Could not post the continuation notice for incident %s", sanitize(incident_id))
+    return marked
+
+
+def _unmark_continuing(feedback, channel_id: str, message: dict, incident_id: str, marked: dict) -> None:
+    """Put the card and thread back as they were: the continuation never started."""
+    from utils.notifications.slack_notification_service import forget_continue_notice
+
+    try:
+        if marked.get('notice_ts'):
+            forget_continue_notice(incident_id, marked['notice_ts'])
+            feedback.delete_message(channel_id, marked['notice_ts'])
+        if marked.get('card'):
+            feedback.update_message(channel_id, message['ts'], message.get('text') or "Investigation",
+                                    blocks=message['blocks'])
+    except Exception:
+        logger.warning("Could not restore the card of incident %s", sanitize(incident_id))
 
 
 def _handle_suggestion_details(payload: dict, action: dict, slack_user_id: str, team_id: str, channel_id: str) -> dict:

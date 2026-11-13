@@ -29,6 +29,12 @@ from chat.investigation_timeout import (
     investigation_timeout_seconds,
 )
 from chat.background.visualization_generator import update_visualization
+from chat.background.continuation import (
+    CONTINUE_SOURCE,
+    ContinuationBlocked,
+    give_back_continuation,
+    is_continuation,
+)
 from chat.backend.constants import MAX_TOOL_OUTPUT_CHARS, INFRASTRUCTURE_TOOLS
 from chat.backend.agent.utils.message_content import extract_text_from_content
 
@@ -574,6 +580,10 @@ def run_background_chat(
 
     try:
         is_action_source = (trigger_metadata or {}).get('source') == 'action'
+        # The run that owns the incident's RCA: the primary one, or a user's
+        # request to continue it. Follow-up chats in the session are not.
+        is_continued = is_continuation(trigger_metadata)
+        owns_rca = send_notifications or is_continued
         # A failed start update has to raise so the error path marks the run failed.
         _run_id = (trigger_metadata or {}).get("run_id")
         if _run_id:
@@ -643,6 +653,14 @@ def run_background_chat(
                                     incident_id,
                                     existing_task_id,
                                 )
+                            if owns_rca:
+                                # Marks this task as the one running the RCA, so an
+                                # early stop is reported once, and never for a
+                                # follow-up chat or after the run has finished.
+                                cursor.execute(
+                                    "UPDATE incidents SET rca_run_task_id = %s WHERE id = %s",
+                                    (self.request.id, incident_id),
+                                )
                             conn.commit()
 
                             if existing_task_id:
@@ -686,7 +704,8 @@ def run_background_chat(
                                     """INSERT INTO incident_lifecycle_events
                                        (incident_id, user_id, org_id, event_type, new_value)
                                        VALUES (%s, %s, %s, %s, %s)""",
-                                    (incident_id, user_id, rls_org_id, 'rca_started', 'running')
+                                    (incident_id, user_id, rls_org_id,
+                                     'rca_continued' if is_continued else 'rca_started', 'running')
                                 )
                                 conn.commit()
                                 logger.info(f"[BackgroundChat] Recorded lifecycle event 'rca_started' for incident {incident_id}")
@@ -695,8 +714,9 @@ def run_background_chat(
 
                         # Dispatch on_incident actions for this incident (fire-and-forget)
                         source = trigger_metadata.get('source', '') if trigger_metadata else ''
-                        # Prevent infinite loops: actions must not trigger other on_incident actions
-                        if source and source != 'action':
+                        # Prevent infinite loops: actions must not trigger other on_incident actions.
+                        # A continuation is the same incident; its actions already ran.
+                        if source and source not in ('action', CONTINUE_SOURCE):
                             try:
                                 from services.actions.executor import dispatch_on_incident_actions
                                 dispatch_on_incident_actions(user_id, str(incident_id), timing='immediate')
@@ -802,6 +822,11 @@ def run_background_chat(
                             "UPDATE incidents SET rca_celery_task_id = NULL WHERE id = %s AND rca_celery_task_id IS NOT NULL",
                             (incident_id,)
                         )
+                        # Usually already cleared by the finalize inside the run.
+                        cursor.execute(
+                            "UPDATE incidents SET rca_run_task_id = NULL WHERE id = %s AND rca_run_task_id = %s",
+                            (incident_id, self.request.id)
+                        )
                         conn.commit()
             except Exception as e:
                 logger.warning(f"[BackgroundChat] Failed to clear task ID for incident {incident_id}: {e}")
@@ -873,7 +898,10 @@ def run_background_chat(
                         incident_id=incident_id,
                         user_id=user_id,
                         session_id=session_id,
-                        announce_completion=send_notifications,
+                        # A continuation's report replaces the card of the run it continued.
+                        announce_completion=owns_rca,
+                        include_recorded_steps=is_continued,
+                        finishes_rca=owns_rca,
                     )
                 except Exception:
                     logger.exception("[BackgroundChat] Failed to enqueue post-RCA summarization for incident %s", incident_id)
@@ -966,18 +994,26 @@ def run_background_chat(
         logger.error("[BackgroundChat] Timeout after %s for session %s", timed_out_after, session_id)
         _update_session_status(session_id, "failed", user_id=user_id)
         if incident_id and not is_action_source:
-            _update_incident_aurora_status(incident_id, "error", user_id=user_id)
             _mark_inflight_findings_failed(incident_id, user_id, f"parent task timed out after {timed_out_after}")
-            if send_notifications:  # a follow-up chat failing is not the investigation failing
-                try:
-                    from utils.notifications.dispatcher import notify_investigation_failed
-                    notify_investigation_failed(
-                        user_id,
-                        incident_id,
-                        error_message=f"Investigation timed out after {timed_out_after}",
-                    )
-                except Exception:
-                    logger.debug("[BackgroundChat] Failed to send investigation failed notification after timeout")
+            # The RCA that gathered evidence ends with a partial report, not a
+            # bare failure. A follow-up chat failing is not the investigation failing.
+            ended = (
+                _summarize_unfinished_investigation(
+                    incident_id, user_id, session_id, "time_limit", run_task_id=self.request.id,
+                ) if owns_rca else UNSUMMARIZED
+            )
+            if ended == UNSUMMARIZED:
+                _end_unsummarized_run(incident_id, user_id, is_continued)
+                if send_notifications:
+                    try:
+                        from utils.notifications.dispatcher import notify_investigation_failed
+                        notify_investigation_failed(
+                            user_id,
+                            incident_id,
+                            error_message=f"Investigation timed out after {timed_out_after}",
+                        )
+                    except Exception:
+                        logger.debug("[BackgroundChat] Failed to send investigation failed notification after timeout")
         if trigger_metadata and trigger_metadata.get('source') == 'action':
             try:
                 from services.actions.executor import update_action_run_status
@@ -1000,14 +1036,36 @@ def run_background_chat(
         logger.exception(f"[BackgroundChat] Failed for session {session_id}: {e}")
         _update_session_status(session_id, "failed", user_id=user_id)
         if incident_id and not is_action_source:
-            _update_incident_aurora_status(incident_id, "error", user_id=user_id)
             _mark_inflight_findings_failed(incident_id, user_id, f"parent task failed: {e}")
-            if send_notifications:  # a follow-up chat failing is not the investigation failing
+            from chat.background.liveness import InvestigationStalled
+
+            # The RCA that gathered evidence ends with a partial report, whatever
+            # stopped it. Follow-up chats, and runs with nothing to report, fail as before.
+            reason = "stalled" if isinstance(e, InvestigationStalled) else "error"
+            if isinstance(e, ContinuationBlocked):
+                # Nothing ran: the earlier report stands and the attempt is returned.
+                give_back_continuation(incident_id, user_id)
                 try:
-                    from utils.notifications.dispatcher import notify_investigation_failed
-                    notify_investigation_failed(user_id, incident_id, error_message=str(e))
+                    # A Slack click marked the card and its thread as continuing.
+                    from utils.notifications.slack_notification_service import finish_continue_notice
+                    finish_continue_notice(user_id, {"incident_id": incident_id}, blocked=True)
                 except Exception:
-                    logger.debug("[BackgroundChat] Failed to send investigation failed notification")
+                    logger.debug("[BackgroundChat] Could not close the continuation notice", exc_info=True)
+                ended = REPORTED
+            elif owns_rca:
+                ended = _summarize_unfinished_investigation(
+                    incident_id, user_id, session_id, reason, run_task_id=self.request.id,
+                )
+            else:
+                ended = UNSUMMARIZED
+            if ended == UNSUMMARIZED:
+                _end_unsummarized_run(incident_id, user_id, is_continued)
+                if send_notifications:  # a follow-up chat failing is not the investigation failing
+                    try:
+                        from utils.notifications.dispatcher import notify_investigation_failed
+                        notify_investigation_failed(user_id, incident_id, error_message=str(e))
+                    except Exception:
+                        logger.debug("[BackgroundChat] Failed to send investigation failed notification")
         if trigger_metadata and trigger_metadata.get('source') == 'action':
             try:
                 from services.actions.executor import update_action_run_status
@@ -1659,6 +1717,19 @@ async def _execute_background_chat(
                     logger.debug("[BackgroundChat] Slack progress task ended with error", exc_info=True)
                 logger.info("[BackgroundChat] Slack progress updates sent: %d", progress_reporter.updates_sent)
 
+        # The agent turns a model error it could not recover from into a chat
+        # reply. For the incident's RCA that is not a finished investigation:
+        # raise, so it ends with a partial report like any other early stop.
+        _agent_error = wf._get_state_attr(wf._last_state, "agent_error") if wf._last_state else None
+        if (_agent_error and incident_id and not is_action_source
+                and (send_notifications or is_continuation(trigger_metadata))):
+            raise RuntimeError(f"The investigation agent stopped on an error: {_agent_error}")
+        # A continuation the input rail stopped never ran: the investigation is
+        # still unfinished, and its earlier report stands.
+        if (incident_id and is_continuation(trigger_metadata) and wf._last_state
+                and wf._get_state_attr(wf._last_state, "guardrail_blocked")):
+            raise ContinuationBlocked("The continuation was blocked by the input guardrail")
+
         # Send Slack response immediately — don't wait for post-processing
         _slack_early_sent = False
         if trigger_metadata and trigger_metadata.get('source') in ['slack', 'slack_button']:
@@ -1702,15 +1773,26 @@ async def _execute_background_chat(
 
         # Also finalize the incident and enqueue post-RCA tasks here (inside the
         # async function) because asyncio.run() may never return to the caller.
+        owns_rca = send_notifications or is_continuation(trigger_metadata)
         if incident_id and not is_action_source:
             try:
                 with db_pool.get_admin_connection() as conn:
                     with conn.cursor() as cursor:
                         set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:Finalize]")
-                        cursor.execute(
-                            "UPDATE incidents SET rca_celery_task_id = NULL WHERE id = %s",
-                            (incident_id,)
-                        )
+                        if owns_rca:
+                            # The RCA finished. The unfinished reason stays until its
+                            # full report is written, so a failed summary keeps the
+                            # earlier report continuable.
+                            cursor.execute(
+                                "UPDATE incidents SET rca_celery_task_id = NULL, rca_run_task_id = NULL "
+                                "WHERE id = %s",
+                                (incident_id,)
+                            )
+                        else:
+                            cursor.execute(
+                                "UPDATE incidents SET rca_celery_task_id = NULL WHERE id = %s",
+                                (incident_id,)
+                            )
                         conn.commit()
             except Exception as e:
                 logger.warning(f"[BackgroundChat] Failed to clear task ID: {e}")
@@ -1723,7 +1805,10 @@ async def _execute_background_chat(
                     incident_id=incident_id,
                     user_id=user_id,
                     session_id=session_id,
-                    announce_completion=send_notifications,
+                    # A continuation's report replaces the card of the run it continued.
+                    announce_completion=owns_rca,
+                    include_recorded_steps=is_continuation(trigger_metadata),
+                    finishes_rca=owns_rca,
                 )
             except Exception as e:
                 logger.exception("[BackgroundChat] Failed to enqueue post-RCA summarization")
@@ -1974,6 +2059,117 @@ def _update_incident_aurora_status(incident_id: str, aurora_status: str, user_id
                     logger.error(f"[BackgroundChat] Failed to record lifecycle event '{event_type}' for incident {incident_id}: {le}")
     except Exception as e:
         logger.error(f"[BackgroundChat] Failed to update aurora_status: {e}")
+
+
+# How an RCA that stopped early was handled (see _summarize_unfinished_investigation).
+REPORTED = "reported"  # its partial report is being written, or it already finished
+UNSUMMARIZED = "unsummarized"  # nothing to report: the caller fails it as before
+
+
+def _summarize_unfinished_investigation(
+    incident_id: str, user_id: str, session_id: str, reason: str, run_task_id: Optional[str] = None,
+) -> str:
+    """Send an RCA that was stopped early to the summary, marked incomplete.
+
+    Used when the time limit, the stall watchdog or an error ends the RCA, or
+    the sweep finds its worker dead: the evidence it gathered becomes a partial
+    report instead of a bare failure.
+
+    The run claims the RCA by clearing ``rca_run_task_id``, which only the run
+    that owns it set (*run_task_id*; the sweep passes None for whichever run
+    owned it). Nothing to claim means the run already finished and wrote its
+    report, or the incident was merged: REPORTED, and nothing changes. A run
+    with no tool results, or a summary that could not be queued, returns
+    UNSUMMARIZED so the caller fails the incident as before. Must stay quick:
+    on the time limit it runs inside the last minute.
+    """
+    from chat.background.continuation import _NOT_EVIDENCE, RCA_STEPS_WHERE, USABLE_EVIDENCE_WHERE
+
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:Unfinished]")
+                cursor.execute(
+                    "SELECT rca_run_task_id, status FROM incidents WHERE id = %s FOR UPDATE",
+                    (incident_id,),
+                )
+                row = cursor.fetchone()
+                owner = row[0] if row else None
+                if not owner or (run_task_id and owner != run_task_id) or row[1] == "merged":
+                    conn.rollback()
+                    logger.info("[BackgroundChat] RCA %s already finished or was merged; no partial report", incident_id)
+                    return REPORTED
+                # Both fragments are fixed SQL with placeholders; nothing is interpolated from input.
+                cursor.execute(
+                    "SELECT EXISTS (SELECT 1 FROM execution_steps es WHERE "
+                    + RCA_STEPS_WHERE + " AND " + USABLE_EVIDENCE_WHERE + ")",
+                    (incident_id, sorted(_NOT_EVIDENCE)),
+                )
+                has_evidence = bool((cursor.fetchone() or [False])[0])
+                # The run is over either way: a stale task id would read as a dead
+                # worker to the sweep. The reason is what lets a user continue it.
+                cursor.execute(
+                    """UPDATE incidents
+                       SET rca_celery_task_id = NULL, rca_run_task_id = NULL,
+                           rca_unfinished_reason = CASE WHEN %s THEN %s ELSE rca_unfinished_reason END
+                       WHERE id = %s""",
+                    (has_evidence, reason, incident_id),
+                )
+            conn.commit()
+        if not has_evidence:
+            logger.info("[BackgroundChat] Unfinished RCA %s gathered no evidence; failing it", incident_id)
+            return UNSUMMARIZED
+        _update_incident_status_and_aurora(incident_id, "analyzed", "summarizing", user_id=user_id)
+        from chat.background.summarization import generate_incident_summary_from_chat
+
+        generate_incident_summary_from_chat.delay(
+            incident_id=incident_id,
+            user_id=user_id,
+            session_id=session_id,
+            unfinished_reason=reason,
+        )
+        logger.warning("[BackgroundChat] RCA %s stopped early (%s); summarizing its partial evidence", incident_id, reason)
+        return REPORTED
+    except Exception:
+        logger.exception("[BackgroundChat] Could not summarize unfinished RCA %s; failing it", incident_id)
+        return UNSUMMARIZED
+
+
+def _report_or_fail_dead_rca(
+    user_id: str, incident_id: str, session_id, error_message: str, run_task_id: Optional[str] = None,
+) -> None:
+    """After the sweep failed an RCA whose worker is gone: report or announce it.
+
+    An RCA that gathered evidence becomes a partial report, like one stopped by
+    its time limit. *session_id* is None when the dead run was not the RCA (a
+    follow-up chat on an incident that already has its report); that, and a run
+    with nothing to report, is announced as failed. *run_task_id* is the dead
+    run's own claim: a newer run that owns the RCA since (a continuation) is
+    left alone.
+    """
+    if session_id:
+        # The report path leaves the incident 'summarizing', so the sweep's own
+        # cascade (which keys on 'error') would no longer stop these spinning.
+        _mark_inflight_findings_failed(incident_id, user_id, "worker stopped")
+        if _summarize_unfinished_investigation(
+            incident_id, user_id, str(session_id), "interrupted", run_task_id=run_task_id,
+        ) == REPORTED:
+            return
+    try:
+        from utils.notifications.dispatcher import notify_investigation_failed
+        notify_investigation_failed(user_id, incident_id, error_message=error_message)
+    except Exception:
+        logger.exception("[CleanupOrphans] Failed to send failed notification for incident %s", incident_id)
+
+
+def _end_unsummarized_run(incident_id: str, user_id: str, is_continued: bool) -> None:
+    """Set the status of an RCA that stopped and could not be summarized.
+
+    A continuation leaves the report of the run it continued in place, so the
+    incident goes back to that report and can be continued again. Anything else
+    has no report and is an error.
+    """
+    _update_incident_aurora_status(incident_id, "complete" if is_continued else "error", user_id=user_id)
 
 
 def _mark_inflight_findings_failed(incident_id: str, user_id: str, reason: str) -> int:
@@ -2939,7 +3135,8 @@ def _sweep_stale_background_chats() -> Dict[str, Any]:
                     # minutes means it is gone. A session never beaten may still be
                     # queued, so it gets the old 20 minutes.
                     cursor.execute("""
-                        SELECT cs.id, i.id as incident_id, i.rca_celery_task_id
+                        SELECT cs.id, i.id as incident_id, i.rca_celery_task_id,
+                               i.rca_run_task_id
                         FROM chat_sessions cs
                         LEFT JOIN incidents i ON i.aurora_chat_session_id = cs.id::uuid
                         WHERE cs.status = 'in_progress' AND cs.user_id = %s
@@ -2948,7 +3145,7 @@ def _sweep_stale_background_chats() -> Dict[str, Any]:
                               OR (cs.heartbeat_at IS NULL AND cs.updated_at < %s)
                           )
                     """, (uid, dead_worker_threshold, stale_threshold))
-                    for session_id, incident_id, stale_task_id in cursor.fetchall():
+                    for session_id, incident_id, stale_task_id, rca_run_task_id in cursor.fetchall():
                         # The claim repeats the staleness test: Postgres re-evaluates an
                         # UPDATE's WHERE after locking the row, so a beat that landed since
                         # the SELECT keeps the session alive.
@@ -2971,22 +3168,22 @@ def _sweep_stale_background_chats() -> Dict[str, Any]:
                         _revoke_dead_task(stale_task_id)
                         _notify_orphaned_chat_reply(uid, str(session_id), claimed[0][1])
                         if incident_id:
-                            try:
-                                from utils.notifications.dispatcher import notify_investigation_failed
-                                notify_investigation_failed(uid, str(incident_id), error_message="Investigation stalled and was cleaned up")
-                            except Exception:
-                                logger.exception("[CleanupOrphans] Failed to send stalled investigation notification for incident %s", incident_id)
+                            _report_or_fail_dead_rca(
+                                uid, str(incident_id), session_id if rca_run_task_id else None,
+                                "Investigation stalled and was cleaned up", rca_run_task_id,
+                            )
 
                     # --- 2. Dead Celery tasks (task no longer alive in broker) ---
                     cursor.execute("""
                         SELECT i.id, i.rca_celery_task_id, i.aurora_chat_session_id,
-                               GREATEST(cs.heartbeat_at, COALESCE(cs.updated_at, i.updated_at)) as last_activity
+                               GREATEST(cs.heartbeat_at, COALESCE(cs.updated_at, i.updated_at)) as last_activity,
+                               i.rca_run_task_id
                         FROM incidents i
                         LEFT JOIN chat_sessions cs ON cs.id::text = i.aurora_chat_session_id::text
                         WHERE i.aurora_status = 'running' AND i.rca_celery_task_id IS NOT NULL
                           AND i.updated_at < %s AND i.user_id = %s
                     """, (dead_task_threshold, uid))
-                    for inc_id, task_id, session_id, last_activity in cursor.fetchall():
+                    for inc_id, task_id, session_id, last_activity, rca_run_task_id in cursor.fetchall():
                         if not _is_task_dead(task_id, last_activity, dead_task_threshold,
                                              cursor=cursor, incident_id=inc_id):
                             continue
@@ -3015,15 +3212,17 @@ def _sweep_stale_background_chats() -> Dict[str, Any]:
                         if claimed_ui is not None:
                             _notify_orphaned_chat_reply(uid, str(session_id), claimed_ui)
                         dead_task_count += 1
-                        try:
-                            from utils.notifications.dispatcher import notify_investigation_failed
-                            notify_investigation_failed(uid, str(inc_id), error_message="Investigation worker died unexpectedly")
-                        except Exception:
-                            logger.exception("[CleanupOrphans] Failed to send dead-task notification for incident %s", inc_id)
+                        _report_or_fail_dead_rca(
+                            uid, str(inc_id), session_id if rca_run_task_id else None,
+                            "Investigation worker died unexpectedly", rca_run_task_id,
+                        )
 
                     # --- 3. Stuck investigating (RCA done or orphaned, no active session) ---
                     cursor.execute("""
-                        SELECT i.id, i.aurora_status FROM incidents i
+                        SELECT i.id, i.aurora_status,
+                               CASE WHEN i.rca_run_task_id IS NOT NULL THEN i.aurora_chat_session_id END,
+                               i.rca_run_task_id
+                        FROM incidents i
                         WHERE i.status = 'investigating' AND i.updated_at < %s AND i.user_id = %s
                           AND NOT EXISTS (
                               SELECT 1 FROM chat_sessions cs
@@ -3031,7 +3230,7 @@ def _sweep_stale_background_chats() -> Dict[str, Any]:
                                 AND cs.status = 'in_progress'
                           )
                     """, (stale_threshold, uid))
-                    for inc_id, cur_aurora in cursor.fetchall():
+                    for inc_id, cur_aurora, rca_session_id, rca_run_task_id in cursor.fetchall():
                         if cur_aurora in ('complete', 'error'):
                             cursor.execute(
                                 "UPDATE incidents SET status = 'analyzed', analyzed_at = COALESCE(analyzed_at, NOW()), updated_at = NOW() WHERE id = %s AND status = 'investigating' RETURNING id",
@@ -3048,11 +3247,10 @@ def _sweep_stale_background_chats() -> Dict[str, Any]:
                             orphaned_count += 1
                         conn.commit()
                         if cur_aurora not in ('complete', 'error'):
-                            try:
-                                from utils.notifications.dispatcher import notify_investigation_failed
-                                notify_investigation_failed(uid, str(inc_id), error_message="Investigation became orphaned and was cleaned up")
-                            except Exception:
-                                logger.exception("[CleanupOrphans] Failed to send orphaned investigation notification for incident %s", inc_id)
+                            _report_or_fail_dead_rca(
+                                uid, str(inc_id), rca_session_id,
+                                "Investigation became orphaned and was cleaned up", rca_run_task_id,
+                            )
 
                     # --- 4. Stale rca_findings: cascade from any incident already
                     # marked aurora_status='error' (immediate, catches sections 1-3

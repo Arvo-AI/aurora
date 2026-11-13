@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Investigations: an RCA that stops before it finishes (time limit, stall
+  check, an error, or a worker that died) no longer fails with nothing to
+  show. If it gathered any evidence, that evidence is summarized as a partial
+  report, marked "Investigation incomplete", with what was not checked.
+  "Investigation Failed" now only appears for a run that gathered nothing.
+  A partial report is not used to fold recurrences or added to the Incident
+  Index, and it updates the Slack, Teams and email cards without posting back
+  to PagerDuty, incident.io or ServiceNow or routing to team channels; those
+  wait for a finished report. The incident page no longer marks a quiet investigation as an error
+  on its own; it keeps checking while it runs.
+
+### Added
+- Investigations: an RCA that stopped before it finished can be continued from
+  the incident page or its Slack card ("Continue investigating"). It picks up
+  in the same session with everything gathered so far and a fresh time budget,
+  then updates the report and the card in place. Up to three continuations per
+  incident.
+
 ## [1.5.24] - 2026-11-12
 
 ### Fixed

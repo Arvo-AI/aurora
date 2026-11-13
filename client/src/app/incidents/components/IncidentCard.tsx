@@ -55,6 +55,62 @@ interface IncidentCardProps {
   readonly onToggleThoughts: () => void;
   readonly citations?: Citation[];
   readonly onRefresh?: () => void;
+  readonly onInvestigationRestarted?: () => void;
+}
+
+// Why the investigation stopped early, in neutral words: the report above is
+// still the result, just not the last word.
+const UNFINISHED_LABELS: Record<string, string> = {
+  time_limit: 'Aurora reached its time limit before finishing this investigation.',
+  stalled: 'Aurora paused this investigation before finishing.',
+  error: 'Aurora was interrupted before finishing this investigation.',
+  interrupted: 'Aurora was interrupted before finishing this investigation.',
+};
+
+function ContinueInvestigation({ incident, canWrite, onStarted }: {
+  readonly incident: Incident;
+  readonly canWrite: boolean;
+  readonly onStarted: () => void;
+}) {
+  const { toast } = useToast();
+  const [starting, setStarting] = useState(false);
+  const reason = incident.unfinishedReason;
+  // 'error' here means the partial report itself could not be written; the
+  // evidence is still there to continue from.
+  const settled = incident.auroraStatus === 'complete' || incident.auroraStatus === 'error';
+  if (!reason || !settled || incident.status === 'merged') return null;
+  const canContinue = canWrite && (incident.continuationsLeft ?? 0) > 0;
+
+  const handleContinue = async () => {
+    setStarting(true);
+    const result = await incidentsService.continueInvestigation(incident.id);
+    setStarting(false);
+    if (result.success) {
+      toast({ title: 'Investigation continuing', description: 'The report will update when it finishes.' });
+      onStarted();
+    } else {
+      toast({ title: 'Could not continue the investigation', description: result.error, variant: 'destructive' });
+    }
+  };
+
+  return (
+    <div className="mt-4 flex flex-wrap items-center gap-3 text-xs text-zinc-400">
+      <span>
+        {UNFINISHED_LABELS[reason] ?? UNFINISHED_LABELS.interrupted}
+        {canContinue && ' It can pick up where it left off.'}
+      </span>
+      {canContinue && (
+        <button
+          onClick={handleContinue}
+          disabled={starting}
+          className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md border border-zinc-700 text-zinc-200 hover:bg-zinc-800 transition-colors disabled:opacity-50"
+        >
+          <Play className="w-3 h-3" />
+          {starting ? 'Starting...' : 'Continue investigating'}
+        </button>
+      )}
+    </div>
+  );
 }
 
 function StatusPill({ status }: { readonly status: AuroraStatus }) {
@@ -130,7 +186,7 @@ function buildMdComponents(processChildren: (children: React.ReactNode) => React
 }
 
 
-export default function IncidentCard({ incident, duration, showThoughts, onToggleThoughts, citations = [], onRefresh }: IncidentCardProps) {
+export default function IncidentCard({ incident, duration, showThoughts, onToggleThoughts, citations = [], onRefresh, onInvestigationRestarted }: IncidentCardProps) {
   const [showRawPayload, setShowRawPayload] = useState(false);
   const [selectedCitation, setSelectedCitation] = useState<Citation | null>(null);
   const [selectedSuggestion, setSelectedSuggestion] = useState<Suggestion | null>(null);
@@ -467,6 +523,12 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
           {summaryTrailing && (
             <RuledOutConsole text={summaryTrailing} citations={citations} onCitationClick={setSelectedCitation} />
           )}
+
+          <ContinueInvestigation
+            incident={incident}
+            canWrite={canWrite}
+            onStarted={() => { onRefresh?.(); onInvestigationRestarted?.(); }}
+          />
 
           {/* Correlated Alerts Section */}
           {incident.correlatedAlerts && incident.correlatedAlerts.length > 0 && (

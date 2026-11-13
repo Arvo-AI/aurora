@@ -1115,6 +1115,9 @@ class Agent:
                                 
                 except Exception as e:
                     logging.exception(f"Agent execution failed after retries: {e}")
+                    # A background RCA reads this to end with a partial report, not "complete".
+                    # Never empty: a bare TimeoutError() would otherwise read as no error.
+                    state.agent_error = f"{type(e).__name__}: {e}"[:500]
                     # Create error response message
                     error_msg = AIMessage(content=f"Error: {str(e)}\n\nTry a different approach.")
                     state.messages.append(error_msg)

@@ -214,6 +214,78 @@ class CitationExtractor:
             )
             return []
 
+    def extract_citations_from_steps(self, incident_id: str, user_id: str) -> List[Citation]:
+        """Citations from the RCA's execution_steps, in the order they ran.
+
+        Each tool call is written there as it starts and ends, so this survives a
+        run whose chat context was never saved (its worker died, say). Only the
+        RCA's own session and its sub-agents count: action runs on the incident
+        record steps too, and they are not the investigation's evidence.
+        """
+        from chat.background.continuation import RCA_STEPS_WHERE
+        from utils.db.connection_pool import db_pool
+        from utils.auth.stateless_auth import set_rls_context
+
+        try:
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cursor:
+                    set_rls_context(cursor, conn, user_id, log_prefix="[CitationExtractor:steps]")
+                    cursor.execute(
+                        f"""SELECT es.tool_name, es.tool_call_id, es.tool_input, es.tool_output, es.started_at
+                            FROM execution_steps es
+                            WHERE {RCA_STEPS_WHERE} AND es.tool_output IS NOT NULL
+                            ORDER BY es.step_index""",
+                        (incident_id,),
+                    )
+                    rows = cursor.fetchall()
+        except Exception:
+            logger.exception(f"[CitationExtractor] Failed to read execution steps for incident {incident_id}")
+            return []
+
+        citations: List[Citation] = []
+        for tool_name, tool_call_id, tool_input, tool_output, started_at in rows:
+            if tool_name in _NON_EVIDENCE_TOOLS:
+                continue
+            output = self._extract_output(tool_output or "")
+            if not output.strip():
+                continue
+            args = self._parse_history_args(tool_input)
+            command = self._extract_command(args, tool_output or "", tool_name)
+            command = self._with_splunk_instance(tool_name, command, args, tool_output or "")
+            citations.append(Citation(
+                index=len(citations) + 1,
+                tool_name=self._normalize_tool_name(tool_name),
+                command=command,
+                output=output,
+                timestamp=started_at,
+                tool_call_id=tool_call_id or "",
+            ))
+        logger.info(f"[CitationExtractor] Extracted {len(citations)} citations from execution steps")
+        return citations
+
+    @staticmethod
+    def merge_citations(session: List[Citation], steps: List[Citation]) -> List[Citation]:
+        """The recorded steps plus any session citation they lack, renumbered.
+
+        A session citation with the same tool call replaces the step (its
+        command is recorded before arguments are truncated), keeping whichever
+        output is longer: a session excerpt is capped shorter than a step's.
+        """
+        by_call = {c.tool_call_id: c for c in session if c.tool_call_id}
+        merged: List[Citation] = []
+        for step in steps:
+            match = by_call.pop(step.tool_call_id, None) if step.tool_call_id else None
+            if match is None:
+                merged.append(step)
+                continue
+            if len(step.output or "") > len(match.output or ""):
+                match.output = step.output
+            merged.append(match)
+        merged += [c for c in session if not c.tool_call_id or c.tool_call_id in by_call]
+        for index, citation in enumerate(merged, start=1):
+            citation.index = index
+        return merged
+
     def _load_sub_agent_history(
         self, cursor, incident_id: str
     ) -> Dict[str, List[Dict[str, Any]]]:

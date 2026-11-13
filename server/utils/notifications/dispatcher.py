@@ -121,7 +121,8 @@ def _get_incident_data(incident_id: str, user_id: str) -> Optional[Dict[str, Any
                            i.recurrence_of_incident_id, anchor.slack_message_ts, anchor.alert_title,
                            grp.occurrence_number, grp.group_size, grp.last_fired_at,
                            i.alert_metadata, i.pagerduty_note_id,
-                           i.incidentio_update_id, i.source_alert_id, i.servicenow_note_id
+                           i.incidentio_update_id, i.source_alert_id, i.servicenow_note_id,
+                           i.rca_unfinished_reason, i.rca_continuations
                     FROM incidents i
                     LEFT JOIN incidents anchor ON anchor.id = i.recurrence_of_incident_id
                     JOIN grp ON grp.id = i.id
@@ -163,6 +164,8 @@ def _get_incident_data(incident_id: str, user_id: str) -> Optional[Dict[str, Any
                         'incidentio_update_id': result[22],
                         'source_alert_id': result[23],
                         'servicenow_note_id': result[24],
+                        'unfinished_reason': result[25],
+                        'continuations': result[26] or 0,
                     }
         return None
     except Exception:
@@ -464,6 +467,11 @@ def notify_investigation_completed(user_id: str, incident_id: str, session_id: O
         if session_id:
             _enrich_incident_summary(incident_data, session_id, user_id)
 
+        # A partial report (the RCA stopped before it finished) updates the
+        # cards people watch, but is not a conclusion: nothing is posted back
+        # to the source incident or routed to team channels until it finishes.
+        concluded = not incident_data.get('unfinished_reason')
+
         # --- Email ---
         email_enabled = bool(get_org_preference(org_id, 'rca_email_notifications', default=False))
         if email_enabled and not refresh_only:
@@ -487,6 +495,7 @@ def notify_investigation_completed(user_id: str, incident_id: str, session_id: O
                 )
             except Exception:
                 logger.exception("[Dispatcher] Slack completed notification failed")
+            _finish_continue_notice(user_id, incident_data)
 
         # --- Microsoft Teams ---
         teams_card_enabled = bool(get_org_preference(org_id, 'teams_investigation_complete_notifications', default=True))
@@ -520,7 +529,7 @@ def notify_investigation_completed(user_id: str, incident_id: str, session_id: O
         # recurrence gets a short note pointing at its anchor instead of the RCA;
         # the service itself checks the stored credentials can write, default-deny)
         pd_enabled = bool(get_org_preference(org_id, 'pagerduty_incident_notes', default=False))
-        if pd_enabled and not refresh_only:
+        if pd_enabled and concluded and not refresh_only:
             try:
                 from utils.notifications.pagerduty_notification_service import send_pagerduty_incident_note
                 send_pagerduty_incident_note(user_id, incident_data)
@@ -531,7 +540,7 @@ def notify_investigation_completed(user_id: str, incident_id: str, session_id: O
         # post too since each is a distinct incident.io incident. The post-back
         # toggle is the one on the incident.io connector page, stored org-wide
         # with the other incident.io RCA settings)
-        if (not refresh_only and incident_data.get('source_type') == 'incidentio'
+        if (not refresh_only and concluded and incident_data.get('source_type') == 'incidentio'
                 and bool(get_user_preference(user_id, 'incidentio_postback_enabled', default=False))):
             try:
                 from utils.notifications.incidentio_notification_service import send_incidentio_incident_update
@@ -542,7 +551,7 @@ def notify_investigation_completed(user_id: str, incident_id: str, session_id: O
         # --- ServiceNow work note --- (completion only, anchors only, once; opt-in
         # per user on the ServiceNow connector page; the service checks the stored
         # credentials can still write)
-        if not refresh_only and incident_data.get('source_type') == 'servicenow':
+        if not refresh_only and concluded and incident_data.get('source_type') == 'servicenow':
             try:
                 from routes.servicenow.tasks import work_notes_enabled as _sn_work_notes_enabled
                 from utils.notifications.servicenow_notification_service import send_servicenow_work_note
@@ -552,7 +561,7 @@ def notify_investigation_completed(user_id: str, incident_id: str, session_id: O
                 logger.exception("[Dispatcher] ServiceNow work note failed")
 
         # --- Team-channel routing (once per incident, any connected chat platform) ---
-        if not refresh_only and (_has_slack_connected(user_id) or _has_teams_connected(user_id)):
+        if not refresh_only and concluded and (_has_slack_connected(user_id) or _has_teams_connected(user_id)):
             try:
                 from utils.notifications.team_routing import trigger_team_routing_agent
                 trigger_team_routing_agent(user_id, incident_data)
@@ -561,6 +570,15 @@ def notify_investigation_completed(user_id: str, incident_id: str, session_id: O
 
     except Exception:
         logger.exception("[Dispatcher] Error in notify_investigation_completed")
+
+
+def _finish_continue_notice(user_id: str, incident_data: Dict[str, Any], failed: bool = False) -> None:
+    """A continuation started from Slack: say in its thread notice how it ended."""
+    try:
+        from utils.notifications.slack_notification_service import finish_continue_notice
+        finish_continue_notice(user_id, incident_data, failed=failed)
+    except Exception:
+        logger.exception("[Dispatcher] Could not update the continuation notice")
 
 
 def notify_investigation_failed(user_id: str, incident_id: str, error_message: Optional[str] = None) -> None:
@@ -585,6 +603,8 @@ def notify_investigation_failed(user_id: str, incident_id: str, error_message: O
                 send_slack_investigation_failed_notification(user_id, incident_data, error_message=error_message)
             except Exception:
                 logger.exception("[Dispatcher] Slack failed notification failed")
+        if _has_slack_connected(user_id):
+            _finish_continue_notice(user_id, incident_data, failed=True)
 
         teams_enabled = bool(get_org_preference(org_id, 'teams_investigation_complete_notifications', default=True))
         if teams_enabled and _has_teams_connected(user_id):

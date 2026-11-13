@@ -454,6 +454,37 @@ def get_incidents(user_id):
         return jsonify({"error": "Failed to retrieve incidents"}), 500
 
 
+def _continuation_fields(cursor, incident_id: str) -> dict[str, Any]:
+    """Whether the incident's RCA stopped early, and how often it can still be continued.
+
+    Best effort: the incident itself is served even if this lookup fails.
+    """
+    from chat.background.continuation import continuations_left
+
+    try:
+        # A savepoint, so a failed read leaves the request's transaction usable
+        # for the queries that follow it.
+        cursor.execute("SAVEPOINT continuation_fields")
+        cursor.execute(
+            "SELECT rca_unfinished_reason, rca_continuations FROM incidents WHERE id = %s",
+            (incident_id,),
+        )
+        row = cursor.fetchone()
+        cursor.execute("RELEASE SAVEPOINT continuation_fields")
+        reason, used = (row[0], int(row[1] or 0)) if row and len(row) == 2 else (None, 0)
+    except Exception:
+        logger.warning("[INCIDENTS] Could not read continuation state for %s", sanitize(incident_id))
+        try:
+            cursor.execute("ROLLBACK TO SAVEPOINT continuation_fields")
+        except Exception:
+            logger.debug("[INCIDENTS] Savepoint rollback failed", exc_info=True)
+        reason, used = None, 0
+    return {
+        "unfinishedReason": reason if isinstance(reason, str) else None,
+        "continuationsLeft": continuations_left(used),
+    }
+
+
 @incidents_bp.route("/api/incidents/<incident_id>", methods=["GET"])
 @require_permission("incidents", "read")
 def get_incident(user_id, incident_id: str):
@@ -481,6 +512,9 @@ def get_incident(user_id, incident_id: str):
                 incident = _format_incident_response(
                     row, include_metadata=True, include_correlation=True, include_merge_target=True
                 )
+
+                # An RCA that stopped before it finished can be continued.
+                incident.update(_continuation_fields(cursor, incident_id))
 
                 # Fetch raw alert data from source table
                 source_type = incident["sourceType"]
@@ -1904,6 +1938,23 @@ def get_incident_action_runs(user_id, incident_id: str):
     except Exception:
         logger.exception("[INCIDENTS] Failed to get action runs for incident %s", sanitize(incident_id))
         return jsonify({"error": "Failed to retrieve action runs"}), 500
+
+
+@incidents_bp.route("/api/incidents/<incident_id>/continue", methods=["POST"])
+@require_permission("incidents", "write")
+def continue_incident_investigation(user_id, incident_id: str):
+    """Continue an RCA that stopped before it finished, with a fresh time budget."""
+    if not is_valid_uuid(incident_id):
+        return jsonify({"error": "Invalid incident ID format"}), 400
+    from chat.background.continuation import ContinueRefused, continue_investigation
+    try:
+        result = continue_investigation(incident_id, user_id, get_org_id_from_request())
+    except ContinueRefused as refused:
+        return jsonify({"error": refused.public_message}), refused.status
+    except Exception:
+        logger.exception("[INCIDENTS] Failed to continue investigation %s", sanitize(incident_id))
+        return jsonify({"error": "Failed to continue the investigation"}), 500
+    return jsonify(result), 202
 
 
 @incidents_bp.route("/api/incidents/trigger-rca", methods=["POST"])

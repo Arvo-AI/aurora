@@ -5,7 +5,7 @@ from chat.backend.agent.utils.safe_memory_saver import SafeMemorySaver
 from chat.backend.agent.utils.message_content import extract_text_from_content
 from chat.backend.agent.utils.usage_normalizer import normalize_usage
 from langchain_core.runnables.config import RunnableConfig
-from langchain_core.messages import AIMessageChunk, AIMessage, SystemMessage
+from langchain_core.messages import AIMessageChunk, AIMessage, HumanMessage, SystemMessage
 from chat.backend.agent.agent import Agent
 from chat.backend.agent.utils.state import State
 import logging
@@ -932,8 +932,31 @@ class Workflow:
         # Slack progress reads this object, not the Agent slot a concurrent turn can replace
         self.tool_capture = tool_capture
         
+        # A continuation resumes an investigation that was interrupted, whose
+        # context was never saved: what it checked is rebuilt from the tool
+        # calls recorded as they ran, and goes in front of the continuation
+        # prompt (which carries the partial report) in the same message.
+        continuing = getattr(input_state, "trigger_source", None) == "continue_investigation"
+        if continuing and input_state.incident_id and input_state.user_id:
+            from chat.background.continuation import evidence_from_execution_steps, with_recorded_evidence
+
+            evidence = evidence_from_execution_steps(input_state.incident_id, input_state.user_id)
+            if evidence:
+                for index in range(len(input_state.messages) - 1, -1, -1):
+                    message = input_state.messages[index]
+                    if isinstance(message, HumanMessage) and isinstance(message.content, str):
+                        input_state.messages[index] = HumanMessage(
+                            content=with_recorded_evidence(message.content, evidence),
+                            additional_kwargs=message.additional_kwargs,
+                        )
+                        break
+            logger.info(
+                "[RCA-Context] Continuing incident %s with %s",
+                input_state.incident_id,
+                "the evidence recorded by its earlier runs" if evidence else "no recorded evidence",
+            )
         # Load existing context if session_id is provided
-        if input_state.session_id and input_state.user_id:
+        elif input_state.session_id and input_state.user_id:
             import time as _time
             _ctx_start = _time.perf_counter()
             existing_context = LLMContextManager.load_context_history(
@@ -1293,7 +1316,7 @@ class Workflow:
         except Exception as stream_exception:
             logger.exception(f"[WORKFLOW STREAM ERROR] Exception in workflow stream for session {input_state.session_id}: {stream_exception}")
             raise
-        
+
         # Consolidate message chunks and save final state
         self._consolidate_message_chunks()
         
