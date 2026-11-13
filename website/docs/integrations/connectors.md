@@ -587,6 +587,13 @@ The private key (PEM) usually lives in your secrets backend at
 backend. Set each secret in one place: an env var that is set always wins,
 and the backend is then not read.
 
+:::caution Upgrading
+Older versions read the webhook secret from the backend first and used
+`GITHUB_APP_WEBHOOK_SECRET` only as a fallback. If you set both, the env var
+now wins: make sure it matches the secret registered on the App (or unset it)
+before upgrading, or webhook deliveries will fail signature checks.
+:::
+
 :::note Kubernetes (Helm)
 A Helm deployment has no `.env`. All the `GITHUB_APP_*` keys (including
 `GITHUB_APP_WEBHOOK_SECRET`) already live under `config:` in the chart's

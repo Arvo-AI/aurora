@@ -292,7 +292,7 @@ If existingSecret is set, use the user-provided name; otherwise use the chart-ma
 {{- end -}}
 
 {{/*
-GitHub App private key fallback. Rendered only into the services that sign App
+GitHub App private key (wins over the secrets backend when set). Rendered only into the services that sign App
 JWTs (server, celery-worker, chatbot), so other pods never see the key.
 */}}
 {{- define "aurora.secretName.githubAppKey" -}}

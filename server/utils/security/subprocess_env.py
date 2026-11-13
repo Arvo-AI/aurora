@@ -68,7 +68,9 @@ def deny_same_uid_proc_access() -> bool:
     default. The flag resets on ``execve`` in children, and it only covers this
     process: ancestors (a celery or gunicorn master, PID 1) stay readable, so
     this narrows the exposure rather than closing it. It also disables core
-    dumps and debugger attach without CAP_SYS_PTRACE.
+    dumps and debugger attach without CAP_SYS_PTRACE, and makes some of this
+    process's own /proc/self files (environ, io, auxv) unreadable to a non-root
+    uid, which matters if a metrics library (e.g. psutil io_counters) is added.
 
     Linux only; returns False elsewhere or if the call fails.
     """

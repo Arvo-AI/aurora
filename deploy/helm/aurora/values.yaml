@@ -677,7 +677,7 @@ secrets:
     BEDROCK_SECRET_ACCESS_KEY: ""    # native mode; falls back to AWS_SECRET_ACCESS_KEY
     BEDROCK_SESSION_TOKEN: ""        # native mode; only for temporary / STS credentials
 
-  # --- GitHub App private key fallback (secret-github-app-key.yaml) ---
+  # --- GitHub App private key, preferred over the secrets backend when set (secret-github-app-key.yaml) ---
   # Mounted by: server, celery-worker, chatbot only (the services that sign App
   # JWTs), as a single secretKeyRef rather than envFrom. Kept out of `backend`
   # because that Secret is envFrom'd into every backend pod.

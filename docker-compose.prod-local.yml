@@ -236,7 +236,7 @@ services:
       GUNICORN_WORKERS: ${GUNICORN_WORKERS:-2}
       GUNICORN_THREADS: ${GUNICORN_THREADS:-32}
       <<: *common-env
-      # GitHub App key fallback: only services that sign App JWTs get it.
+      # GitHub App private key (wins over the secrets backend when set): only services that sign App JWTs get it.
       GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
       TEAMS_CLIENT_SECRET: ${TEAMS_CLIENT_SECRET}
       OTEL_SERVICE_NAME: aurora-server
@@ -347,7 +347,7 @@ services:
         -Q high,celery
     environment:
       <<: *common-env
-      # GitHub App key fallback: only services that sign App JWTs get it.
+      # GitHub App private key (wins over the secrets backend when set): only services that sign App JWTs get it.
       GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
       TEAMS_CLIENT_SECRET: ${TEAMS_CLIENT_SECRET}
       OTEL_SERVICE_NAME: celery-worker
@@ -506,7 +506,7 @@ services:
       - terraform-workdir:/app/terraform_workdir
     environment:
       <<: *common-env
-      # GitHub App key fallback: only services that sign App JWTs get it.
+      # GitHub App private key (wins over the secrets backend when set): only services that sign App JWTs get it.
       GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
       TEAMS_CLIENT_SECRET: ${TEAMS_CLIENT_SECRET}
       OTEL_SERVICE_NAME: chatbot
