@@ -249,7 +249,7 @@ def gitlab_connect(user_id):
             "validation_source": validation_source,
         }
 
-        store_tokens_in_db(user_id, gitlab_token_data, "gitlab")
+        store_tokens_in_db(user_id, gitlab_token_data, "gitlab", schedule_prediscovery=True)
         logger.info("Stored GitLab credentials for user %s (org-level)", user_id)
 
         try:

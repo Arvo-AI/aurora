@@ -115,7 +115,7 @@ def connect(user_id):
     }
 
     try:
-        store_tokens_in_db(user_id, token_payload, CLOUDBEES_PROVIDER)
+        store_tokens_in_db(user_id, token_payload, CLOUDBEES_PROVIDER, schedule_prediscovery=True)
         logger.info("[CLOUDBEES] Stored credentials for user %s (url=%s)", user_id, base_url)
     except Exception:
         logger.exception("[CLOUDBEES] Failed to store credentials for user %s", user_id)
@@ -322,7 +322,7 @@ def connect_platform(user_id):
             "webhook_secret": secrets.token_hex(32),
         }
         try:
-            store_tokens_in_db(user_id, oc_payload, CLOUDBEES_OC_PROVIDER)
+            store_tokens_in_db(user_id, oc_payload, CLOUDBEES_OC_PROVIDER, schedule_prediscovery=True)
             logger.info("[CLOUDBEES] Stored OC credentials for user %s", user_id)
         except Exception:
             logger.exception("[CLOUDBEES] Failed to store OC credentials for user %s", user_id)
@@ -361,7 +361,7 @@ def _validate_and_store_fm(user_id: str, fm_api_token: str | None, fm_app_id: st
             "app_id": fm_app_id or "",
         }
         try:
-            store_tokens_in_db(user_id, fm_payload, CLOUDBEES_FM_PROVIDER)
+            store_tokens_in_db(user_id, fm_payload, CLOUDBEES_FM_PROVIDER, schedule_prediscovery=True)
             logger.info("[CLOUDBEES] Stored FM credentials for user %s", user_id)
             return {"connected": True, "app_id": fm_app_id}
         except Exception:

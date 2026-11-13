@@ -138,7 +138,7 @@ def connect(user_id):
     }
 
     try:
-        store_tokens_in_db(user_id, token_payload, "rabbitmq")
+        store_tokens_in_db(user_id, token_payload, "rabbitmq", schedule_prediscovery=True)
     except Exception:
         logger.exception("[RABBITMQ] Failed to store credentials")
         return jsonify({"error": "Failed to store RabbitMQ credentials"}), 500

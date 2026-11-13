@@ -32,7 +32,7 @@ def _log_store_fail(provider: str, elapsed_ms: float, exc: Exception) -> None:
 
 def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
                       subscription_name: str = None, subscription_id: str = None,
-                      org_id: str = None, schedule_prediscovery: bool = True) -> None:
+                      org_id: str = None, schedule_prediscovery: Optional[bool] = None) -> None:
     """
     Store token data in Vault and save secret reference in database.
 
@@ -43,8 +43,12 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
         subscription_name: Azure subscription name (optional)
         subscription_id: Azure subscription ID (optional)
         org_id: Organization ID for multi-tenant scoping (optional, auto-resolved from request context)
-        schedule_prediscovery: False never schedules prediscovery. True schedules it
-            only when the org had no active row for this provider before the write.
+        schedule_prediscovery: True always schedules prediscovery; user-initiated
+            connect routes pass it, since re-connecting with different credentials
+            (another project, account or cluster) changes what there is to discover.
+            False never schedules it (token refresh). None (default) schedules it
+            only when the org had no active row for this provider before the write,
+            so refresh and re-save paths that don't opt out stay quiet.
     """
     start_time = time.perf_counter()
 
@@ -88,8 +92,12 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
                 request_org_id = resolved_org_id
 
             # Every write below is an upsert, so token refreshes land here too.
-            # Only a provider the org has no active row for is a new connector.
-            is_new_connector = not _has_active_token_row(cursor, request_org_id, provider)
+            # Without an explicit choice from the caller, only a provider the org
+            # has no active row for counts as a new connector.
+            if schedule_prediscovery is None:
+                should_schedule = not _has_active_token_row(cursor, request_org_id, provider)
+            else:
+                should_schedule = schedule_prediscovery
 
             # Store only metadata and secret reference in database
             if provider == "azure":
@@ -487,10 +495,10 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
         except Exception as cache_error:
             logger.warning(f"[STORE-TOKENS] Failed to clear secret cache: {cache_error}")
 
-        # Prediscovery maps the infrastructure a newly connected provider can see.
+        # Prediscovery maps the infrastructure a connected provider can see.
         # Refreshing or re-saving an existing connector's credentials changes
         # nothing to discover, and on a busy org it re-ran discovery every hour.
-        if schedule_prediscovery and is_new_connector:
+        if should_schedule:
             _schedule_prediscovery(user_id)
 
         elapsed_time = (time.perf_counter() - start_time) * 1000

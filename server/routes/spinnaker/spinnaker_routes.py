@@ -120,7 +120,7 @@ def connect(user_id):
     }
 
     try:
-        store_tokens_in_db(user_id, token_payload, SPINNAKER_PROVIDER)
+        store_tokens_in_db(user_id, token_payload, SPINNAKER_PROVIDER, schedule_prediscovery=True)
         logger.info("[SPINNAKER] Stored credentials for user %s (url=%s)", user_id, base_url)
     except Exception:
         logger.exception("[SPINNAKER] Failed to store credentials for user %s", user_id)

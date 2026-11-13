@@ -513,7 +513,7 @@ def connect(user_id):
             "validated_at": datetime.now(timezone.utc).isoformat(),
         }
         try:
-            store_tokens_in_db(user_id, token_payload, "opsgenie")
+            store_tokens_in_db(user_id, token_payload, "opsgenie", schedule_prediscovery=True)
             logger.info("[OPSGENIE] Stored JSM credentials for user %s (site=%s)", user_id, site_url)
         except Exception as exc:
             logger.exception("[OPSGENIE] Failed to store JSM credentials: %s", exc)
@@ -558,7 +558,7 @@ def connect(user_id):
     }
 
     try:
-        store_tokens_in_db(user_id, token_payload, "opsgenie")
+        store_tokens_in_db(user_id, token_payload, "opsgenie", schedule_prediscovery=True)
         logger.info("[OPSGENIE] Stored credentials for user %s (region=%s)", sanitize(user_id), sanitize(region))
     except Exception as exc:
         logger.exception("[OPSGENIE] Failed to store credentials: %s", exc)
