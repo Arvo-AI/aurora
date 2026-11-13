@@ -124,6 +124,7 @@ _TOOL_NAME_MAPPING: Dict[str, str] = {
     "rabbitmq_list_connections": "RabbitMQ Connections",
     "rabbitmq_list_consumers": "RabbitMQ Consumers",
     "rabbitmq_health_checks": "RabbitMQ Health",
+    "rabbitmq_list_brokers": "RabbitMQ Brokers",
 }
 
 # Internal coordination tools that show up as tool messages but aren't real
@@ -437,10 +438,13 @@ class CitationExtractor:
 
     @staticmethod
     def _with_splunk_instance(tool_name: str, command: str, args: Any, content: str) -> str:
-        """Append the Splunk instance a search, index, or sourcetype call used."""
-        if tool_name not in ("search_splunk", "list_splunk_indexes", "list_splunk_sourcetypes"):
+        """Append the Splunk instance or RabbitMQ broker a call used."""
+        if tool_name.startswith("rabbitmq_") and tool_name != "rabbitmq_list_brokers":
+            label = CitationExtractor._rabbitmq_broker_label(args, content)
+        elif tool_name in ("search_splunk", "list_splunk_indexes", "list_splunk_sourcetypes"):
+            label = CitationExtractor._splunk_instance_label(args, content)
+        else:
             return command
-        label = CitationExtractor._splunk_instance_label(args, content)
         if not label or label in command:
             return command
         return f"{command} on {label}"
@@ -480,6 +484,29 @@ class CitationExtractor:
         # Result not stored yet — use the account the model asked for.
         if isinstance(args, dict) and args.get("account_id"):
             return str(args["account_id"])
+        return ""
+
+    @staticmethod
+    def _rabbitmq_broker_label(args: Any, content: Any) -> str:
+        """Which RabbitMQ brokers a call hit, from its ``brokers`` list or the requested account."""
+        parsed: Any = content if isinstance(content, dict) else None
+        if isinstance(content, str) and content:
+            try:
+                parsed = json.loads(content)
+            except (json.JSONDecodeError, TypeError):
+                parsed = None
+        if isinstance(parsed, dict) and isinstance(parsed.get("brokers"), list):
+            labels = []
+            for item in parsed["brokers"]:
+                if isinstance(item, dict) and item.get("account_id"):
+                    labels.append(CitationExtractor._format_splunk_label(
+                        str(item["account_id"]), str(item.get("broker") or "")
+                    ))
+            if labels:
+                return ", ".join(labels)
+        # Result not stored yet — use the broker the model asked for.
+        if isinstance(args, dict) and isinstance(args.get("account_id"), str):
+            return args["account_id"]
         return ""
 
     @staticmethod

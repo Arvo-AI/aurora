@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useToast } from "@/hooks/use-toast";
-import { rabbitmqService, RabbitMQStatus } from "@/lib/services/rabbitmq";
+import { rabbitmqAccounts, rabbitmqService, RabbitMQStatus } from "@/lib/services/rabbitmq";
 import { RabbitMQConnectionStep } from "@/components/rabbitmq/RabbitMQConnectionStep";
 import { RabbitMQConnectedStatus } from "@/components/rabbitmq/RabbitMQConnectedStatus";
 import { apiErrorMessage } from "@/lib/services/api-client";
@@ -16,6 +16,7 @@ export default function RabbitMQAuthPage() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [vhost, setVhost] = useState("");
+  const [name, setName] = useState("");
   const [status, setStatus] = useState<RabbitMQStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [isInitialLoad, setIsInitialLoad] = useState(true);
@@ -91,23 +92,25 @@ export default function RabbitMQAuthPage() {
         username,
         password,
         vhost,
+        name: name.trim() || undefined,
       });
-      setStatus({
-        connected: true,
-        url: result.url,
-        username: result.username,
-        vhost: result.vhost,
-        clusterName: result.clusterName,
-        version: result.version,
-        tags: result.tags,
-      });
+      setStatus(result);
+      if (typeof window !== "undefined") {
+        localStorage.setItem(CACHE_KEY, JSON.stringify(result));
+      }
       updateLocalStorageConnection(true);
+      const added = result.connectedAccount;
+      const label = added?.displayName || added?.clusterName;
       toast({
-        title: "RabbitMQ connected",
-        description: result.clusterName
-          ? `Cluster ${result.clusterName} is reachable.`
+        title: result.replaced ? "RabbitMQ broker updated" : "RabbitMQ connected",
+        description: label
+          ? `${label} is reachable.`
           : "The management API accepted these credentials.",
       });
+      setUrl("");
+      setUsername("");
+      setVhost("");
+      setName("");
       // Connect already succeeded. A status refresh failure must not look like a failed connect.
       try {
         await fetchAndUpdateStatus();
@@ -127,23 +130,21 @@ export default function RabbitMQAuthPage() {
     }
   };
 
-  const handleDisconnect = async () => {
+  const handleDisconnect = async (accountId?: string) => {
     setLoading(true);
     try {
-      const response = await fetch("/api/connected-accounts/rabbitmq", {
-        method: "DELETE",
-        credentials: "include",
-      });
-      if (!response.ok && response.status !== 204) {
-        const text = await response.text();
-        throw new Error(text || "Failed to disconnect RabbitMQ");
+      await rabbitmqService.disconnect(accountId);
+      toast({ title: accountId ? "RabbitMQ broker removed" : "RabbitMQ disconnected" });
+      if (accountId) {
+        // Other brokers stay connected. Refresh so the list and cache match the server.
+        await fetchAndUpdateStatus();
+      } else {
+        setStatus({ connected: false, accounts: [] });
+        if (typeof window !== "undefined") {
+          localStorage.removeItem(CACHE_KEY);
+        }
+        updateLocalStorageConnection(false);
       }
-      setStatus({ connected: false });
-      if (typeof window !== "undefined") {
-        localStorage.removeItem(CACHE_KEY);
-      }
-      updateLocalStorageConnection(false);
-      toast({ title: "RabbitMQ disconnected" });
     } catch (error: unknown) {
       console.error("[rabbitmq] Disconnect failed", error);
       toast({
@@ -156,7 +157,22 @@ export default function RabbitMQAuthPage() {
     }
   };
 
-  const isConnected = Boolean(status?.connected);
+  const accounts = rabbitmqAccounts(status);
+  const isConnected = accounts.length > 0;
+  const formProps = {
+    url,
+    setUrl,
+    username,
+    setUsername,
+    password,
+    setPassword,
+    vhost,
+    setVhost,
+    name,
+    setName,
+    loading,
+    onConnect: handleConnect,
+  };
 
   return (
     <ConnectorAuthGuard connectorName="RabbitMQ">
@@ -164,29 +180,19 @@ export default function RabbitMQAuthPage() {
         <div className="mb-6">
           <h1 className="text-3xl font-bold">RabbitMQ</h1>
           <p className="text-muted-foreground mt-1">
-            Connect a broker so investigations can read queue depth, consumers, and node alarms.
+            Connect one or more brokers so investigations can read queue depth, consumers, and node alarms.
           </p>
         </div>
-        {!isConnected && (
-          <RabbitMQConnectionStep
-            url={url}
-            setUrl={setUrl}
-            username={username}
-            setUsername={setUsername}
-            password={password}
-            setPassword={setPassword}
-            vhost={vhost}
-            setVhost={setVhost}
-            loading={loading}
-            onConnect={handleConnect}
-          />
-        )}
-        {isConnected && status && (
-          <RabbitMQConnectedStatus
-            status={status}
-            onDisconnect={handleDisconnect}
-            loading={loading}
-          />
+        {!isConnected && <RabbitMQConnectionStep {...formProps} />}
+        {isConnected && (
+          <div className="space-y-6">
+            <RabbitMQConnectedStatus
+              accounts={accounts}
+              onDisconnect={handleDisconnect}
+              loading={loading}
+            />
+            <RabbitMQConnectionStep {...formProps} addAnother />
+          </div>
         )}
       </div>
     </ConnectorAuthGuard>

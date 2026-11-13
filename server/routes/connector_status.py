@@ -13,7 +13,7 @@ import base64
 import logging
 import time as _time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import requests
 from flask import Blueprint, jsonify
@@ -237,20 +237,14 @@ def _check_coroot(creds: Dict[str, Any]) -> Dict[str, Any]:
         return {"connected": False}
 
 
-def _check_rabbitmq(creds: Dict[str, Any]) -> Dict[str, Any]:
-    """Mirrors /rabbitmq/status — validates with the management whoami endpoint."""
-    url = creds.get("url")
-    username = creds.get("username")
-    password = creds.get("password")
-    if not url or not username or not password:
-        return {"connected": False}
+def _probe_rabbitmq(account: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     try:
         from connectors.rabbitmq_connector.client import RabbitMQClient
 
         client = RabbitMQClient(
-            url=url,
-            username=username,
-            password=password,
+            url=account["url"],
+            username=account["username"],
+            password=account["password"],
             # The batch status call gives up at LIVE_CHECK_TIMEOUT.
             timeout=4,
         )
@@ -258,9 +252,26 @@ def _check_rabbitmq(creds: Dict[str, Any]) -> Dict[str, Any]:
             who = client.whoami()
         finally:
             client.close()
-        return {"connected": True, "url": url, "username": who.get("name") or username}
+        return {"url": account["url"], "username": who.get("name") or account["username"]}
     except Exception:
+        return None
+
+
+def _check_rabbitmq(creds: Dict[str, Any]) -> Dict[str, Any]:
+    """Mirrors /rabbitmq/status — validates every broker with the management whoami endpoint."""
+    from utils.rabbitmq_accounts import accounts_from_creds
+
+    candidates = accounts_from_creds(creds)
+    if not candidates:
         return {"connected": False}
+    # Probe together so one dead broker does not add its timeout to the others.
+    with ThreadPoolExecutor(max_workers=min(4, len(candidates))) as pool:
+        results = list(pool.map(_probe_rabbitmq, candidates))
+    # A revoked password on one broker must not flip the card off while another works.
+    for result in results:
+        if result:
+            return {"connected": True, **result, "accountCount": len(candidates)}
+    return {"connected": False, "accountCount": len(candidates)}
 
 
 def _check_confluence(creds: Dict[str, Any]) -> Dict[str, Any]:

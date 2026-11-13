@@ -361,13 +361,18 @@ export function parseRabbitMQCommand(toolName: string, toolInput: string): strin
     return ""
   }
   const vhost = asText(args.vhost)
-  const where = vhost ? ` (${vhost})` : ""
+  // Several brokers can be connected. Name the one the call targeted.
+  const broker = asText(args.account_id)
+  const on = broker ? ` on ${broker}` : ""
+  const where = `${vhost ? ` (${vhost})` : ""}${on}`
 
   switch (toolName) {
+    case "rabbitmq_list_brokers":
+      return "RabbitMQ: Connected brokers"
     case "rabbitmq_get_overview":
-      return "RabbitMQ: Cluster overview"
+      return `RabbitMQ: Cluster overview${on}`
     case "rabbitmq_list_nodes":
-      return "RabbitMQ: Nodes"
+      return `RabbitMQ: Nodes${on}`
     case "rabbitmq_list_queues": {
       const match = asText(args.name)
       const matching = match ? ` matching ${match}` : ""
@@ -384,7 +389,7 @@ export function parseRabbitMQCommand(toolName: string, toolInput: string): strin
     case "rabbitmq_list_consumers":
       return `RabbitMQ: Consumers${where}`
     case "rabbitmq_health_checks":
-      return "RabbitMQ: Health checks"
+      return `RabbitMQ: Health checks${on}`
     default: {
       const clean = toolName.replace("rabbitmq_", "").replace(/_/g, " ")
       return `RabbitMQ: ${clean}`
