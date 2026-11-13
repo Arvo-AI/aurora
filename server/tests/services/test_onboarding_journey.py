@@ -143,7 +143,7 @@ def test_no_emails_when_the_unsubscribe_link_would_point_at_localhost(monkeypatc
         monkeypatch.setenv(v, "x")
     monkeypatch.delenv("NGROK_URL", raising=False)
     from services.onboarding import sender
-    for unreachable in ("http://localhost:5080", "https://localhost:5080", "https://127.0.0.1",
+    for unreachable in ("http://localhost:5080", "https://localhost:5080", "https://localhost.:5080", "https://127.0.0.1",
                         "https://10.0.0.5", "https://aurora-server:5080", "https://api.internal"):
         monkeypatch.setenv("NEXT_PUBLIC_BACKEND_URL", unreachable)
         assert not sender.emails_enabled(), unreachable
@@ -239,3 +239,10 @@ def test_a_self_hosted_team_name_replaces_aurora_in_the_guides_words(monkeypatch
     msg = compose("welcome", _ctx(guide=g))
     assert "on the Platform team" in msg.text
     assert "Staff engineer, Platform" in msg.text
+
+
+def test_checkin_waits_when_a_tool_is_saved_but_nothing_checks_out():
+    s = state(sent={"welcome": at(minutes=4)}, has_stored=True)
+    assert due_email(s, at(hours=23)) is None
+    s.parts_done = ["cloud"]
+    assert due_email(s, at(hours=23)) == Due("checkin")

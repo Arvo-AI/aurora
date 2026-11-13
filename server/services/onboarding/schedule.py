@@ -67,7 +67,13 @@ def _connected_due(s: JourneyState, now: datetime) -> Due | None:
 
 
 def _followup_due(s: JourneyState, age: timedelta) -> Due | None:
-    if "checkin" not in s.sent and CHECKIN_AT <= age < CHECKIN_UNTIL and len(s.parts_done) < TOTAL_PARTS:
+    checkin_window = "checkin" not in s.sent and CHECKIN_AT <= age < CHECKIN_UNTIL
+    if checkin_window and len(s.parts_done) < TOTAL_PARTS:
+        # Something is saved but nothing checks out right now: the check-in
+        # would say "nothing is connected", which may be wrong. Wait for a
+        # clean check; the window is days long.
+        if s.has_stored and not s.parts_done:
+            return None
         return Due("checkin")
     # Nudges assume nothing was ever connected; a check that fails for a
     # moment mustn't make someone who did connect look like they didn't.

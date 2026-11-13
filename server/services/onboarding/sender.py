@@ -60,7 +60,8 @@ def emails_enabled() -> bool:
 def is_public_https(url: str) -> bool:
     """An https URL whose host someone on the internet could reach."""
     parts = urlsplit(url)
-    host = (parts.hostname or "").lower()
+    # "localhost." is the same host as "localhost"; drop the DNS root dot.
+    host = (parts.hostname or "").lower().rstrip(".")
     if parts.scheme != "https" or not host:
         return False
     if host == "localhost" or host.endswith((".localhost", ".local", ".internal")):

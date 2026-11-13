@@ -210,8 +210,11 @@ def _has_stored(cur, org_id: str) -> bool:
         """SELECT EXISTS (SELECT 1 FROM user_tokens
                            WHERE org_id = %s AND is_active AND secret_ref IS NOT NULL AND provider = ANY(%s))
                OR EXISTS (SELECT 1 FROM user_connections WHERE org_id = %s AND status = 'active' AND provider = ANY(%s))
-               OR EXISTS (SELECT 1 FROM user_github_installations WHERE org_id = %s AND disconnected_at IS NULL)""",
-        (org_id, list(ALL_PROVIDERS), org_id, list(ALL_PROVIDERS), org_id),
+               OR EXISTS (SELECT 1 FROM user_github_installations WHERE org_id = %s AND disconnected_at IS NULL)
+               OR EXISTS (SELECT 1 FROM kubeconfig_clusters WHERE org_id = %s AND is_active)
+               OR EXISTS (SELECT 1 FROM kubectl_agent_tokens WHERE org_id = %s AND status = 'active')
+               OR EXISTS (SELECT 1 FROM user_manual_vms WHERE org_id = %s)""",
+        (org_id, list(ALL_PROVIDERS), org_id, list(ALL_PROVIDERS), org_id, org_id, org_id, org_id),
     )
     return bool(cur.fetchone()[0])
 
