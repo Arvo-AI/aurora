@@ -1,0 +1,14 @@
+timestamp,service,metric,value,unit
+2026-11-06T14:20:00Z,checkout-api,http_5xx_rate,0.4,percent
+2026-11-06T14:25:00Z,checkout-api,http_5xx_rate,0.6,percent
+2026-11-06T14:30:00Z,checkout-api,http_5xx_rate,0.9,percent
+2026-11-06T14:35:00Z,checkout-api,http_5xx_rate,6.1,percent
+2026-11-06T14:40:00Z,checkout-api,http_5xx_rate,7.8,percent
+2026-11-06T14:20:00Z,checkout-api,p99_latency_ms,180,ms
+2026-11-06T14:30:00Z,checkout-api,p99_latency_ms,210,ms
+2026-11-06T14:35:00Z,checkout-api,p99_latency_ms,1850,ms
+2026-11-06T14:40:00Z,checkout-api,p99_latency_ms,2400,ms
+2026-11-06T14:35:00Z,checkout-api,db_pool_active_connections,10,count
+2026-11-06T14:40:00Z,checkout-api,db_pool_active_connections,10,count
+2026-11-06T14:35:00Z,checkout-api,db_pool_wait_queue,63,count
+2026-11-06T14:40:00Z,checkout-api,db_pool_wait_queue,147,count
