@@ -17,7 +17,7 @@ issue classification (``issue_classifier``) and the same redaction
 errors routinely carry credentials.
 
 Full-text search uses a GIN index over the message texts
-(``idx_chat_sessions_message_fts``, built in ``utils.db.chat_audit_indexes``,
+(``idx_chat_sessions_message_text_fts``, built in ``utils.db.chat_audit_indexes``,
 which also defines ``SEARCH_DOC_SQL`` so the two can't drift apart).
 """
 
@@ -207,7 +207,15 @@ def failure_reason(error: Optional[str]) -> str:
 
 
 def _terms(query: str) -> list[str]:
-    return [t for t in re.findall(r"[\w.-]+", query.lower()) if len(t) > 1 and t not in ("or", "and")]
+    """The words a match must contain: ``-word`` (excluded by the search) and or/and left out."""
+    return [t for t in re.findall(r"[\w.-]+", query.lower())
+            if len(t) > 1 and t not in ("or", "and") and not t.startswith("-")]
+
+
+def _term_groups(query: str) -> list[list[str]]:
+    """The query's alternatives as ``websearch_to_tsquery`` reads it: one word list per ``or``."""
+    groups = [_terms(alt) for alt in re.split(r"(?i)\s+or\s+", query)]
+    return [g for g in groups if g]
 
 
 # A search reads as a phrase when it is quoted or has this many words; phrase
@@ -493,6 +501,22 @@ _ANCHORS_SQL = """
             GROUP BY 1, 2"""
 
 
+def _set_message_anchors(cur, org_id: str, rows: list[dict]) -> None:
+    """Fill each tool call's ``message_index``: the transcript message holding it, or None."""
+    chat_ids = sorted({r["chat_id"] for r in rows if r.get("chat_id")})
+    if not chat_ids:
+        return
+    cur.execute(
+        f"""WITH f AS (SELECT unnest(%s::text[]) AS chat_id), anchors AS ({_ANCHORS_SQL}
+            )
+            SELECT chat_id, tool_call_id, message_index FROM anchors""",
+        (chat_ids, org_id),
+    )
+    found = {(chat, call): idx for chat, call, idx in cur.fetchall()}
+    for r in rows:
+        r["message_index"] = found.get((r.get("chat_id"), r.get("tool_call_id")))
+
+
 def link_for(chat_id: Optional[str], incident_id: Optional[str]) -> Optional[str]:
     """App-relative link to where a chat or tool call can be opened."""
     if incident_id:
@@ -503,8 +527,12 @@ def link_for(chat_id: Optional[str], incident_id: Optional[str]) -> Optional[str
 # Whether an answer stays with the person who asked. Only then may the agent
 # tools quote other users' chats; anywhere else (a Slack channel, Teams, Google
 # Chat, any background run, including an RCA started from chat that lands on an
-# org-visible incident) they return metadata and links only.
-def private_answer_channel(trigger_metadata: Optional[dict], *, is_background: bool) -> bool:
+# org-visible incident, or a follow-up in an incident's chat, whose tool output
+# shows in the incident timeline) they return metadata only.
+def private_answer_channel(trigger_metadata: Optional[dict], *, is_background: bool,
+                           incident_id: Optional[str] = None) -> bool:
+    if incident_id:
+        return False                                 # the incident's timeline is org-visible
     if trigger_metadata is not None and not isinstance(trigger_metadata, dict):
         return False                                 # malformed: fail closed
     meta = trigger_metadata or {}
@@ -636,31 +664,26 @@ def list_tool_calls(cur, org_id: str, raw: dict) -> dict:
         where.append(f"{case_sql} = %s")
         params.extend(case_params + [f.issue])
     from_sql = f"""FROM execution_steps es
-            LEFT JOIN chat_sessions cs ON cs.id = {ROOT_SESSION_SQL} AND cs.org_id = es.org_id
-            WHERE {" AND ".join(where)}"""
+            LEFT JOIN chat_sessions cs ON cs.id = {ROOT_SESSION_SQL} AND cs.org_id = es.org_id"""
+    where_sql = f"WHERE {' AND '.join(where)}"
 
     if f.query:
         limit, offset = QUERY_POOL_SIZE, 0
     else:
-        cur.execute(f"SELECT COUNT(*) {from_sql}", tuple(params))
+        cur.execute(f"SELECT COUNT(*) {from_sql} {where_sql}", tuple(params))
         total = cur.fetchone()[0] or 0
         limit, offset = f.per_page, (f.page - 1) * f.per_page
     cur.execute(
-        f"""WITH f AS (
-                SELECT es.id, es.tool_name, es.tool_input, es.status, es.error_message, es.started_at,
-                       es.tool_call_id, es.incident_id, {ROOT_SESSION_SQL} AS chat_id,
-                       cs.title AS chat_title, cs.user_id, {SOURCE_SQL} AS source
-                {from_sql}
-                ORDER BY es.started_at DESC, es.id DESC
-                LIMIT %s OFFSET %s
-            ), anchors AS ({_ANCHORS_SQL}
-            )
-            SELECT f.*, a.message_index, u.email AS user_email, u.name AS user_name
-            FROM f
-            LEFT JOIN anchors a ON a.chat_id = f.chat_id AND a.tool_call_id = f.tool_call_id
-            LEFT JOIN users u ON u.id = f.user_id
-            ORDER BY f.started_at DESC, f.id DESC""",
-        tuple(params + [limit, offset, org_id]),
+        f"""SELECT es.id, es.tool_name, es.tool_input, es.status, es.error_message, es.started_at,
+                   es.tool_call_id, es.incident_id, {ROOT_SESSION_SQL} AS chat_id,
+                   cs.title AS chat_title, cs.user_id, {SOURCE_SQL} AS source,
+                   u.email AS user_email, u.name AS user_name
+            {from_sql}
+            LEFT JOIN users u ON u.id = cs.user_id
+            {where_sql}
+            ORDER BY es.started_at DESC, es.id DESC
+            LIMIT %s OFFSET %s""",
+        tuple(params + [limit, offset]),
     )
     rows = [
         {
@@ -678,6 +701,8 @@ def list_tool_calls(cur, org_id: str, raw: dict) -> dict:
         rows = [r for r in rows if _matches_query(r, f.query)]
         total = len(rows)
         rows = rows[(f.page - 1) * f.per_page: f.page * f.per_page]
+    # Anchors only for the returned page: with ``q`` the pool is far larger.
+    _set_message_anchors(cur, org_id, rows)
 
     # Per-status counts within the period and scope filters (not status, issue or text).
     cur.execute(
@@ -757,19 +782,21 @@ def _issue_counts_for(cur, org_id: str, chat_ids: list[str], period: str) -> dic
 
 
 # Messages per chat fetched to build a snippet and to check the match survives
-# redaction, and the per-message cap (redaction runs on the whole capped text).
+# redaction (split across the query's words, at least a few per word), and the
+# per-message cap (redaction runs on the whole capped text).
 SNIPPET_MESSAGES_PER_CHAT = 50
+SNIPPET_MESSAGES_MIN_PER_WORD = 5
 SNIPPET_MESSAGE_CHARS = 100_000
 
 
 def _redacted_match(texts: list[tuple[int, str, str]], query: str) -> Optional[dict]:
     """Best match among one chat's (index, sender, text) messages, judged on redacted text.
 
-    Returns None when the query no longer matches once secrets are redacted, so
-    a search can't confirm that a hidden value exists.
+    A match needs every word of one ``or`` alternative. Returns None when no
+    alternative matches once secrets are redacted, so a search can't confirm
+    that a hidden value exists.
     """
     phrase = phrase_of(query)
-    terms = set(_terms(query))
     redacted = [(idx, sender, scrub(text or "")) for idx, sender, text in texts]
     if phrase:
         pattern = phrase_pattern(phrase)
@@ -777,40 +804,59 @@ def _redacted_match(texts: list[tuple[int, str, str]], query: str) -> Optional[d
             if pattern.search(text):
                 return {"index": idx, "sender": sender, "text": text, "match_type": "exact"}
     lowered = [(idx, sender, text, text.lower()) for idx, sender, text in redacted]
-    present = {t for t in terms for *_, low in lowered if t in low}
-    if terms and present != terms:
-        return None                     # some word only appears inside a redacted secret
+    groups = _term_groups(query)
+    matching = [g for g in groups if all(any(t in low for *_, low in lowered) for t in g)]
+    if groups and not matching:
+        return None                     # the words only appear inside redacted secrets
     for idx, sender, text, low in lowered:
-        if all(t in low for t in terms):
+        if any(all(t in low for t in g) for g in matching):
             return {"index": idx, "sender": sender, "text": text, "match_type": "all_words"}
     # The words are spread across messages: no single message to quote.
     return {"index": None, "sender": None, "text": None, "match_type": "all_words"}
 
 
+def _snippet_tsqueries(query: str) -> list[str]:
+    """``to_tsquery`` strings for the messages worth fetching: each word, and each alternative's words together."""
+    queries: list[str] = []
+    for group in _term_groups(query):
+        words = sorted({w for t in group for w in re.findall(r"\w+", t)})   # \w only: safe in to_tsquery
+        for q in (*words, " & ".join(words)):
+            if q and q not in queries:
+                queries.append(q)
+    return queries
+
+
 def _snippets_for(cur, org_id: str, chat_ids: list[str], query: str) -> dict[str, Optional[dict]]:
     """Per chat: the redacted match ({message_index, sender, text, match_type}), or None.
 
-    Fetches the messages that mention any query word (bounded), redacts each in
-    full, then picks the message (phrase first) and cuts the snippet. A chat whose
-    match disappears once redacted maps to None so the caller can drop it.
+    Fetches, per chat, the first few messages containing each query word and
+    each alternative's words together (so a word first used late in a long
+    chat is still seen), redacts each in full, then picks the message (phrase
+    first) and cuts the snippet. A chat whose match disappears once redacted
+    maps to None so the caller can drop it.
     """
-    words = sorted({w.lower() for w in re.findall(r"\w+", query)})
-    if not words:
+    tsqueries = _snippet_tsqueries(query)
+    if not tsqueries:
         return {}
-    any_word = " | ".join(words)        # \w only: safe in to_tsquery
+    per_query = max(SNIPPET_MESSAGES_MIN_PER_WORD, SNIPPET_MESSAGES_PER_CHAT // len(tsqueries))
     cur.execute(
         f"""SELECT cs.id, hit.msg_index, hit.sender, hit.text
             FROM chat_sessions cs
             JOIN LATERAL (
-                SELECT (e.idx - 1)::int AS msg_index, e.m->>'sender' AS sender,
-                       LEFT(e.m->>'text', %s) AS text
-                FROM jsonb_array_elements({_MESSAGES_ARRAY}) WITH ORDINALITY AS e(m, idx)
-                WHERE to_tsvector('simple', COALESCE(e.m->>'text', '')) @@ to_tsquery('simple', %s)
-                ORDER BY e.idx LIMIT %s
+                SELECT DISTINCT ON (x.idx) (x.idx - 1)::int AS msg_index, x.m->>'sender' AS sender,
+                       LEFT(x.m->>'text', %s) AS text
+                FROM (
+                    SELECT e.idx, e.m, row_number() OVER (PARTITION BY q.q ORDER BY e.idx) AS nth
+                    FROM jsonb_array_elements({_MESSAGES_ARRAY}) WITH ORDINALITY AS e(m, idx)
+                    CROSS JOIN LATERAL (SELECT to_tsvector('simple', COALESCE(e.m->>'text', '')) AS doc) d
+                    JOIN unnest(%s::text[]) AS q(q) ON d.doc @@ to_tsquery('simple', q.q)
+                ) x
+                WHERE x.nth <= %s
+                ORDER BY x.idx
             ) hit ON true
             WHERE cs.org_id = %s AND cs.id = ANY(%s)
             ORDER BY cs.id, hit.msg_index""",
-        (SNIPPET_MESSAGE_CHARS, any_word, SNIPPET_MESSAGES_PER_CHAT, org_id, chat_ids),
+        (SNIPPET_MESSAGE_CHARS, tsqueries, per_query, org_id, chat_ids),
     )
     by_chat: dict[str, list] = {}
     for sid, idx, sender, text in cur.fetchall():

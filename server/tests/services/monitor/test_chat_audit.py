@@ -116,7 +116,7 @@ def test_search_uses_the_indexed_expression():
     assert ca.SEARCH_DOC_SQL in sql and params[-1] == "AccessDenied"
     # Postgres only uses the GIN index when the query expression is identical.
     from utils.db.chat_audit_indexes import INDEXES
-    fts = dict((name, d) for name, _, d in INDEXES)["idx_chat_sessions_message_fts"]
+    fts = dict((name, d) for name, _, d in INDEXES)["idx_chat_sessions_message_text_fts"]
     assert ca.SEARCH_DOC_SQL.replace("cs.messages", "messages") in fts
 
 
@@ -269,8 +269,30 @@ def test_snippets_fetch_messages_mentioning_any_word_and_redact_before_cutting()
     cur = Cursor([])
     ca._snippets_for(cur, "o", ["s1"], '"permission denied"')
     sql, params = cur.calls[0]
-    assert "to_tsquery('simple', %s)" in sql and "substr(" not in sql   # whole (capped) messages
-    assert params[:3] == (ca.SNIPPET_MESSAGE_CHARS, "denied | permission", ca.SNIPPET_MESSAGES_PER_CHAT)
+    assert "to_tsquery('simple', q.q)" in sql and "substr(" not in sql   # whole (capped) messages
+    assert params[:3] == (ca.SNIPPET_MESSAGE_CHARS, ["denied", "permission", "denied & permission"],
+                          ca.SNIPPET_MESSAGES_PER_CHAT // 3)
+    # The first messages per word, not per chat: a word first used late is still fetched.
+    assert "PARTITION BY q.q ORDER BY e.idx" in sql and "x.nth <= %s" in sql
+
+
+@pytest.mark.parametrize("query, tsqueries", [
+    ("error or timeout", ["error", "timeout"]),
+    ("oom -staging", ["oom"]),
+    ("disk full or oom -staging", ["disk", "full", "disk & full", "oom"]),
+])
+def test_snippet_fetch_follows_or_and_excluded_words(query, tsqueries):
+    assert ca._snippet_tsqueries(query) == tsqueries
+
+
+@pytest.mark.parametrize("query, texts, matched", [
+    ("error or timeout", ["the request hit a timeout"], True),     # one alternative is enough
+    ("oom -staging", ["pod was oom killed"], True),                  # an excluded word isn't required
+    ("error or timeout", ["--password timeout"], False),             # only inside a secret: dropped
+])
+def test_redacted_match_reads_or_and_minus_like_the_search(query, texts, matched):
+    found = ca._redacted_match([(i, "bot", t) for i, t in enumerate(texts)], query)
+    assert (found is not None) is matched
 
 
 def test_a_secret_straddling_the_old_window_edge_is_never_half_shown():
@@ -368,8 +390,7 @@ def test_reason_falls_back_to_redacted_compact_json_never_a_brace():
 # --- tool calls view ----------------------------------------------------------
 
 _FTC_COLS = ["id", "tool_name", "tool_input", "status", "error_message", "started_at", "tool_call_id",
-             "incident_id", "chat_id", "chat_title", "user_id", "source", "message_index",
-             "user_email", "user_name"]
+             "incident_id", "chat_id", "chat_title", "user_id", "source", "user_email", "user_name"]
 
 
 def _ftc_row(i, command, error, *, title="Deploy check", user="u1", source="slack", msg=2, status="error"):
@@ -378,9 +399,12 @@ def _ftc_row(i, command, error, *, title="Deploy check", user="u1", source="slac
 
 
 def _ftc_cursor(rows, total=None):
+    """Page rows come without their anchor (index 12); the anchors query returns it."""
     return Cursor([
         ("SELECT COUNT(*) FROM execution_steps", ["count"], [(len(rows) if total is None else total,)]),
-        ("WITH f AS", _FTC_COLS, rows),
+        ("WITH f AS (SELECT unnest", ["chat_id", "tool_call_id", "message_index"],
+         [(r[8], r[6], r[12]) for r in rows]),
+        ("LIMIT %s OFFSET %s", _FTC_COLS, [r[:12] + r[13:] for r in rows]),
         ("COUNT(DISTINCT", ["category", "calls", "chats"], [("missing_permission", 19, 4)]),
         ("SELECT es.status, COUNT(*)", ["status", "count"], [("error", 19), ("success", 40), ("running", 1)]),
         ("es.tool_name AS value", ["value", "count"], [("cloud_exec", 19)]),
@@ -404,8 +428,8 @@ def test_failed_tool_calls_page_is_shaped_redacted_and_org_scoped():
     assert out["status_counts"] == {"failed": 19, "succeeded": 40, "running": 1, "total": 60}
     assert row["status"] == "failed"
     assert out["tools"] == [{"value": "cloud_exec", "count": 19}]
-    page_sql, page_params = next(c for c in cur.calls if "WITH f AS" in c[0])
-    assert ca._NOT_DELETED_SQL in page_sql and page_params[-3:] == (10, 10, "org-1")
+    page_sql, page_params = next(c for c in cur.calls if "LIMIT %s OFFSET %s" in c[0])
+    assert ca._NOT_DELETED_SQL in page_sql and page_params[-2:] == (10, 10)
     for sql, params in cur.calls:
         assert "org-1" in params, sql
 
@@ -474,6 +498,19 @@ def test_succeeded_rows_have_no_issue_or_reason_and_never_show_output():
     assert shaped["input"] == "kubectl get pods"
 
 
+def test_search_anchors_only_the_returned_page():
+    rows = [_ftc_row(i, f"s3 ls bucket-{i}", None, status="success") for i in range(30)]
+    rows = [r if i == 0 else r[:8] + (None,) + r[9:] for i, r in enumerate(rows)]  # one row with a chat
+    cur = _ftc_cursor(rows)
+    out = ca.list_tool_calls(cur, "org-1", {"q": "s3 ls", "per_page": "5"})
+    assert len(out["tool_calls"]) == 5 and out["total"] == 30
+    page_sql, page_params = next(c for c in cur.calls if "LIMIT %s OFFSET %s" in c[0])
+    assert "jsonb_array_elements" not in page_sql and page_params[-2:] == (ca.QUERY_POOL_SIZE, 0)
+    anchor_calls = [c for c in cur.calls if "WITH f AS (SELECT unnest" in c[0]]
+    assert len(anchor_calls) == 1 and anchor_calls[0][1] == (["s1"], "org-1")
+    assert out["tool_calls"][0]["message_index"] == 2
+
+
 def test_search_matches_succeeded_rows_by_tool_and_command():
     rows = [_ftc_row(1, "s3 ls", None, status="success"), _ftc_row(2, "ec2 describe-vpcs", "AccessDenied")]
     out = ca.list_tool_calls(_ftc_cursor(rows), "org-1", {"q": "s3 ls"})
@@ -505,6 +542,11 @@ def test_links_point_to_the_incident_or_the_chat():
 ])
 def test_private_answer_channel(meta, background, private):
     assert ca.private_answer_channel(meta, is_background=background) is private
+
+
+def test_a_follow_up_in_an_incident_chat_is_not_private():
+    # Its tool output shows in the incident timeline, visible to the org.
+    assert ca.private_answer_channel(None, is_background=False, incident_id="inc-1") is False
 
 
 

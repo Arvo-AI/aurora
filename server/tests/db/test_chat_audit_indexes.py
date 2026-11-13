@@ -46,6 +46,19 @@ def test_builds_every_index_concurrently_outside_a_transaction():
     conn.close.assert_called_once()
 
 
+def test_retired_indexes_are_dropped_concurrently():
+    cur = FakeCursor()
+    _run(cur)
+    for name in idx.RETIRED_INDEXES:
+        assert f"DROP INDEX CONCURRENTLY IF EXISTS {name}" in cur.sql
+
+
+def test_search_expression_strips_json_escapes_before_tokenizing():
+    # A line break is the two characters \n in the JSON text: without this the
+    # next word would be indexed as "nthe".
+    assert "regexp_replace(" in idx.SEARCH_DOC_SQL and r"'\\[nrt\\]', ' ', 'g'" in idx.SEARCH_DOC_SQL
+
+
 def test_another_process_holding_the_lock_skips_the_build():
     cur = FakeCursor(lock=False)
     _run(cur)
