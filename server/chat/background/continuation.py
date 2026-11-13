@@ -75,11 +75,11 @@ def continuations_left(used: Optional[int]) -> int:
     return max(0, MAX_CONTINUATIONS - int(used or 0))
 
 
-def continue_investigation(incident_id: str, requested_by: str) -> Dict[str, Any]:
+def continue_investigation(incident_id: str, requested_by: str, org_id: str) -> Dict[str, Any]:
     """Start a continuation of *incident_id*'s unfinished RCA for *requested_by*.
 
     The caller has already checked that *requested_by* may write incidents in
-    the incident's org; RLS scopes the row to that org. Runs as the incident's
+    *org_id*; RLS scopes the claim (and its undo) to that same org. Runs as the incident's
     owner, like the original RCA, so it uses the same connectors and session.
     Raises ContinueRefused when the investigation cannot be continued.
     """
@@ -89,7 +89,7 @@ def continue_investigation(incident_id: str, requested_by: str) -> Dict[str, Any
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cursor:
             row = None
-            if set_rls_context(cursor, conn, requested_by, log_prefix="[ContinueRCA]"):
+            if set_rls_context(cursor, conn, requested_by, org_id=org_id, log_prefix="[ContinueRCA]"):
                 # The row lock makes two clicks start one continuation, not two.
                 cursor.execute(
                     """SELECT user_id, aurora_chat_session_id, aurora_status, status,
@@ -147,7 +147,7 @@ def continue_investigation(incident_id: str, requested_by: str) -> Dict[str, Any
         )
     except Exception:
         # Nothing was queued: put the incident back as it was.
-        _undo_claim(incident_id, requested_by)
+        _undo_claim(incident_id, requested_by, org_id)
         raise
     logger.info("[ContinueRCA] Continuing incident %s (continuation %s)", sanitize(incident_id), int(used or 0) + 1)
     return {"continuationsLeft": continuations_left(int(used or 0) + 1)}
@@ -228,11 +228,11 @@ def _refusal(status, aurora_status, reason, session_id, used) -> Optional[Contin
     return None
 
 
-def _undo_claim(incident_id: str, requested_by: str) -> None:
+def _undo_claim(incident_id: str, requested_by: str, org_id: str) -> None:
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                set_rls_context(cursor, conn, requested_by, log_prefix="[ContinueRCA]")
+                set_rls_context(cursor, conn, requested_by, org_id=org_id, log_prefix="[ContinueRCA]")
                 cursor.execute(
                     """UPDATE incidents
                        SET aurora_status = 'complete',

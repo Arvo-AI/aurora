@@ -715,7 +715,7 @@ def _handle_continue_investigation(payload: dict, action: dict, slack_user_id: s
             _send_ephemeral(feedback, channel_id, slack_user_id,
                             "Your role can't continue investigations. Ask an admin for access.")
             return {"text": ""}
-        continue_investigation(incident_id, clicker_user_id)
+        continue_investigation(incident_id, clicker_user_id, org_id)
     except ContinueRefused as refused:
         _send_ephemeral(feedback, channel_id, slack_user_id, f"Can't continue: {refused}.")
         return {"text": ""}

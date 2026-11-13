@@ -53,7 +53,7 @@ class _Cursor:
 @pytest.fixture
 def db(monkeypatch):
     """Install a fake pool whose incident row the test sets."""
-    state = SimpleNamespace(cursors=[], enqueued=[], rls=True)
+    state = SimpleNamespace(cursors=[], enqueued=[], rls=True, rls_orgs=[])
 
     def _pool(row):
         def _conn():
@@ -70,7 +70,11 @@ def db(monkeypatch):
         monkeypatch.setattr(continuation, "db_pool", pool)
 
     state.pool = _pool
-    monkeypatch.setattr(continuation, "set_rls_context", lambda *a, **k: "org-1" if state.rls else None)
+    def _rls(*a, **k):
+        state.rls_orgs.append(k.get("org_id"))
+        return "org-1" if state.rls else None
+
+    monkeypatch.setattr(continuation, "set_rls_context", _rls)
 
     import chat.background.task as task_mod
     monkeypatch.setattr(task_mod.run_background_chat, "delay", lambda **kw: state.enqueued.append(kw))
@@ -89,7 +93,7 @@ def _sql(state):
 
 def test_an_unfinished_rca_is_continued_in_its_own_session(db):
     db.pool(_row(used=1))
-    result = continue_investigation(INCIDENT, CLICKER)
+    result = continue_investigation(INCIDENT, CLICKER, "org-1")
 
     assert result == {"continuationsLeft": MAX_CONTINUATIONS - 2}
     assert len(db.enqueued) == 1
@@ -108,6 +112,8 @@ def test_an_unfinished_rca_is_continued_in_its_own_session(db):
     sql = _sql(db)
     assert any("FOR UPDATE" in s for s in sql)
     assert any("aurora_status = 'running'" in s and "rca_continuations + 1" in s for s in sql)
+    # RLS uses the org the caller was authorized in, not one re-resolved from the user.
+    assert db.rls_orgs == ["org-1"]
     # The stopped run's session is reopened, so the heartbeat keeps the continuation alive.
     assert any("UPDATE chat_sessions" in s and "status = 'in_progress'" in s and "heartbeat_at = NULL" in s
                for s in sql)
@@ -125,7 +131,7 @@ def test_an_unfinished_rca_is_continued_in_its_own_session(db):
 def test_what_cannot_be_continued(db, row, words, status):
     db.pool(row)
     with pytest.raises(ContinueRefused, match=words) as refused:
-        continue_investigation(INCIDENT, CLICKER)
+        continue_investigation(INCIDENT, CLICKER, "org-1")
     assert refused.value.status == status
     assert db.enqueued == []
     assert not any("rca_continuations + 1" in s for s in _sql(db))
@@ -135,7 +141,7 @@ def test_another_orgs_incident_is_not_found(db):
     db.pool(_row())
     db.rls = False
     with pytest.raises(ContinueRefused, match="not found"):
-        continue_investigation(INCIDENT, CLICKER)
+        continue_investigation(INCIDENT, CLICKER, "org-1")
 
 
 def test_a_failed_enqueue_puts_the_incident_back(db, monkeypatch):
@@ -147,7 +153,7 @@ def test_a_failed_enqueue_puts_the_incident_back(db, monkeypatch):
 
     monkeypatch.setattr(task_mod.run_background_chat, "delay", _broker_down)
     with pytest.raises(RuntimeError):
-        continue_investigation(INCIDENT, CLICKER)
+        continue_investigation(INCIDENT, CLICKER, "org-1")
     assert any("aurora_status = 'complete'" in s and "rca_continuations - 1" in s for s in _sql(db))
 
 

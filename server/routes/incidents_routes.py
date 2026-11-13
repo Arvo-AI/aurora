@@ -1940,7 +1940,7 @@ def continue_incident_investigation(user_id, incident_id: str):
         return jsonify({"error": "Invalid incident ID format"}), 400
     from chat.background.continuation import ContinueRefused, continue_investigation
     try:
-        result = continue_investigation(incident_id, user_id)
+        result = continue_investigation(incident_id, user_id, get_org_id_from_request())
     except ContinueRefused as refused:
         return jsonify({"error": refused.public_message}), refused.status
     except Exception:
