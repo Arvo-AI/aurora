@@ -383,6 +383,17 @@ def initialize_tables():
                         UNIQUE(user_id, installation_id)
                     );
                 """,
+                # Repos an org removed in the repo picker. Automatic imports
+                # skip them; picking one again, or granting it again on
+                # GitHub, clears the row.
+                "github_repo_exclusions": """
+                    CREATE TABLE IF NOT EXISTS github_repo_exclusions (
+                        org_id VARCHAR(255) NOT NULL,
+                        repo_full_name VARCHAR(512) NOT NULL,
+                        excluded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (org_id, repo_full_name)
+                    );
+                """,
                 "webhook_deliveries": """
                     CREATE TABLE IF NOT EXISTS webhook_deliveries (
                         id SERIAL PRIMARY KEY,
@@ -392,7 +403,9 @@ def initialize_tables():
                         received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         processed_at TIMESTAMP NULL,
                         status VARCHAR(20) NOT NULL DEFAULT 'received',
-                        error TEXT NULL
+                        error TEXT NULL,
+                        repo_full_name VARCHAR(255) NULL,
+                        gating_outcome VARCHAR(32) NULL
                     );
 
                     CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_received_at
@@ -899,7 +912,8 @@ def initialize_tables():
                 "execution_steps": """
                     CREATE TABLE IF NOT EXISTS execution_steps (
                         id SERIAL PRIMARY KEY,
-                        incident_id UUID NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+                        -- NULL for tool calls made in a regular chat (no incident)
+                        incident_id UUID REFERENCES incidents(id) ON DELETE CASCADE,
                         session_id VARCHAR(50) NOT NULL,
                         org_id VARCHAR(255),
                         step_index INTEGER NOT NULL,
@@ -1691,6 +1705,7 @@ def initialize_tables():
             #   Celery task runs cross-org sweeps with no user context; needs SECURITY
             #   DEFINER function or BYPASSRLS role before RLS can be added
             rls_tables.append("workspaces")
+            rls_tables.append("github_repo_exclusions")
             rls_tables.append("aurora_deployments")
             rls_tables.append("cloud_feed_metadata")
             rls_tables.append("cloud_ingestion_state")
@@ -1928,6 +1943,53 @@ def initialize_tables():
                 logging.warning(
                     f"Error adding installation_id column/FK to connected_repos: {e}"
                 )
+                conn.rollback()
+
+            # Migration: record which repo a webhook came from and what change
+            # gating did with it, so a PR without a review can be explained.
+            try:
+                cursor.execute(
+                    """ALTER TABLE webhook_deliveries
+                       ADD COLUMN IF NOT EXISTS repo_full_name VARCHAR(255) NULL,
+                       ADD COLUMN IF NOT EXISTS gating_outcome VARCHAR(32) NULL;"""
+                )
+                conn.commit()
+                logging.info("Ensured gating outcome columns exist on webhook_deliveries table.")
+            except Exception as e:
+                logging.warning(f"Error adding gating outcome columns to webhook_deliveries: {e}")
+                conn.rollback()
+
+            # Migration: remember when an installation's first full repo
+            # import landed, so later automatic imports only add repos created
+            # after it (github_repo_exclusions covers removals). Links that
+            # exist when the column is added count as imported: the backfill
+            # repairs specific installations by id instead of guessing.
+            try:
+                cursor.execute(
+                    """SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'user_github_installations'
+                          AND column_name = 'repos_imported_at'"""
+                )
+                had_marker = cursor.fetchone() is not None
+                cursor.execute(
+                    """ALTER TABLE user_github_installations
+                       ADD COLUMN IF NOT EXISTS disconnected_at TIMESTAMP NULL,
+                       ADD COLUMN IF NOT EXISTS repos_imported_at TIMESTAMP NULL,
+                       ADD COLUMN IF NOT EXISTS repos_import_legacy BOOLEAN NOT NULL DEFAULT FALSE;"""
+                )
+                if not had_marker:
+                    # Legacy: removals before this deploy were never recorded,
+                    # so the sync only adds repos created after the marker.
+                    cursor.execute(
+                        """UPDATE user_github_installations
+                              SET repos_imported_at = COALESCE(linked_at, NOW() AT TIME ZONE 'UTC'),
+                                  repos_import_legacy = TRUE
+                            WHERE disconnected_at IS NULL"""
+                    )
+                conn.commit()
+                logging.info("Ensured GitHub repo import marker exists.")
+            except Exception as e:
+                logging.warning(f"Error adding GitHub repo import marker: {e}")
                 conn.rollback()
 
             # Migration: Add change_gating_enabled to connected_repos so
@@ -2282,10 +2344,23 @@ def initialize_tables():
                 logging.warning(f"Error adding status column: {e}")
                 conn.rollback()
 
+            # Migration: heartbeat_at is written every 30 seconds by the worker
+            # running a background session (chat.background.liveness). NULL means
+            # no worker has picked the session up yet.
+            try:
+                cursor.execute("""
+                    ALTER TABLE chat_sessions
+                    ADD COLUMN IF NOT EXISTS heartbeat_at TIMESTAMP NULL;
+                """)
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error adding heartbeat_at column: {e}")
+                conn.rollback()
+
             # Migration: Add incident_id column to chat_sessions if it doesn't exist
             try:
                 cursor.execute("""
-                    ALTER TABLE chat_sessions 
+                    ALTER TABLE chat_sessions
                     ADD COLUMN IF NOT EXISTS incident_id UUID;
                 """)
                 logging.info(
@@ -3377,6 +3452,27 @@ def initialize_tables():
                 logging.warning(f"Error adding tool_call_id to execution_steps: {e}")
                 cursor.execute("ROLLBACK TO SAVEPOINT sp_es_tcid")
 
+            # Regular chats record their tool calls too, so incident_id is
+            # optional. Checked first: DROP NOT NULL takes an ACCESS EXCLUSIVE
+            # lock, which every boot would otherwise take again.
+            try:
+                cursor.execute("SAVEPOINT sp_es_chat")
+                cursor.execute(
+                    "SELECT a.attnotnull FROM pg_attribute a "
+                    "WHERE a.attrelid = 'execution_steps'::regclass AND a.attname = 'incident_id'"
+                )
+                row = cursor.fetchone()
+                if row and row[0]:
+                    cursor.execute(
+                        "ALTER TABLE execution_steps ALTER COLUMN incident_id DROP NOT NULL;"
+                    )
+                cursor.execute("RELEASE SAVEPOINT sp_es_chat")
+            except Exception as e:
+                logging.warning(f"Error relaxing execution_steps.incident_id: {e}")
+                cursor.execute("ROLLBACK TO SAVEPOINT sp_es_chat")
+            # The chat audit's indexes are built concurrently after this
+            # transaction commits (see utils/db/chat_audit_indexes.py).
+
             # DB triggers: auto-inherit org_id from parent incident on INSERT.
             # This means no INSERT statement in the codebase ever needs to set
             # org_id on these tables — the trigger handles it unconditionally.
@@ -3389,8 +3485,11 @@ def initialize_tables():
                         CREATE OR REPLACE FUNCTION {fn_name}()
                         RETURNS TRIGGER AS $trg$
                         BEGIN
-                            NEW.org_id := (
-                                SELECT org_id FROM incidents WHERE id = NEW.incident_id
+                            -- Rows without a parent incident (chat tool calls in
+                            -- execution_steps) keep the org_id they were inserted with.
+                            NEW.org_id := COALESCE(
+                                (SELECT org_id FROM incidents WHERE id = NEW.incident_id),
+                                NEW.org_id
                             );
                             RETURN NEW;
                         END;
@@ -3969,6 +4068,11 @@ def initialize_tables():
 
             logging.info("Database tables initialized successfully.")
             cursor.close()
+
+        # Outside the init transaction: CREATE INDEX CONCURRENTLY can't run in
+        # one, and a plain build would block chat writes on large tables.
+        from utils.db.chat_audit_indexes import build_indexes_in_background
+        build_indexes_in_background(DB_PARAMS)
 
     except Exception as e:
         logging.error(f"Error initializing tables: {e}")

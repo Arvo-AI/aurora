@@ -146,6 +146,10 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
                         "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                           "Authorization", "X-Provider-Preference"],
                         "methods": ["GET", "POST", "DELETE", "OPTIONS"]},
+        r"/rabbitmq/*": {"origins": FRONTEND_URL, "supports_credentials": True,
+                         "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
+                                           "Authorization", "X-Provider-Preference"],
+                         "methods": ["GET", "POST", "DELETE", "OPTIONS"]},
         r"/spinnaker/*": {"origins": FRONTEND_URL, "supports_credentials": True,
                         "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                           "Authorization", "X-Provider-Preference"],
@@ -223,6 +227,8 @@ _OPEN_PREFIXES = (
     # callback is verified via signed state + GitHub-verified installation.
     "/github/app/signup/start",
     "/github/app/signup/callback",
+    "/github/app/signup/complete",
+    "/github/app/link-pending/confirm",
     # SAML SSO — browser/IdP hit these directly. /acs is verified by the IdP's
     # signature plus a request ID bound to this browser; /discover is not open.
     "/api/auth/saml/login/",
@@ -536,6 +542,10 @@ app.register_blueprint(servicenow_bp, url_prefix="/servicenow")
 from routes.coroot import bp as coroot_bp  # noqa: F401
 app.register_blueprint(coroot_bp, url_prefix="/coroot")
 
+# --- RabbitMQ Integration Routes ---
+from routes.rabbitmq import bp as rabbitmq_bp  # noqa: F401
+app.register_blueprint(rabbitmq_bp, url_prefix="/rabbitmq")
+
 # --- ThousandEyes Integration Routes ---
 from routes.thousandeyes import bp as thousandeyes_bp  # noqa: F401
 app.register_blueprint(thousandeyes_bp, url_prefix="/thousandeyes")
@@ -637,8 +647,10 @@ app.register_blueprint(visualization_bp)
 # --- Monitor Routes (Agent Fleet / Waterfall) ---
 from routes.monitor.fleet_routes import fleet_bp
 from routes.monitor.waterfall_routes import waterfall_bp
+from routes.monitor.chat_audit_routes import chat_audit_bp
 app.register_blueprint(fleet_bp)
 app.register_blueprint(waterfall_bp)
+app.register_blueprint(chat_audit_bp)
 
 # --- Audit Log Routes ---
 from routes.audit_routes import audit_bp

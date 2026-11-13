@@ -41,6 +41,18 @@ _STATEMENTS = {
     ),
 }
 
+# Claims that must also be unique per remote object several Aurora incidents can share
+# (folded recurrences of one PagerDuty incident). The advisory lock serialises the claim
+# per (org, remote object) so a second claimer sees the first one's committed claim.
+_SHARED_STATEMENTS = {
+    "pagerduty_note_id": (
+        "UPDATE incidents SET pagerduty_note_id = %s WHERE id = %s AND pagerduty_note_id IS NULL "
+        "AND NOT EXISTS (SELECT 1 FROM incidents o WHERE o.id <> %s AND o.source_type = 'pagerduty' "
+        "AND o.pagerduty_note_id IS NOT NULL AND o.alert_metadata->>'incidentId' = %s)"
+    ),
+}
+_SHARED_LOCK_SQL = "SELECT pg_advisory_xact_lock(hashtext(%s))"
+
 
 class PostbackClaim:
     """Claim / release / record on one incidents column."""
@@ -71,6 +83,26 @@ class PostbackClaim:
                 self._claim_sql,
                 (token, incident_id),
             ) == 1
+        except Exception:
+            logger.exception("%s Failed to claim incident %s", self._log, incident_id)
+            return False
+
+    def claim_shared(self, incident_id: str, user_id: str, remote_id: str, token: str = PENDING) -> bool:
+        """Like claim(), but also fails when another incident claimed the same remote object."""
+        sql = _SHARED_STATEMENTS.get(self.column)
+        if sql is None:
+            raise ValueError(f"no shared claim for {self.column!r}")
+        try:
+            with db_pool.get_admin_connection() as conn, conn.cursor() as cursor:
+                org_id = set_rls_context(cursor, conn, user_id, log_prefix=self._log)
+                if not org_id:
+                    raise RuntimeError(f"cannot resolve org for user {user_id}")
+                # Held until commit, so the NOT EXISTS below sees any earlier claimer's row.
+                cursor.execute(_SHARED_LOCK_SQL, (f"{self.column}:{org_id}:{remote_id}",))
+                cursor.execute(sql, (token, incident_id, incident_id, remote_id))
+                rowcount = cursor.rowcount
+                conn.commit()
+            return rowcount == 1
         except Exception:
             logger.exception("%s Failed to claim incident %s", self._log, incident_id)
             return False

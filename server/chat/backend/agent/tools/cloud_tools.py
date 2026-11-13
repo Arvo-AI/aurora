@@ -112,6 +112,27 @@ from .incidentio_tool import (
     GetTimelineArgs,
     GetAlertArgs,
 )
+from .rabbitmq_tool import (
+    rabbitmq_get_overview,
+    rabbitmq_list_nodes,
+    rabbitmq_list_queues,
+    rabbitmq_get_queue,
+    rabbitmq_list_exchanges,
+    rabbitmq_list_bindings,
+    rabbitmq_list_connections,
+    rabbitmq_list_consumers,
+    rabbitmq_health_checks,
+    is_rabbitmq_connected,
+    RabbitMQOverviewArgs,
+    RabbitMQNodesArgs,
+    RabbitMQListQueuesArgs,
+    RabbitMQGetQueueArgs,
+    RabbitMQListExchangesArgs,
+    RabbitMQListBindingsArgs,
+    RabbitMQListConnectionsArgs,
+    RabbitMQListConsumersArgs,
+    RabbitMQHealthArgs,
+)
 from .coroot_tool import (
     coroot_get_incidents,
     coroot_get_incident_detail,
@@ -1087,10 +1108,14 @@ def get_cloud_tools():
     # the next turn: without it the agent ran on a stale tool list for up to
     # LANGCHAIN_TOOLS_CACHE_DURATION after registration and insisted the tools
     # did not exist.
+    # RabbitMQ connect/disconnect happens in the API process. The chatbot and
+    # worker keep their own tool cache, so the credential bit has to be in the key.
+    rabbitmq_connected = is_rabbitmq_connected(user_id)
+    # Role grants change which connectors are offered, independent of credentials.
     from utils.auth.connector_access import access_for
     access = access_for(user_id)
 
-    cache_key = f"{user_id}:{capture_tag}:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}:hpa_vpa={is_hpa_vpa_action}:is_rca_ctx={is_rca_context}:pr_review={is_pr_review}:action_id={_action_id}:incident={_incident_id}:mcp={mcp_fingerprint(user_id)}:access={access.revision()}"
+    cache_key = f"{user_id}:{capture_tag}:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}:hpa_vpa={is_hpa_vpa_action}:is_rca_ctx={is_rca_context}:pr_review={is_pr_review}:action_id={_action_id}:incident={_incident_id}:mcp={mcp_fingerprint(user_id)}:access={access.revision()}:rabbitmq={int(rabbitmq_connected)}"
     
     current_time = time.time()
     if (
@@ -2102,6 +2127,9 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                 graph_get_service, GraphGetServiceArgs,
                 postmortem_list, PostmortemListArgs,
                 grafana_list_alerts, GrafanaListAlertsArgs,
+                search_tool_calls, SearchToolCallsArgs,
+                search_conversations, SearchConversationsArgs,
+                get_conversation, GetConversationArgs,
             )
 
             _INTROSPECTION_TOOLS = [
@@ -2242,6 +2270,54 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     GrafanaListAlertsArgs,
                 ),
             ]
+
+            # Conversation audit: every user's chats and tool calls, so only for
+            # people the org's rule allows (admins, or admins and editors). The
+            # tools check again on every call.
+            from utils.auth.stateless_auth import get_org_id_for_user
+            from utils.auth.viewer_run import may_audit_chats
+            if may_audit_chats(user_id, get_org_id_for_user(user_id)):
+                _INTROSPECTION_TOOLS += [
+                    (
+                        search_conversations,
+                        "search_conversations",
+                        "Search every chat in this org (all users and channels: web, Slack, Teams, "
+                        "Google Chat, RCAs, Actions, scheduled runs) by period, source, status, user, "
+                        "issue type and full text over questions and replies. A quoted query or one of 3+ "
+                        "words is matched as a phrase first: match_type 'exact' means one message "
+                        "contains it, 'all_words' only that the words appear. Returns title, user, "
+                        "source, status, dates, message count, issue counts, a redacted matching "
+                        "snippet and title (only in private chats) and a link. When total_is_lower_bound is true, "
+                        "say 'at least N'. Read-only.",
+                        SearchConversationsArgs,
+                    ),
+                    (
+                        search_tool_calls,
+                        "search_tool_calls",
+                        "Search the tool calls Aurora made across this org (default: failed calls in "
+                        "the last 7 days). Filters: status, period, issue type (missing_permission, "
+                        "blocked_command, not_connected, timeout, unavailable, other), tool, source, "
+                        "user and free text over the redacted command and reason. Returns each call's "
+                        "tool, redacted command, status, issue, reason, user, chat and link, plus counts "
+                        "by status and by issue. When total_is_lower_bound is true, say 'at least N'. In a "
+                        "shared channel, commands, reasons and chat titles are left out. "
+                        "Use for 'which tool calls failed last week and why' or "
+                        "'which permissions is Aurora missing'. Read-only.",
+                        SearchToolCallsArgs,
+                    ),
+                    (
+                        get_conversation,
+                        "get_conversation",
+                        "Read one chat from search_conversations: its latest messages (redacted, capped "
+                        "at 1,500 characters each) and every failed tool call with its reason. To check "
+                        "an exact sentence, pass query: it returns every message containing that text "
+                        "(within the first 20,000 characters of each of the latest 2,000 messages), with "
+                        "the redacted text around each occurrence. To read one message in full, pass "
+                        "message_index. In a shared channel it returns only metadata, issues and the link. "
+                        "Read-only.",
+                        GetConversationArgs,
+                    ),
+                ]
 
             for _fn, _name, _desc, _schema in _INTROSPECTION_TOOLS:
                 _ctx_wrapped = with_user_context(_fn)
@@ -3083,6 +3159,48 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             logging.debug(f"Coroot tools not added - user {user_id} not connected to Coroot")
     except Exception as e:
         logging.warning(f"Failed to add Coroot observability tools (treating as not connected): {e}")
+
+    # Same read as the cache key, so a later failure cannot store an empty list under rabbitmq=1.
+    try:
+        if rabbitmq_connected and _open("rabbitmq"):
+            _rabbitmq_tools = [
+                (rabbitmq_get_overview, "rabbitmq_get_overview", RabbitMQOverviewArgs,
+                 ("Read RabbitMQ cluster overview: version, queue totals, message rates, and listeners. "
+                  "Start here when a broker or consumer outage is suspected.")),
+                (rabbitmq_list_nodes, "rabbitmq_list_nodes", RabbitMQNodesArgs,
+                 "List RabbitMQ nodes with memory and disk alarms. A memory or disk alarm blocks publishers."),
+                (rabbitmq_list_queues, "rabbitmq_list_queues", RabbitMQListQueuesArgs,
+                 ("List RabbitMQ queues sorted by depth. Shows ready, unacked, consumers, and rates. "
+                  "Zero consumers with a growing ready count means nothing is subscribed to that queue. Check the worker connection and which queue it consumes.")),
+                (rabbitmq_get_queue, "rabbitmq_get_queue", RabbitMQGetQueueArgs,
+                 "Get one RabbitMQ queue, including dead-letter arguments and publish/deliver rates."),
+                (rabbitmq_list_exchanges, "rabbitmq_list_exchanges", RabbitMQListExchangesArgs,
+                 "List RabbitMQ exchanges and their publish rates."),
+                (rabbitmq_list_bindings, "rabbitmq_list_bindings", RabbitMQListBindingsArgs,
+                 "List bindings into a RabbitMQ queue. An empty list does not prove the queue is unused: the default exchange routes by queue name with no binding row."),
+                (rabbitmq_list_connections, "rabbitmq_list_connections", RabbitMQListConnectionsArgs,
+                 "List open RabbitMQ connections: user, peer, channel count, and client library."),
+                (rabbitmq_list_consumers, "rabbitmq_list_consumers", RabbitMQListConsumersArgs,
+                 "List RabbitMQ consumers and whether they are active."),
+                (rabbitmq_health_checks, "rabbitmq_health_checks", RabbitMQHealthArgs,
+                 ("Run RabbitMQ health checks: alarms, vhosts, mirror sync, and AMQP listeners. "
+                  "A failed AMQP port check is normal when the broker only listens on the other port.")),
+            ]
+            for _func, _name, _schema, _desc in _rabbitmq_tools:
+                _ctx = with_user_context(_func)
+                _notif = with_completion_notification(_ctx)
+                _final = wrap_func_with_capture(_notif, _name) if tool_capture else _notif
+                tools.append(StructuredTool.from_function(
+                    func=_final,
+                    name=_name,
+                    description=_desc,
+                    args_schema=_schema,
+                ))
+            logging.info(f"Added {len(_rabbitmq_tools)} RabbitMQ tools for user {user_id}")
+        else:
+            logging.debug(f"RabbitMQ tools not added - user {user_id} not connected to RabbitMQ")
+    except Exception as e:
+        logging.warning(f"Failed to add RabbitMQ tools (treating as not connected): {e}")
 
     # Add ThousandEyes network intelligence tools if connected
     try:

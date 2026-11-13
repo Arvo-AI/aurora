@@ -39,6 +39,14 @@ def apply_gemini_thinking_config(config: dict, model_name: str) -> None:
         config: Model configuration dict to update.
         model_name: Native Gemini model name (e.g. "gemini-2.5-pro").
     """
+    name_lower = model_name.lower()
+    if "gemini-4" in name_lower:
+        # Gemini 4 generateContent thought summaries can contain the thought
+        # summarizer's own working (DEV-1755). Suppress their return until a
+        # supported summary path is verified. Internal reasoning stays enabled.
+        config["include_thoughts"] = False
+        return
+
     disable_thinking = os.getenv("GEMINI_DISABLE_THINKING", "").lower() in (
         "true", "1", "yes",
     )
@@ -46,7 +54,6 @@ def apply_gemini_thinking_config(config: dict, model_name: str) -> None:
         logger.info(f"Thinking mode disabled via GEMINI_DISABLE_THINKING for {model_name}")
         return
 
-    name_lower = model_name.lower()
     if "flash-lite" in name_lower:
         return
     is_thinking_model = any(

@@ -60,6 +60,7 @@ def connect(user_id):
                 "webhook_secret": webhook_secret,
             },
             "bigpanda",
+            schedule_prediscovery=True,
         )
     except Exception as exc:
         logger.exception("[BIGPANDA] Failed to store credentials for user %s: %s", user_id, exc)

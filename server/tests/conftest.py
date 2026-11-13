@@ -19,6 +19,14 @@ from unittest.mock import MagicMock
 
 import pytest
 
+
+def pytest_addoption(parser):
+    parser.addoption(
+        "--run-gemini-live", action="store_true", default=False,
+        help="Run paid Vertex smoke tests using configured credentials",
+    )
+
+
 _server_dir = os.path.join(os.path.dirname(__file__), os.pardir)
 if os.path.abspath(_server_dir) not in sys.path:
     sys.path.insert(0, os.path.abspath(_server_dir))

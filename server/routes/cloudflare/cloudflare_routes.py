@@ -105,7 +105,7 @@ def cloudflare_connect(user_id):
             ),
         }
 
-        store_tokens_in_db(user_id, token_data, "cloudflare")
+        store_tokens_in_db(user_id, token_data, "cloudflare", schedule_prediscovery=True)
         set_connection_status(user_id, "cloudflare", account_id, "connected")
 
         logger.info(f"Cloudflare connected for user {user_id}, type: {token_type}, permissions: {permissions}")

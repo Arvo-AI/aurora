@@ -711,7 +711,14 @@ def format_response_for_slack(text: str, max_length: int = SLACK_MAX_MESSAGE_LEN
     formatted = re.sub(r'\*\*([^\*]+)\*\*', r'*\1*', formatted)
     formatted = re.sub(r'(?<!\*)\*(?!\*)([^\*]+)\*(?!\*)', r'_\1_', formatted) #italic
     formatted = re.sub(r'\[([^\]]+)\]\(([^\)]+)\)', r'<\2|\1>', formatted) #links
-    formatted = re.sub(r'<(?!http|@|#)([^>]+)>', '', formatted) #remove html tags
+    # Slack is not HTML. Removing <...> can swallow whole remediation sections
+    # between a comparison ("cache < 150 MB") and a later CLI placeholder.
+    # Preserve Slack links/mentions; escape all other angle brackets as text.
+    formatted = re.sub(
+        r'<(?:https?://[^<>\n]+|[@#][A-Z0-9]+(?:\|[^<>\n]+)?)>|[<>]',
+        lambda match: ({'<': '&lt;', '>': '&gt;'}.get(match[0], match[0])),
+        formatted,
+    )
     
     # Handle length limits - Slack has 4000 char limit per message
     if len(formatted) > max_length:

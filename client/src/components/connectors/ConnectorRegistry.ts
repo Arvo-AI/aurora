@@ -448,6 +448,17 @@ class ConnectorRegistry {
     });
 
     this.register({
+      id: "rabbitmq",
+      name: "RabbitMQ",
+      description: "Connect a RabbitMQ management API to inspect queue depth, consumers, node alarms, and connections during root cause analysis.",
+      iconPath: "/rabbitmq.svg",
+      iconBgColor: "bg-white dark:bg-white",
+      category: "Infrastructure",
+      path: "/rabbitmq/auth",
+      storageKey: "isRabbitMQConnected",
+    });
+
+    this.register({
       id: "jenkins",
       name: "Jenkins",
       description: "Connect to Jenkins to view jobs, builds, pipeline status, and build agents. Read-only access to your CI/CD server.",

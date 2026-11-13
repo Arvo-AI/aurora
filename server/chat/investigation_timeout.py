@@ -72,6 +72,39 @@ def investigation_stale_after_seconds() -> int:
     return investigation_timeout_seconds() + 5 * 60
 
 
+# Ten minutes with no progress and no bounded call still inside its own limit.
+# Model providers time out and retry within about eight, so a live step never
+# goes this long without a sign of life.
+DEFAULT_INVESTIGATION_STALL_SECONDS = 600
+MIN_INVESTIGATION_STALL_SECONDS = 120
+_STALL_ENV_VAR = "INVESTIGATION_STALL_SECONDS"
+
+
+def investigation_stall_seconds() -> int:
+    """How long a watched investigation may go without progress. 0 turns the check off."""
+    raw = (os.getenv(_STALL_ENV_VAR) or "").strip()
+    if not raw:
+        return DEFAULT_INVESTIGATION_STALL_SECONDS
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            "%s=%r is not an integer; using %ss",
+            _STALL_ENV_VAR, raw, DEFAULT_INVESTIGATION_STALL_SECONDS,
+        )
+        return DEFAULT_INVESTIGATION_STALL_SECONDS
+    if value <= 0:
+        return 0
+    # A shorter window cancels healthy runs between two slow model calls.
+    if value < MIN_INVESTIGATION_STALL_SECONDS:
+        logger.warning(
+            "%s=%s is below %ss; using %ss",
+            _STALL_ENV_VAR, value, MIN_INVESTIGATION_STALL_SECONDS, MIN_INVESTIGATION_STALL_SECONDS,
+        )
+        return MIN_INVESTIGATION_STALL_SECONDS
+    return value
+
+
 def investigation_timeout_label() -> str:
     """Human duration for the failure card, e.g. '60 minutes'."""
     seconds = investigation_timeout_seconds()

@@ -142,13 +142,14 @@ Before writing, check if a relevant entry already exists (use list_memories or g
    - For each deployment: what repo, what target environment, what K8s cluster/namespace
    - If CloudBees Operations Center OR a manually-registered controller fleet (Multiple Controllers mode) is connected: use cloudbees_rca(action='controller_list') to discover all controllers, then cloudbees_rca(action='cross_controller_deployments') to see what's deploying across the organization
 
-6. **Observability** (if Datadog/Splunk/Elastic/Coroot/Dynatrace/ThousandEyes connected):
+6. **Observability** (if Datadog/Splunk/Elastic/Coroot/Dynatrace/ThousandEyes/RabbitMQ connected):
    - Datadog: query_datadog(resource_type='monitors') and query_datadog(resource_type='hosts')
    - Splunk: list_splunk_indexes(), search_splunk() to discover log sources. Several instances return results_by_account; pass account_id (host:port) to stay on one. Only instances this user can access are included.
    - Elastic: elastic_list_indices(), elastic_search_logs() to discover log data streams and services
    - Coroot: coroot_get_service_map() for eBPF-discovered service dependencies, coroot_get_applications() for app inventory
    - Dynatrace: query_dynatrace() for entities and topology
    - ThousandEyes: thousandeyes_list_tests() for network monitoring targets
+   - RabbitMQ: rabbitmq_list_queues() and rabbitmq_list_nodes() for broker backlog and node alarms
    - Map monitors/tests to the services and hosts discovered in earlier steps
 
 7. **Documentation** (if Confluence/SharePoint connected):
@@ -235,15 +236,22 @@ def run_prediscovery(
             trigger_metadata=trigger_metadata,
         )
 
-        asyncio.run(_execute_background_chat(
-            user_id=user_id,
-            session_id=session_id,
-            initial_message=prompt,
-            trigger_metadata=trigger_metadata,
-            provider_preference=providers,
-            mode="prediscovery",
-            rail_text="",
-        ))
+        # Same heartbeat and watchdog as an investigation: the cleanup sweep
+        # fails an in-progress session whose worker stops beating.
+        from chat.background.liveness import run_watched
+        run_watched(
+            _execute_background_chat(
+                user_id=user_id,
+                session_id=session_id,
+                initial_message=prompt,
+                trigger_metadata=trigger_metadata,
+                provider_preference=providers,
+                mode="prediscovery",
+                rail_text="",
+            ),
+            session_id,
+            user_id,
+        )
 
         from chat.background.task import _update_session_status
         _update_session_status(session_id, "completed", user_id=user_id)

@@ -121,7 +121,8 @@ def azure_login(data=None):
                 token_data, 
                 "azure", 
                 subscription_name=stored_subscription_name,
-                subscription_id=stored_subscription_id
+                subscription_id=stored_subscription_id,
+                schedule_prediscovery=True,
             )
 
             # Persist every enabled subscription as a user_connections row so the

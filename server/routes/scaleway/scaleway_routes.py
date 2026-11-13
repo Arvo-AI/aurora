@@ -127,7 +127,7 @@ def scaleway_connect(user_id):
             "default_project_id": account_info.get("default_project_id"),
         }
         
-        store_tokens_in_db(user_id, token_data, "scaleway")
+        store_tokens_in_db(user_id, token_data, "scaleway", schedule_prediscovery=True)
         set_connection_status(user_id, "scaleway", access_key, "connected")
         
         logger.info(f"Scaleway connected successfully for user {user_id}")

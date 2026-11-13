@@ -7,6 +7,100 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.24] - 2026-11-12
+
+### Fixed
+- GitHub App: every install ends with an Aurora account and repos enrolled
+  for PR review. Installs that did not start on the website no longer hit an
+  error page, a GitHub outage during install no longer counts as "no repos",
+  and repos granted after install are enrolled.
+- GitHub App: an installation another organization has linked is never linked
+  again, and every link path takes a per-installation lock.
+- GitHub App: repos removed in the repo picker stay removed across logins,
+  relinks and the hourly sync.
+
+### Added
+- GitHub App: a new installer whose GitHub email already has an account can
+  finish linking after signing in, and a signed-in user can connect a new
+  install to their current organization.
+- GitHub App: an hourly sync enrolls repos whose webhook was missed and drops
+  repos GitHub no longer grants. `backfill_installation_repos` repairs named
+  installations by hand.
+
+## [1.5.23] - 2026-11-12
+
+### Fixed
+- Slack, RCA: a Gemini 4 model's thinking no longer replaces the answer. A
+  reply whose final message came back as content blocks (thinking plus text)
+  was treated as empty and overwritten with the streamed text, thinking
+  included, so Slack could show the model's reasoning instead of its answer.
+  Gemini 4 no longer returns thought summaries at all; the model still reasons.
+- Slack: replies keep text after a `<` comparison (for example
+  `< 150 MB`). Angle brackets used to be stripped as HTML and could swallow the
+  remediation steps that followed.
+- Safety judge: Gemini 4 models use the `low` thinking level, which they
+  support, instead of `minimal`.
+
+### Changed
+- Python dependencies: `google-genai` 2.20.0 and `langchain-google-genai`
+  4.4.1, which handle Gemini 4 content and tool-call thought signatures.
+
+## [1.5.22] - 2026-11-11
+
+### Added
+- PagerDuty: the RCA note ends with up to three suggested next steps, read
+  from a new "## Suggested Next Steps" section of the RCA summary (one line
+  each, under 200 characters, action first). Each step is capped at 240
+  characters and the note cap rises to 2,800 characters to fit them.
+
+### Changed
+- Agent: each cloud command goes through the LLM safety judge once instead of
+  twice, and each large tool output is summarized once instead of twice. That
+  removes an LLM call from every cloud command and every oversized tool output
+  in RCAs, actions, web chat and Slack answers. With a rule marked "Always
+  allowed", the judge is now skipped end to end.
+
+### Fixed
+- PagerDuty: a page the recurrence agent folds into an earlier incident now
+  gets a short note on its own PagerDuty incident: which incident it repeats
+  and when, that incident's root cause in a line or two, and a link to it.
+  Folded pages used to get no note. One note per incident, only when PagerDuty
+  notes are on for the org, and none when another Aurora incident already
+  noted the same PagerDuty incident.
+- Investigations: a long model step or a long command no longer gets an
+  investigation reported as a dead worker. A running investigation refreshes
+  its session every 30 seconds, so a killed worker is caught within 3 minutes
+  (incidents) or 5 minutes (chats), and one stuck on a call that never returns
+  is stopped after 10 minutes without progress instead of at the time limit.
+- Chat: a reply left on "Thinking…" because its worker was killed (out of
+  memory, eviction) or stopped is replaced with an error in Slack, Google Chat,
+  Teams and the chat transcript.
+
+## [1.5.21] - 2026-11-09
+
+### Added
+- Helm: Vault can auto-unseal with Azure Key Vault (`vault.seal.type:
+  azurekeyvault`), authenticating through AKS Workload Identity. The docs cover
+  Key Vault and identity setup, and migrating an existing manually unsealed
+  Vault in place with `vault operator unseal -migrate`.
+
+## [1.5.20] - 2026-11-09
+
+### Added
+- RabbitMQ: read-only connector for the management HTTP API. It signs in with
+  a `monitoring` user and lets the agent read cluster overview, node alarms,
+  queue depth, consumers, exchanges, bindings, connections and health checks.
+  It cannot publish, purge or dequeue messages. TLS verification is controlled
+  by `RABBITMQ_SSL_VERIFY`.
+- incident.io: the agent can look up an alert by its incident.io alert id or by
+  the source system's id (`deduplication_key`), and gets back the alert and any
+  incident it is attached to.
+
+### Fixed
+- Azure: an Ask-mode token refresh no longer overwrites the stored agent
+  principal with the read-only one, and a refresh no longer schedules
+  infrastructure prediscovery.
+
 ## [1.5.19] - 2026-11-06
 
 ### Fixed

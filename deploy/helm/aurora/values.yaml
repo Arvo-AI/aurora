@@ -362,6 +362,9 @@ config:
   # Wall-clock limit for one investigation, in seconds. Default is one hour.
   # Clamped to 120–10800. Worker grace and nginx proxy timeouts follow this.
   INVESTIGATION_TIMEOUT_SECONDS: "3600"
+  # Stop an investigation that makes no progress for this long, in seconds.
+  # Minimum 120; "0" turns the check off.
+  INVESTIGATION_STALL_SECONDS: "600"
 
   # --- AI Safety Guardrails ---
   # Input rail + signature matcher + LLM safety judge. All three activate with
@@ -471,6 +474,7 @@ config:
   RATE_LIMITING_ENABLED: "false"
   RATE_LIMIT_HEADERS_ENABLED: "true"
   SPLUNK_SSL_VERIFY: "false" # "false" (default), "true", or path to a private CA bundle
+  RABBITMQ_SSL_VERIFY: "false" # "false" (default), "true", or path to a private CA bundle
   ELASTIC_SSL_VERIFY: "true" # "true" (default), "false", or path to a private CA bundle
   AURORA_VERIFY_CLI_IDENTITY: "false"
   # Custom MCP servers: allow private/loopback MCP URLs (default for OSS Helm).
@@ -1061,7 +1065,7 @@ ingress:
 # WARNING: If KMS key is deleted, Vault data is permanently unrecoverable.
 vault:
   seal:
-    # Options: "shamir" (default), "gcpckms", "awskms"
+    # Options: "shamir" (default), "gcpckms", "awskms", "azurekeyvault"
     type: "shamir"
     
     # GCP Cloud KMS Configuration
@@ -1084,3 +1088,15 @@ vault:
     #   #     --from-literal=access_key=AKIA... \
     #   #     --from-literal=secret_key=...
     #   # credentials: true
+
+    # Azure Key Vault Configuration
+    # See website/docs/deployment/vault-kms-setup.md for setup instructions
+    # Uses AKS Workload Identity: also set
+    #   serviceAccount.vault.annotations:
+    #     azure.workload.identity/client-id: "<managed identity client id>"
+    # azurekeyvault:
+    #   tenant_id: "00000000-0000-0000-0000-000000000000"
+    #   vault_name: "my-keyvault"        # Key Vault name, not its URL
+    #   key_name: "vault-unseal-key"     # RSA key in that Key Vault
+    #   # environment: "AzurePublicCloud" # or AzureUSGovernmentCloud, AzureChinaCloud
+    #   # workloadIdentity: false         # skip the pod label (e.g. node managed identity)

@@ -218,6 +218,12 @@ celery_app.conf.update(
             'task': 'routes.slack.slack_channel_metadata.backfill_channel_descriptions',
             'schedule': BACKFILL_INTERVAL_SECONDS,  # Every 15 minutes
         },
+        # Safety net so GitHub repos missed by an import or a webhook still
+        # get PR reviews (new repos, imports that hit a GitHub outage).
+        'sync-github-installation-repos': {
+            'task': 'routes.github.github_repo_metadata.sync_installation_repos',
+            'schedule': 3600.0,
+        },
         'backfill-teams-channel-descriptions': {
             'task': 'routes.teams.teams_channel_metadata.backfill_channel_descriptions',
             'schedule': BACKFILL_INTERVAL_SECONDS,

@@ -96,7 +96,7 @@ def connect(user_id):
     }
 
     try:
-        store_tokens_in_db(user_id, token_payload, "coroot")
+        store_tokens_in_db(user_id, token_payload, "coroot", schedule_prediscovery=True)
         logger.info("[COROOT] Stored credentials for user %s (url=%s)", user_id, url)
     except Exception as exc:
         logger.exception("[COROOT] Failed to store credentials: %s", exc)

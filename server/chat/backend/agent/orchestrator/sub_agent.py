@@ -282,7 +282,11 @@ async def _run_with_timeout(input_dict: dict) -> FindingRef:
         logger.debug("sub_agent: role_meta lookup failed, using default timeout %ds", _DEFAULT_TIMEOUT_SECONDS, exc_info=True)
 
     try:
-        return await asyncio.wait_for(_run(input_dict), timeout=timeout)
+        # wait_for enforces the limit, so the stall watchdog waits for it too.
+        # A sub-agent's own steps may not reach the parent's event stream.
+        from utils.progress_watch import bounded_call
+        with bounded_call(timeout, f"sub-agent {agent_id}"):
+            return await asyncio.wait_for(_run(input_dict), timeout=timeout)
     except asyncio.TimeoutError:
         logger.warning(
             "sub_agent_node: timeout agent=%s incident=%s after %ds",

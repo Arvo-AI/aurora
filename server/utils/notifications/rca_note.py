@@ -1,19 +1,27 @@
 """
 Turn an RCA report (incidents.aurora_summary) into the short plain-text note
 Aurora posts back onto the paging system's incident: the root-cause paragraph,
-the impact paragraph when the report has one, a link to the full investigation
-and a disclaimer. Shared by the PagerDuty note and incident.io update services.
+the impact paragraph when the report has one, up to three next steps (PagerDuty),
+a link to the full investigation and a disclaimer. Shared by the PagerDuty note and incident.io update services.
 """
 
 import re
 from typing import Optional, Tuple
 
-NOTE_MAX_CHARS = 700
 ROOT_CAUSE_MAX_CHARS = 1200
 IMPACT_MAX_CHARS = 500
+NEXT_STEPS_MAX = 3
+# The prompt asks for steps under 200 characters; this catches the outliers without cutting them all.
+NEXT_STEP_MAX_CHARS = 240
+# Upper bound of a composed note: root cause + impact + next steps + labels, link and disclaimer
+# (~2.7k with a long FRONTEND_URL). PagerDuty notes take ~16k UTF-8 characters and ServiceNow
+# close_notes are cut at 4000, so the cap fits every consumer with room to spare.
+NOTE_MAX_CHARS = 2800
 MIN_SUMMARY_CHARS = 80
 
 _CITATION_RE = re.compile(r"\[\d+(?:,\s*\d+)*\]")
+# Fix-suggestion markers the summarizer puts on next steps ("Revert the change [S:4]")
+_SUGGESTION_MARKER_RE = re.compile(r"\[S:\d+\]")
 # The space a removed citation leaves before punctuation ("spiked [2].": "spiked .")
 _SPACE_BEFORE_PUNCT_RE = re.compile(r" ([.,;:!?])(?=\s|$)")
 _LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
@@ -26,7 +34,8 @@ _BULLET_RE = re.compile(r"^[ \t]*[*+][ \t]+", re.MULTILINE)
 _RULE_RE = re.compile(r"^[-*_]{3,}$")
 _LIST_ITEM_RE = re.compile(r"^(?:[-*+]|\d+[.)])\s")
 # Section headings. The summarizer is asked for three paragraphs (what happened,
-# root cause, impact & timeline) followed by "## Ruled Out" / "## Not Checked";
+# root cause, impact & timeline) followed by "## Ruled Out" / "## Not Checked" /
+# "## Suggested Next Steps";
 # models render the paragraph labels as "## X", "**X**" or bare "X" lines, or not at all.
 _MD_HEADING_RE = re.compile(r"^#{1,6}[ \t]+(.*)$")  # trailing " #" trimmed in code: keeps the match linear
 _BOLD_LINE_RE = re.compile(r"^(?:\*\*|__)([^*_.|]{1,80}?)(?:\*\*|__):?$")
@@ -35,11 +44,12 @@ _KNOWN_TITLE_RE = re.compile(
     r"suggested next steps|next steps|recommendations|action items|proposed actions|remediation steps)\b",
     re.IGNORECASE,
 )
-_END_SECTION_RE = re.compile(
-    r"^(?:ruled out|not checked|suggested next steps|next steps|recommendations|action items|"
-    r"proposed actions|remediation steps)\b",
+# Prose stops at these; the next-steps section is read on its own by extract_next_steps
+_NEXT_STEPS_HEADING_RE = re.compile(
+    r"^(?:suggested next steps|next steps|recommendations|action items|proposed actions|remediation steps)\b",
     re.IGNORECASE,
 )
+_END_SECTION_RE = re.compile(r"^(?:ruled out|not checked)\b", re.IGNORECASE)
 _ROOT_HEADING_RE = re.compile(r"root cause", re.IGNORECASE)
 _IMPACT_HEADING_RE = re.compile(r"impact|timeline", re.IGNORECASE)
 # Opening phrases the summarizer is told to use for the root-cause paragraph
@@ -59,7 +69,7 @@ def truncate(text: str, limit: int = NOTE_MAX_CHARS) -> str:
     if len(text) <= limit:
         return text
     cut = text.rfind(" ", 0, limit)
-    if cut < 200:
+    if cut < min(200, limit // 2):
         cut = limit
     return text[:cut].rstrip() + "..."
 
@@ -138,7 +148,7 @@ def _headed_parts(summary: str) -> Tuple[Optional[str], Optional[str], list]:
     impact: Optional[str] = None
     narrative: list = []
     for heading, paragraphs in sections(summary):
-        if _END_SECTION_RE.match(heading):
+        if _END_SECTION_RE.match(heading) or _NEXT_STEPS_HEADING_RE.match(heading):
             break
         first = paragraphs[0] if paragraphs else None
         if root is None and _ROOT_HEADING_RE.search(heading):
@@ -179,6 +189,43 @@ def extract_note_body(summary: Optional[str]) -> Tuple[str, str]:
     return truncate(root, ROOT_CAUSE_MAX_CHARS), truncate(impact, IMPACT_MAX_CHARS)
 
 
+def extract_next_steps(summary: Optional[str]) -> list:
+    """Up to NEXT_STEPS_MAX one-line steps from the report's next-steps section, as plain text.
+
+    Each list item under the heading is one step, and an unmarked line after an item is
+    that item wrapping. Without list items, each bare line is a step. [S:id] fix markers
+    and citations are dropped. [] when the report has no such section.
+    """
+    raw: list = []
+    in_section = False
+    seen_item = False
+    for line in (summary or "").splitlines():
+        line = line.strip()
+        heading = heading_text(line) if line else None
+        if heading is not None:
+            if in_section:
+                break
+            in_section = bool(_NEXT_STEPS_HEADING_RE.match(heading))
+            continue
+        if not in_section or not line or _RULE_RE.match(line):
+            continue
+        if _LIST_ITEM_RE.match(line):
+            seen_item = True
+            raw.append(re.sub(r"^(?:[-*+]|\d+[.)])\s+", "", line))
+        elif seen_item and raw:
+            raw[-1] += " " + line
+        else:
+            raw.append(line)
+    steps = []
+    for item in raw:
+        step = to_plain_text(_SUGGESTION_MARKER_RE.sub("", item), max_chars=None)
+        if step:
+            steps.append(truncate(step, NEXT_STEP_MAX_CHARS))
+        if len(steps) == NEXT_STEPS_MAX:
+            break
+    return steps
+
+
 def _note_sections(root_cause: str, impact: str) -> list:
     """[(label, paragraph)] in note order; impact only when the report had one."""
     sections = [("Root cause", root_cause)]
@@ -193,11 +240,26 @@ def _investigation_url(incident_id: str, base_url: Optional[str]) -> str:
     return f"{base_url}/incidents/{incident_id}" if base_url else ""
 
 
-def compose_note(root_cause: str, incident_id: str, impact: str = "", base_url: Optional[str] = None) -> str:
-    """Plain-text note body (PagerDuty notes render no markup); base_url links the full investigation."""
+def compose_note(
+    root_cause: str,
+    incident_id: str,
+    impact: str = "",
+    base_url: Optional[str] = None,
+    next_steps: Optional[list] = None,
+) -> str:
+    """Plain-text note body (PagerDuty notes render no markup); base_url links the full investigation.
+
+    Every part is held to its own cap here, so the note stays within NOTE_MAX_CHARS
+    whatever the caller passes (the frontend URL is operator config, not input).
+    """
+    root_cause = truncate(root_cause or "", ROOT_CAUSE_MAX_CHARS)
+    impact = truncate(impact or "", IMPACT_MAX_CHARS)
+    steps = [truncate(step, NEXT_STEP_MAX_CHARS) for step in (next_steps or []) if step][:NEXT_STEPS_MAX]
     lines = ["Aurora RCA", ""]
     for label, body in _note_sections(root_cause, impact):
         lines += [label, body, ""]
+    if steps:
+        lines += ["Next steps", *(f"- {step}" for step in steps), ""]
     url = _investigation_url(incident_id, base_url)
     if url:
         lines += [f"Full investigation: {url}", ""]

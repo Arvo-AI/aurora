@@ -59,8 +59,9 @@ from __future__ import annotations
 import contextvars
 import hashlib
 import logging
+import shlex
 from dataclasses import dataclass
-from typing import Optional
+from typing import List, Optional, Union
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +80,83 @@ def _hash(command: str) -> str:
 def guardrails_approved_hash() -> Optional[str]:
     """Accessor for ``terminal_run._check_guardrails`` to skip duplicate checks."""
     return _guardrails_approved_command.get()
+
+
+def _shell_normalized(command: str) -> Optional[str]:
+    """*command* as a shell or a shlex-based executor reads it, or None when
+    that is the same string or the quoting does not parse.
+
+    Quote-splitting (``ba''sh``) and backslash escapes hide a token from a
+    check on the raw string; ``shlex.split`` puts the token back together.
+    """
+    try:
+        normalized = shlex.join(shlex.split(command))
+    except ValueError:
+        return None
+    return normalized if normalized != command else None
+
+
+def _trips_signature_floor(command: str) -> bool:
+    """True when the signature matcher flags *command*, or cannot be asked."""
+    try:
+        from utils.security.signature_match import check_signature
+        return bool(check_signature(command).matched)
+    except Exception:
+        logger.warning("[CommandGate] signature check unavailable; approval not carried", exc_info=True)
+        return True
+
+
+def _executable(command: Union[str, List[str]]) -> Optional[str]:
+    """The program *command* starts, or None when it is empty or does not parse."""
+    try:
+        argv = shlex.split(command) if isinstance(command, str) else [str(a) for a in command]
+    except ValueError:
+        return None
+    return argv[0] if argv else None
+
+
+def carry_guardrails_approval(
+    gated_command: str, exec_args: Union[str, List[str]],
+) -> Optional[contextvars.Token]:
+    """Move the gate's approval of *gated_command* onto the argv the tool runs.
+
+    A tool rewrites a command after the gate allowed it (``cloud_exec`` adds
+    ``--project``/``--format`` and re-splits the quoting), so ``terminal_run``
+    hashes a different string and judges the same command a second time.
+    Only an approval the gate set for *gated_command* in this context moves,
+    only onto the same program, and only when the form that runs passes the
+    signature matcher: the judge read the command as written, the matcher has
+    to read it as executed. Anything else leaves the executor's full check in
+    place.
+
+    Returns a token for :func:`release_guardrails_approval`, or None when
+    nothing was carried.
+    """
+    if _guardrails_approved_command.get() != _hash(gated_command):
+        return None
+    # A tool may add flags to the program the judge approved, not swap it for
+    # another: the AWS fan-out prefixes by substring, so the gate can judge
+    # `aws aws_completer` while the worker runs `aws_completer`.
+    gated_executable = _executable(gated_command)
+    if gated_executable is None or _executable(exec_args) != gated_executable:
+        return None
+    # Same rendering terminal_run._check_guardrails hashes.
+    exec_form = exec_args if isinstance(exec_args, str) else shlex.join(str(a) for a in exec_args)
+    if _trips_signature_floor(exec_form):
+        return None
+    return _guardrails_approved_command.set(_hash(exec_form))
+
+
+def release_guardrails_approval(token: Optional[contextvars.Token]) -> None:
+    """Put back the approval :func:`carry_guardrails_approval` replaced, once
+    the tool has finished running the carried command."""
+    if token is None:
+        return
+    try:
+        _guardrails_approved_command.reset(token)
+    except ValueError:
+        # Reset from another context than the carry: nothing of ours to undo there.
+        logger.debug("[CommandGate] carried approval released outside its context", exc_info=True)
 
 
 @dataclass(frozen=True)
@@ -321,6 +399,15 @@ def _gate_impl(*, user_id: str, tool_name: str, command: str, cmd_hash: str) -> 
         command, tool=tool_name, user_id=user_id, session_id=session_id,
         skip_judge=bool(org_id and _read_only_allow_covers(org_id, command)),
     )
+    if not safety_decision.blocked:
+        # The matcher just read the command as written. Read it once more as a
+        # shell would, with split quotes joined; no second judge call.
+        normalized = _shell_normalized(command)
+        if normalized is not None:
+            safety_decision = safety_evaluate(
+                normalized, tool=tool_name, user_id=user_id, session_id=session_id,
+                skip_judge=True,
+            )
     policy_verdict: CommandVerdict = evaluate_compound_command(org_id, command)
     # A Yes click must not run a command that compromises the Aurora host.
     if policy_verdict.platform_blocked:

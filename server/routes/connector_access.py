@@ -372,6 +372,42 @@ def put_viewer_run(user_id: str):
     })
 
 
+@connector_access_bp.route("/chat-audit", methods=["GET"])
+@require_permission("chat", "read")
+def get_chat_audit(user_id: str):
+    """The org's conversation-audit setting, and whether the caller may audit."""
+    org_id = get_org_id_from_request()
+    if not org_id:
+        return jsonify({"error": "No org context"}), 400
+    from utils.auth.viewer_run import may_audit_chats, org_allows_editor_audit
+
+    return jsonify({
+        "editors": org_allows_editor_audit(org_id),
+        "allowed": may_audit_chats(user_id, org_id),
+    })
+
+
+@connector_access_bp.route("/chat-audit", methods=["PUT"])
+@require_permission("admin", "access")
+def put_chat_audit(user_id: str):
+    """Who can audit conversations: admins only (editors=false) or admins and editors."""
+    org_id = get_org_id_from_request()
+    if not org_id:
+        return jsonify({"error": "No org context"}), 400
+    editors = (request.get_json(silent=True) or {}).get("editors", None)
+    if not isinstance(editors, bool):
+        return jsonify({"error": "`editors` must be a boolean"}), 400
+    from utils.auth.viewer_run import save_editor_audit
+
+    try:
+        save_editor_audit(org_id, user_id, editors)
+    except Exception:
+        logger.exception("Failed to save chat audit setting")
+        return jsonify({"error": "Could not save"}), 500
+    logger.info("Conversation audit setting updated by user %s", sanitize(user_id))
+    return jsonify({"editors": editors})
+
+
 @connector_access_bp.route("/connector-access", methods=["GET"])
 @require_permission("admin", "access")
 def list_access(user_id: str):

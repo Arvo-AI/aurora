@@ -7,9 +7,7 @@ const API_BASE_URL = process.env.BACKEND_URL;
  * Disconnects Datadog. With ?account=<label> only that organization is removed;
  * without it every organization is removed.
  *
- * The shared /api/connected-accounts/[provider] route cannot be reused here: it
- * issues a bare DELETE and forwards no query string, so the account selector
- * would be dropped and every org removed.
+ * datadogService calls this path so the account selector stays on /api/datadog.
  */
 export async function DELETE(request: NextRequest) {
   try {
