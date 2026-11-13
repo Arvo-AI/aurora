@@ -179,7 +179,9 @@ def _webhook_secret_env_value() -> str | None:
     for env_var in _WEBHOOK_SECRET_ENV_VARS:
         value = _env_value(env_var)
         if value is not None:
-            return value
+            # A secret file read with $(cat ...) or --from-file keeps its trailing
+            # newline, which would otherwise end up in the HMAC key.
+            return value.strip()
     return None
 
 

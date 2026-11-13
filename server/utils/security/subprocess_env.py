@@ -28,9 +28,11 @@ _MCP_SAFE_ENV_KEYS = frozenset({
     "PYTHONPATH", "UV_CACHE_DIR",
     "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS",
     "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
+    # botocore ignores REQUESTS_CA_BUNDLE; custom endpoints / CAs need these.
+    "AWS_CA_BUNDLE", "AWS_STS_REGIONAL_ENDPOINTS",
 })
-# npm registry and cache settings, needed by npx-based servers on air-gapped installs.
-_MCP_SAFE_ENV_PREFIXES = ("NPM_CONFIG_", "npm_config_")
+# npm registry/cache settings (npx servers on air-gapped installs) and AWS endpoint overrides.
+_MCP_SAFE_ENV_PREFIXES = ("NPM_CONFIG_", "npm_config_", "AWS_ENDPOINT_URL")
 
 _PR_SET_DUMPABLE = 4
 _dumpable_lock = threading.Lock()
@@ -63,8 +65,10 @@ def deny_same_uid_proc_access() -> bool:
     (or ptrace the parent) and recover every secret the parent was started
     with, whatever env the child itself was given. A non-dumpable process's
     ``/proc`` entries need CAP_SYS_PTRACE, which containers don't grant by
-    default. The flag resets on ``execve`` in children, so it only covers this
-    process. It also disables core dumps and non-root debugger attach.
+    default. The flag resets on ``execve`` in children, and it only covers this
+    process: ancestors (a celery or gunicorn master, PID 1) stay readable, so
+    this narrows the exposure rather than closing it. It also disables core
+    dumps and debugger attach without CAP_SYS_PTRACE.
 
     Linux only; returns False elsewhere or if the call fails.
     """

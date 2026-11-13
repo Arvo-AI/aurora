@@ -249,7 +249,8 @@ class RealMCPServerManager:
             # allowlisted env plus their own credentials, never the server's
             # secrets (VAULT_TOKEN, DB password, GitHub App key, ...). Marking
             # this process non-dumpable stops a same-uid child from reading
-            # those secrets back out of /proc/<ppid>/environ.
+            # them back out of /proc/<ppid>/environ. Ancestor processes stay
+            # readable; only a separate uid would close that.
             deny_same_uid_proc_access()
             env = mcp_base_env()
             # Add cloud provider credentials to environment

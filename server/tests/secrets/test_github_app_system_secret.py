@@ -358,6 +358,12 @@ class TestGetAppWebhookSecret:
 
         assert vault_keys.get_app_webhook_secret() == "primary"
 
+    def test_env_value_trailing_newline_is_stripped(self, monkeypatch):
+        monkeypatch.setattr(vault_keys, "get_secrets_backend", _backend_must_not_be_called)
+        monkeypatch.setenv("GITHUB_APP_WEBHOOK_SECRET", "env-whsec\n")
+
+        assert vault_keys.get_app_webhook_secret() == "env-whsec"
+
     def test_backend_failure_with_no_env_raises_clear_error(self, monkeypatch):
         backend = _mock_backend(available=False)
         monkeypatch.setattr(vault_keys, "get_secrets_backend", lambda: backend)

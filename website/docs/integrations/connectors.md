@@ -530,7 +530,9 @@ it up before closing the tab.
 **Step 3 — Write secrets to the customer's secrets backend**:
 
 These are read from whichever backend `SECRETS_BACKEND` selects, at the path
-`aurora/system/github-app/*`. Use the commands for your backend.
+`aurora/system/github-app/*`. Use the commands for your backend. Skip a secret
+here if you set it as an env var instead (`GITHUB_APP_WEBHOOK_SECRET`,
+`GITHUB_APP_PRIVATE_KEY`): an env var that is set always wins.
 
 Vault (`SECRETS_BACKEND=vault`, default):
 
@@ -575,7 +577,8 @@ GITHUB_APP_CLIENT_ID=<starts with Iv23l...>
 NEXT_PUBLIC_GITHUB_APP_SLUG=<URL slug, e.g. aurora-acme>
 GITHUB_APP_WEBHOOK_URL=<API_URL>/github/webhook
 GITHUB_APP_SETUP_URL=<API_URL>/github/app/install/callback
-GITHUB_APP_WEBHOOK_SECRET=<openssl rand -hex 32>
+# Only if you did not store webhook-secret in the backend (Step 3):
+# GITHUB_APP_WEBHOOK_SECRET=<openssl rand -hex 32>
 ```
 
 The private key (PEM) usually lives in your secrets backend at
@@ -671,7 +674,7 @@ use the OAuth fallback above.
 | "Bad credentials" | Regenerate the OAuth Client secret and update `.env`. |
 | "GitHub App install URL is missing the required state parameter" | `GITHUB_APP_SETUP_URL` doesn't match what's registered on the App settings page. Update `.env` to match. |
 | "Failed to initiate GitHub OAuth" | `GH_OAUTH_CLIENT_ID`/`SECRET` empty when `GITHUB_AUTH_MODE=oauth` or `hybrid`. Set them and restart. |
-| Webhook deliveries fail with 4xx | Webhook secret in your secrets backend doesn't match what's registered on the App. Rewrite it at `aurora/system/github-app/webhook-secret` (`vault kv put` or `aws secretsmanager put-secret-value`, per `SECRETS_BACKEND`) and re-save the App secret. |
+| Webhook deliveries fail with 4xx | Webhook secret doesn't match what's registered on the App. If `GITHUB_APP_WEBHOOK_SECRET` (or `GH_APP_WEBHOOK_SECRET` / `GITHUB_WEBHOOK_SECRET`) is set, it is the one in use: fix it and restart the pods. Otherwise rewrite it at `aurora/system/github-app/webhook-secret` (`vault kv put` or `aws secretsmanager put-secret-value`, per `SECRETS_BACKEND`). |
 | "Could not deserialize key data" in logs | Private-key PEM was stored without its newlines. Re-store with `file://` (AWS SM) or `@` (Vault) so the multi-line PEM is preserved verbatim. |
 | Change-gating / incident-prevention reviews not posting | Pull Requests permission is Read-only. Upgrade it to **Read and write** in Permissions & events, then accept the prompt in GitHub. |
 | No webhook for `pull_request` events | Event not subscribed. Add it under Permissions & events → Subscribe to events (existing installs receive new events automatically). |
