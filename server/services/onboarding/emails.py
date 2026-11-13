@@ -11,7 +11,7 @@ import html
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
-from services.onboarding.guides import Guide
+from services.onboarding.guides import Guide, team_name
 from services.onboarding.stack import PARTS, STACK, join_words, label, next_part
 
 
@@ -67,7 +67,8 @@ def _app_url(ctx: EmailContext) -> str:
 
 
 def _who(guide: Guide) -> str:
-    return "one of the founders of Aurora" if "founder" in guide.title.lower() else "on the Aurora team"
+    team = team_name()
+    return f"one of the founders of {team}" if "founder" in guide.title.lower() else f"on the {team} team"
 
 
 def _book(ctx: EmailContext, lead: str, tail: str = "") -> P:
@@ -240,7 +241,7 @@ def _html_block(b: Block) -> str:
 def _signature(guide: Guide, app_url: str) -> str:
     """Name and role beside a small square: the guide's photo if there is
     one, otherwise the Aurora icon. If images are blocked, the text stands alone."""
-    role = f"{guide.title}, Aurora" if guide.title else "Aurora"
+    role = f"{guide.title}, {team_name()}" if guide.title else team_name()
     if guide.avatar_url.startswith("https://"):
         img, radius = guide.avatar_url, 16
     elif app_url.startswith("https://"):
@@ -289,7 +290,7 @@ def compose(kind: str, ctx: EmailContext, parts: tuple[str, ...] = ()) -> Compos
 
     g = ctx.guide
     greeting = f"Hi {ctx.first_name}," if ctx.first_name else "Hi,"
-    sign = f"{g.name}\n{g.title + ', ' if g.title else ''}Aurora"
+    sign = f"{g.name}\n{g.title + ', ' if g.title else ''}{team_name()}"
     text = "\n\n".join([greeting, *_text(blocks), sign])
     text += f"\n\n--\nYou're getting this because you signed up for Aurora. Stop setup emails: {ctx.unsubscribe_url}\n"
     return Composed(subject=subject, text=text, html=_html(greeting, blocks, g, _app_url(ctx), ctx.unsubscribe_url))

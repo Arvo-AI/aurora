@@ -143,8 +143,10 @@ def test_no_emails_when_the_unsubscribe_link_would_point_at_localhost(monkeypatc
         monkeypatch.setenv(v, "x")
     monkeypatch.delenv("NGROK_URL", raising=False)
     from services.onboarding import sender
-    monkeypatch.setenv("NEXT_PUBLIC_BACKEND_URL", "http://localhost:5080")
-    assert not sender.emails_enabled()
+    for unreachable in ("http://localhost:5080", "https://localhost:5080", "https://127.0.0.1",
+                        "https://10.0.0.5", "https://aurora-server:5080", "https://api.internal"):
+        monkeypatch.setenv("NEXT_PUBLIC_BACKEND_URL", unreachable)
+        assert not sender.emails_enabled(), unreachable
     monkeypatch.setenv("NEXT_PUBLIC_BACKEND_URL", "https://api.example.com")
     assert sender.emails_enabled()
 
@@ -221,3 +223,19 @@ def test_what_was_connected_before_the_welcome_is_not_news(monkeypatch):
 def test_checkin_still_goes_out_when_a_finished_stack_came_apart():
     s = state(sent={"welcome": at(minutes=4)}, parts_done=["code"], parts_ever=["alerts", "cloud", "code", "chat"])
     assert due_email(s, at(hours=23)) == Due("checkin")
+
+
+def test_no_nothing_connected_nudge_when_a_tool_is_saved_but_its_check_failed():
+    # First connect minutes ago; the live check failed and it was never seen working.
+    sent = {"welcome": at(minutes=4), "checkin": at(days=1)}
+    assert due_email(state(sent=dict(sent), has_stored=True), at(days=3, hours=1)) is None
+    sent["nudge_day3"] = at(days=3, hours=1)
+    assert due_email(state(sent=sent, has_stored=True), at(days=7, hours=1)) is None
+
+
+def test_a_self_hosted_team_name_replaces_aurora_in_the_guides_words(monkeypatch):
+    monkeypatch.setenv("ONBOARDING_TEAM_NAME", "Platform")
+    g = guides.Guide(key="a", name="Ada Lane", email="ada@example.com", title="Staff engineer")
+    msg = compose("welcome", _ctx(guide=g))
+    assert "on the Platform team" in msg.text
+    assert "Staff engineer, Platform" in msg.text

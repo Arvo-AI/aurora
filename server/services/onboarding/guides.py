@@ -85,6 +85,12 @@ def load_guides(raw: str | None = None) -> list[Guide]:
     return guides
 
 
+def team_name() -> str:
+    """Whose team the guides are on, as the emails and the app say it. A
+    self-hosted install that turns guides on names its own team here."""
+    return (os.getenv("ONBOARDING_TEAM_NAME") or "Aurora").strip()[:60] or "Aurora"
+
+
 def by_key(key: str | None) -> Guide | None:
     return next((g for g in load_guides() if g.key == key), None)
 

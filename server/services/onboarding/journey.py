@@ -103,7 +103,7 @@ def journey_for_app(user_id: str) -> dict:
         )
         row = cur.fetchone()
         if not row:
-            return {"guide": None, "via": None, "first_name": None}
+            return {"guide": None, "via": None, "first_name": None, "team": guide_mod.team_name()}
         name, org_id, gh_id, slack_team, via, guide_key = row
         via = via or _via_from_user(gh_id, slack_team)
         if guide_mod.load_guides() and not guide_mod.by_key(guide_key):
@@ -116,7 +116,8 @@ def journey_for_app(user_id: str) -> dict:
             )
             conn.commit()
     guide = guide_mod.by_key(guide_key)
-    return {"guide": guide.public() if guide else None, "via": via, "first_name": _first_name(name)}
+    return {"guide": guide.public() if guide else None, "via": via, "first_name": _first_name(name),
+            "team": guide_mod.team_name()}
 
 
 def unsubscribe(user_id: str) -> None:
@@ -203,6 +204,18 @@ def _load_locked(cur, user_id: str) -> _Row | None:
                 list(pending or []), pending_since, email, name, bool(verified))
 
 
+def _has_stored(cur, org_id: str) -> bool:
+    """Any connector credentials or links saved for the org, checked or not."""
+    cur.execute(
+        """SELECT EXISTS (SELECT 1 FROM user_tokens
+                           WHERE org_id = %s AND is_active AND secret_ref IS NOT NULL AND provider = ANY(%s))
+               OR EXISTS (SELECT 1 FROM user_connections WHERE org_id = %s AND status = 'active' AND provider = ANY(%s))
+               OR EXISTS (SELECT 1 FROM user_github_installations WHERE org_id = %s AND disconnected_at IS NULL)""",
+        (org_id, list(ALL_PROVIDERS), org_id, list(ALL_PROVIDERS), org_id),
+    )
+    return bool(cur.fetchone()[0])
+
+
 def _sent(cur, user_id: str) -> dict[str, datetime]:
     cur.execute("SELECT kind, sent_at FROM onboarding_emails WHERE user_id = %s", (user_id,))
     return dict(cur.fetchall())
@@ -286,6 +299,7 @@ def evaluate(user_id: str) -> str | None:
             parts_ever=parts_connected(ever),
             pending_parts=r.pending,
             pending_since=r.pending_since,
+            has_stored=_has_stored(cur, r.org_id),
             unsubscribed=r.unsubscribed,
         )
         kind = _send_due(cur, user_id, r, providers, state)

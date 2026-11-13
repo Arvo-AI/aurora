@@ -19,16 +19,18 @@ export interface SetupJourney {
   // How this account signed up: "github", "slack", "password", ...
   via: string | null
   first_name: string | null
+  // Whose team the guide is on ("Aurora" unless a self-hosted install says otherwise).
+  team: string
 }
 
-const EMPTY: SetupJourney = { guide: null, via: null, first_name: null }
+const EMPTY: SetupJourney = { guide: null, via: null, first_name: null, team: "Aurora" }
 
 async function load(): Promise<SetupJourney> {
   try {
     const r = await fetch("/api/onboarding/journey", { cache: "no-store" })
     if (!r.ok) return EMPTY
     const d = await r.json()
-    return { guide: d?.guide ?? null, via: d?.via ?? null, first_name: d?.first_name ?? null }
+    return { guide: d?.guide ?? null, via: d?.via ?? null, first_name: d?.first_name ?? null, team: d?.team || "Aurora" }
   } catch {
     return EMPTY
   }

@@ -45,6 +45,9 @@ class JourneyState:
     # Connected after enrollment and not announced yet, and since when.
     pending_parts: list[str] = field(default_factory=list)
     pending_since: datetime | None = None
+    # Credentials are stored for some tool, whatever the live check said. A
+    # check can fail for a tool connected minutes ago and never seen working.
+    has_stored: bool = False
     unsubscribed: bool = False
 
 
@@ -68,7 +71,7 @@ def _followup_due(s: JourneyState, age: timedelta) -> Due | None:
         return Due("checkin")
     # Nudges assume nothing was ever connected; a check that fails for a
     # moment mustn't make someone who did connect look like they didn't.
-    if set(s.parts_ever) | set(s.parts_done):
+    if s.has_stored or set(s.parts_ever) | set(s.parts_done):
         return None
     if "nudge_day3" not in s.sent and NUDGE3_AT <= age < NUDGE3_UNTIL:
         return Due("nudge_day3")

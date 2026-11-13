@@ -220,6 +220,7 @@ x-common-env: &common-env
   # Guided onboarding: each new account gets a guide from the team and a few
   # setup emails from them. Off unless ONBOARDING_EMAILS_ENABLED=true.
   ONBOARDING_GUIDES: ${ONBOARDING_GUIDES:-}
+  ONBOARDING_TEAM_NAME: ${ONBOARDING_TEAM_NAME:-Aurora}
   ONBOARDING_EMAILS_ENABLED: ${ONBOARDING_EMAILS_ENABLED:-false}
   ONBOARDING_SEND_AS_GUIDE: ${ONBOARDING_SEND_AS_GUIDE:-false}
   ONBOARDING_BCC_GUIDE: ${ONBOARDING_BCC_GUIDE:-false}

@@ -3,10 +3,10 @@
 import GuideAvatar from "@/components/onboarding/GuideAvatar"
 import type { SetupGuide } from "@/hooks/use-setup-guide"
 
-export default function GuideStrip({ guide, done }: Readonly<{ guide: SetupGuide; done: boolean }>) {
+export default function GuideStrip({ guide, team, done }: Readonly<{ guide: SetupGuide; team: string; done: boolean }>) {
   const line = done
-    ? `${guide.first_name} is still your contact on the Aurora team. If anything in your first investigations looks off, tell ${guide.first_name}.`
-    : `${guide.first_name} from the Aurora team is here to help you set up. Book 15 minutes and do it together, or send a question.`
+    ? `${guide.first_name} is still your contact on the ${team} team. If anything in your first investigations looks off, tell ${guide.first_name}.`
+    : `${guide.first_name} from the ${team} team is here to help you set up. Book 15 minutes and do it together, or send a question.`
   return (
     <div className="flex gap-4 rounded-2xl border border-white/[0.08] bg-white/[0.03] px-5 py-5 backdrop-blur-md">
       <GuideAvatar guide={guide} size={44} />

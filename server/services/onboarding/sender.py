@@ -17,6 +17,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import ipaddress
 import logging
 import os
 import smtplib
@@ -26,6 +27,7 @@ import time
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import formataddr, make_msgid
+from urllib.parse import urlsplit
 
 import requests
 
@@ -49,10 +51,25 @@ def emails_enabled() -> bool:
         os.getenv("ONBOARDING_EMAILS_ENABLED", "").lower() == "true"
         and bool(_unsubscribe_secret())
         and transport() is not None
-        # Every email carries an unsubscribe link; one pointing at localhost
-        # can't be opened by the recipient, so don't send at all.
-        and external_backend_url().startswith("https://")
+        # Every email carries an unsubscribe link; one the recipient can't
+        # open (localhost, a private address) means don't send at all.
+        and is_public_https(external_backend_url())
     )
+
+
+def is_public_https(url: str) -> bool:
+    """An https URL whose host someone on the internet could reach."""
+    parts = urlsplit(url)
+    host = (parts.hostname or "").lower()
+    if parts.scheme != "https" or not host:
+        return False
+    if host == "localhost" or host.endswith((".localhost", ".local", ".internal")):
+        return False
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return "." in host  # a bare name like "server" only resolves inside a network
+    return ip.is_global
 
 
 # ── Unsubscribe links ──

@@ -215,7 +215,7 @@ export default function SetupHome({ via: viaProp }: Readonly<{ via?: string }>) 
 
         {guide && (
           <motion.div {...reveal(3)} className="mt-10">
-            <GuideStrip guide={guide} done={allDone} />
+            <GuideStrip guide={guide} team={journey?.team ?? "Aurora"} done={allDone} />
           </motion.div>
         )}
 

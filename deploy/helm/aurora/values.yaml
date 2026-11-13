@@ -496,6 +496,7 @@ config:
   SSO_ENFORCE_DOMAIN_VERIFICATION: "false"   # SAML SSO: require DNS proof of email-domain ownership (set true when multi-tenant)
   # Guided onboarding: a guide per new account + setup emails from them (see .env.example)
   ONBOARDING_GUIDES: ""                      # JSON list of {key,name,email,title,avatar_url,booking_url}
+  ONBOARDING_TEAM_NAME: "Aurora"             # The guides' team, as emails and the app name it
   ONBOARDING_EMAILS_ENABLED: "false"         # needs SMTP_* and an unsubscribe secret
   ONBOARDING_SEND_AS_GUIDE: "false"          # From: the guide's own address (SMTP account must be allowed)
   ONBOARDING_BCC_GUIDE: "false"
@@ -655,11 +656,6 @@ secrets:
     SMTP_PASSWORD: ""
     SMTP_FROM_EMAIL: ""
     SMTP_FROM_NAME: "Aurora"
-    ONBOARDING_UNSUBSCRIBE_SECRET: ""   # Optional: signs setup-email unsubscribe links (defaults to FLASK_SECRET_KEY)
-    ONBOARDING_TEAM_WEBHOOK_URL: ""     # Optional: Slack incoming webhook for signup/connect/email pings
-    ONBOARDING_GRAPH_TENANT_ID: ""      # Optional: send setup emails via Microsoft 365 (Entra app, Mail.Send)
-    ONBOARDING_GRAPH_CLIENT_ID: ""
-    ONBOARDING_GRAPH_CLIENT_SECRET: ""
     
     # --- Optional: Rate Limiting Bypass ---
     RATE_LIMIT_BYPASS_TOKEN: ""  # Custom token to bypass rate limits
@@ -672,6 +668,16 @@ secrets:
 
   # --- LLM API Keys (secret-llm.yaml) ---
   # Mounted by: chatbot, celery-worker, celery-beat
+  onboarding:
+    # Setup-email secrets. Mounted only into the API server and the Celery
+    # worker, the two services that send or sign setup emails.
+    # existingSecret: ""
+    ONBOARDING_UNSUBSCRIBE_SECRET: ""   # Signs unsubscribe links (defaults to FLASK_SECRET_KEY)
+    ONBOARDING_TEAM_WEBHOOK_URL: ""     # Slack incoming webhook; posts signup emails and progress, so keep it internal
+    ONBOARDING_GRAPH_TENANT_ID: ""      # Send setup emails via Microsoft 365 (Entra app with Mail.Send)
+    ONBOARDING_GRAPH_CLIENT_ID: ""
+    ONBOARDING_GRAPH_CLIENT_SECRET: ""
+
   llm:
     # Use a pre-existing Kubernetes Secret instead of chart-managed secrets.
     # When set, the chart will not create secret-llm and all pods will reference
