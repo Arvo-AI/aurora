@@ -5,7 +5,7 @@ import { useUser, useAuth } from '@/hooks/useAuthHooks';
 import { canWrite } from '@/lib/roles';
 import { getEnv } from '@/lib/env';
 import { useRouter } from "next/navigation";
-import { Loader2 } from "lucide-react";
+import { Loader2, Lock } from "lucide-react";
 import dynamic from "next/dynamic";
 // Core chat components
 import { MessageList } from "@/components/chat/message-list";
@@ -20,7 +20,8 @@ const DynamicPrompts = dynamic(() => import("@/components/DynamicPrompts"), {
 
 // Hooks and utilities
 import { useWebSocket } from "@/hooks/useWebSocket";
-import { useChatHistory } from "@/hooks/useChatHistory";
+import { ChatAccessDeniedError, useChatHistory } from "@/hooks/useChatHistory";
+import { Button } from "@/components/ui/button";
 import { DISPATCH_SUBAGENT_TOOL_NAME, Message } from "../types";
 import { useStreamingMessages } from '@/hooks/useStreamingMessages';
 import { useMessageHandler } from '@/hooks/useMessageHandler';
@@ -66,6 +67,8 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [isLoadingSessionMessages, setIsLoadingSessionMessages] = useState(false);
   const [hasCreatedSession, setHasCreatedSession] = useState(false);
+  // Set when the linked chat exists but this person may not read it (403).
+  const [accessDeniedMessage, setAccessDeniedMessage] = useState<string | null>(null);
   const justCreatedSessionRef = useRef<string | null>(null);
   const lastLoadedSessionRef = useRef<string | null>(null);
   const initialMessageSentRef = useRef<boolean>(false);
@@ -403,6 +406,7 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
 
     // New chat (no sessionId): clear previous session state
     if (!initialSessionId) {
+      setAccessDeniedMessage(null);
       if (currentSessionId) {
         setCurrentSessionId(null);
         setHasCreatedSession(false);
@@ -429,6 +433,7 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
         // Load session if not just created by us
         if (justCreatedSessionRef.current !== initialSessionId) {
           setIsLoadingSessionMessages(true);
+          setAccessDeniedMessage(null);
           onClearMessages(); // Clear existing messages before loading new session
           try {
             const loaded = await loadSessionData(initialSessionId);
@@ -437,7 +442,12 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
               setHasCreatedSession(false);
             }
           } catch (error) {
-            console.error('Error loading session:', error);
+            if (error instanceof ChatAccessDeniedError) {
+              setAccessDeniedMessage(error.message);
+              setHasCreatedSession(false);
+            } else {
+              console.error('Error loading session:', error);
+            }
           } finally {
             setIsLoadingSessionMessages(false);
           }
@@ -501,6 +511,22 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
           {!isLoaded && (
             <span className="text-sm text-muted-foreground">Loading user...</span>
           )}
+        </div>
+      </div>
+    );
+  }
+
+  // The linked chat exists but isn't this person's to read: say so, never a blank chat.
+  if (accessDeniedMessage) {
+    return (
+      <div className="flex h-full w-full items-center justify-center px-4 py-16">
+        <div className="flex max-w-md flex-col items-center gap-3 text-center">
+          <Lock className="h-8 w-8 text-muted-foreground" aria-hidden="true" />
+          <h2 className="text-base font-medium">You can&apos;t open this chat</h2>
+          <p className="text-sm text-muted-foreground">{accessDeniedMessage}</p>
+          <Button variant="outline" size="sm" className="mt-2" onClick={handleNewChat}>
+            Start a new chat
+          </Button>
         </div>
       </div>
     );
