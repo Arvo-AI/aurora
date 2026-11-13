@@ -1227,6 +1227,7 @@ async def handle_connection(websocket) -> None:
                             )
                             row = cur.fetchone()
                     if row and not row[0] and row[1] != user_id:
+                        from utils.auth.viewer_run import CHAT_ACCESS_DENIED
                         from utils.log_sanitizer import sanitize
                         logger.warning(
                             "Denied: user=%s tried to chat in another user's session=%s",
@@ -1234,7 +1235,7 @@ async def handle_connection(websocket) -> None:
                         )
                         await websocket.send(json.dumps({
                             "type": "error",
-                            "data": {"text": "Chat session not found."}
+                            "data": {"text": CHAT_ACCESS_DENIED}
                         }))
                         continue
                     if row and row[0]:

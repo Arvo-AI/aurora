@@ -1,6 +1,6 @@
 """Opening a chat by id: the owner, someone allowed to audit chats, or the
-incident's / action's readers. Anyone else gets 404, the same as an unknown
-id, so ids can't be probed.
+incident's / action's readers. Anyone else gets 403 with a message the chat
+page shows; an unknown id is 404.
 """
 
 from contextlib import contextmanager
@@ -75,7 +75,7 @@ def _call(access, monkeypatch, name, row, caller, path="/x"):
 def _session_row(owner, *, incident_linked=False, action_run=False):
     now = datetime(2026, 1, 1)
     return ("sess-1", "Title", [{"sender": "user", "text": "hello"}], now, now, {}, "active",
-            owner, "inc-1" if incident_linked else None, None, incident_linked, action_run)
+            owner, "inc-1" if incident_linked else None, None, owner, incident_linked, action_run)
 
 
 ROUTES = {
@@ -96,10 +96,19 @@ def test_the_owner_can_open_their_chat(access, monkeypatch, name):
 
 
 @pytest.mark.parametrize("name", ROUTES)
-def test_another_member_gets_404_like_an_unknown_id(access, monkeypatch, name):
+def test_another_member_gets_403_with_the_access_message(access, monkeypatch, name):
+    from utils.auth.viewer_run import CHAT_ACCESS_DENIED
+
     body, status, _ = _call(access, monkeypatch, name, ROUTES[name](OWNER), OTHER)
-    unknown_body, unknown_status, _ = _call(access, monkeypatch, name, None, OTHER)
-    assert status == unknown_status == 404 and body == unknown_body
+    assert status == 403
+    assert body == {"error": CHAT_ACCESS_DENIED, "code": "chat_access_denied"}
+    assert "messages" not in body and "status" not in body
+
+
+@pytest.mark.parametrize("name", ROUTES)
+def test_an_unknown_id_is_404(access, monkeypatch, name):
+    body, status, _ = _call(access, monkeypatch, name, None, OTHER)
+    assert status == 404 and body == {"error": "Chat not found"}
 
 
 @pytest.mark.parametrize("name", ROUTES)
@@ -116,7 +125,7 @@ def test_an_incident_chat_follows_incidents_read(access, monkeypatch, name):
     assert status == 200 and ("incidents", "read") in access["checked"]
     access["grants"].discard(("incidents", "read"))
     _, status, _ = _call(access, monkeypatch, name, row, OTHER)
-    assert status == 404
+    assert status == 403
 
 
 @pytest.mark.parametrize("name", ROUTES)
@@ -126,7 +135,7 @@ def test_an_action_run_chat_follows_actions_read(access, monkeypatch, name):
     assert status == 200
     access["grants"].discard(("actions", "read"))
     _, status, _ = _call(access, monkeypatch, name, row, OTHER)
-    assert status == 404
+    assert status == 403
 
 
 def test_incident_link_covers_the_incident_rca_session():
@@ -145,7 +154,7 @@ def test_a_failed_permission_lookup_fails_closed(access, monkeypatch):
     access["auditor"] = True
     row = _session_row(OWNER, incident_linked=True)
     _, status, _ = _call(access, monkeypatch, "get_chat_session", row, OTHER)
-    assert status == 404
+    assert status == 403
 
 
 @pytest.mark.parametrize("auditor, filters_by_user", [(False, True), (True, False)])
@@ -165,3 +174,4 @@ def test_the_websocket_refuses_to_continue_someone_elses_chat():
     source = (Path(__file__).resolve().parents[2] / "main_chatbot.py").read_text()
     assert "SELECT incident_id, user_id FROM chat_sessions WHERE id = %s AND org_id = %s" in source
     assert "if row and not row[0] and row[1] != user_id:" in source
+    assert '"data": {"text": CHAT_ACCESS_DENIED}' in source

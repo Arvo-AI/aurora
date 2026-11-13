@@ -108,6 +108,9 @@ def may_audit_chats(user_id: str, org_id: str) -> bool:
     return False
 
 
+# Shown when a chat exists but the caller may not read it (or continue it).
+CHAT_ACCESS_DENIED = "You don't have access to this chat. Ask an admin if you need to see it."
+
 # Over chat_sessions ``cs``: whether a chat belongs to an incident (its own link,
 # or the RCA session the incident points at) and whether it is an action run.
 # Selected with the chat so ``may_read_chat`` needs no second query.
@@ -125,8 +128,8 @@ def may_read_chat(user_id: str, org_id: str, owner_id, incident_linked: bool, ac
     people's chats (``may_audit_chats``), except that an incident's chats
     follow the incident (``incidents:read``: the incident page already shows
     them) and an action run's chat follows the action (``actions:read``: the
-    actions page lists its runs). Callers answer "not found" on False, so an
-    id can't be probed. Fails closed.
+    actions page lists its runs). Callers answer 403 on False (a missing
+    chat is 404). Fails closed: a failed lookup is a refusal.
     """
     if not user_id or not org_id:
         return False
