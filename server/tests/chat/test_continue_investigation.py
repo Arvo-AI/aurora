@@ -88,7 +88,8 @@ def db(monkeypatch):
 
 
 def _row(aurora_status="complete", status="analyzed", reason="time_limit", used=0, session=SESSION):
-    return (OWNER, session, aurora_status, status, reason, used, "Root cause not determined. Not Checked: db.")
+    return (OWNER, session, aurora_status, status, reason, used, "Root cause not determined. Not Checked: db.",
+            "High 5xx rate on checkout")
 
 
 def _sql(state):
@@ -115,6 +116,7 @@ def test_an_unfinished_rca_is_continued_in_its_own_session(db):
     assert job["trigger_metadata"] == {"source": CONTINUE_SOURCE, "requested_by": CLICKER}
     assert "reached its time limit" in job["initial_message"]
     assert "Root cause not determined. Not Checked: db." in job["initial_message"]
+    assert "High 5xx rate on checkout" in job["initial_message"]
     sql = _sql(db)
     assert any("FOR UPDATE" in s for s in sql)
     assert any("aurora_status = 'running'" in s and "rca_continuations + 1" in s for s in sql)
@@ -264,8 +266,9 @@ def dead_rca(monkeypatch):
         lambda incident_id, user_id, reason: calls.findings.append(incident_id) or 0,
     )
 
-    def _summarize(incident_id, user_id, session_id, reason):
+    def _summarize(incident_id, user_id, session_id, reason, run_task_id=None):
         calls.summarized.append((incident_id, session_id, reason))
+        calls.claimed_by = run_task_id
         return task_mod.REPORTED if calls.summarize_ok else task_mod.UNSUMMARIZED
 
     monkeypatch.setattr(task_mod, "_summarize_unfinished_investigation", _summarize)
@@ -278,8 +281,10 @@ def dead_rca(monkeypatch):
 
 def test_a_dead_workers_rca_with_evidence_becomes_a_report(dead_rca):
     task_mod, calls = dead_rca
-    task_mod._report_or_fail_dead_rca(OWNER, INCIDENT, SESSION, "worker died")
+    task_mod._report_or_fail_dead_rca(OWNER, INCIDENT, SESSION, "worker died", "dead-task")
     assert calls.summarized == [(INCIDENT, SESSION, "interrupted")]
+    # Bound to the dead run's claim: a continuation that owns the RCA since is left alone.
+    assert calls.claimed_by == "dead-task"
     assert calls.failed == []
     # Sub-agent rows stop spinning before the incident leaves 'error'.
     assert calls.findings == [INCIDENT]
@@ -322,7 +327,7 @@ def _steps_cursor(monkeypatch, rows):
 
 
 def test_evidence_is_rebuilt_from_execution_steps(monkeypatch):
-    cursor = _steps_cursor(monkeypatch, [
+    _steps_cursor(monkeypatch, [
         ("cloud_exec", {"command": "kubectl get pods"}, "pod-a CrashLoopBackOff"),
         ("dispatch_subagent", {}, "rollup"),  # coordination, not evidence
         ("query_datadog", '{"query": "errors"}', "x" * 5000),
@@ -389,3 +394,20 @@ def test_a_slack_click_with_a_bad_incident_id_does_nothing(monkeypatch):
         payload={}, action={"value": "'; drop table incidents"}, slack_user_id="U1", team_id="T1", channel_id="C1",
     ) == {"text": ""}
     assert called == []
+
+
+def test_a_longer_recorded_output_survives_the_merge():
+    """A session excerpt is capped shorter than a step's output; the longer one is cited."""
+    from chat.background.citation_extractor import Citation, CitationExtractor
+
+    step = Citation(index=1, tool_name="t", command="step cmd", output="x" * 5000, timestamp=None, tool_call_id="a")
+    session = Citation(index=1, tool_name="t", command="full cmd", output="x" * 1000, timestamp=None, tool_call_id="a")
+    [merged] = CitationExtractor.merge_citations([session], [step])
+    assert merged.command == "full cmd" and len(merged.output) == 5000
+
+
+def test_the_prompt_names_the_alert_even_without_a_report():
+    prompt = continuation_prompt("time_limit", None, "High 5xx rate on checkout")
+    assert 'alert "High 5xx rate on checkout"' in prompt
+    assert "(no report was written)" in prompt
+    assert 'alert "this incident"' in continuation_prompt("time_limit")

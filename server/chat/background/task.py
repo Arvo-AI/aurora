@@ -2076,7 +2076,7 @@ def _summarize_unfinished_investigation(
     UNSUMMARIZED so the caller fails the incident as before. Must stay quick:
     on the time limit it runs inside the last minute.
     """
-    from chat.background.continuation import RCA_STEPS_WHERE
+    from chat.background.continuation import _NOT_EVIDENCE, RCA_STEPS_WHERE, USABLE_EVIDENCE_WHERE
 
     try:
         with db_pool.get_admin_connection() as conn:
@@ -2092,9 +2092,11 @@ def _summarize_unfinished_investigation(
                     conn.rollback()
                     logger.info("[BackgroundChat] RCA %s already finished or was merged; no partial report", incident_id)
                     return REPORTED
+                # Both fragments are fixed SQL with placeholders; nothing is interpolated from input.
                 cursor.execute(
-                    f"SELECT EXISTS (SELECT 1 FROM execution_steps es WHERE {RCA_STEPS_WHERE})",
-                    (incident_id,),
+                    "SELECT EXISTS (SELECT 1 FROM execution_steps es WHERE "
+                    + RCA_STEPS_WHERE + " AND " + USABLE_EVIDENCE_WHERE + ")",
+                    (incident_id, sorted(_NOT_EVIDENCE)),
                 )
                 has_evidence = bool((cursor.fetchone() or [False])[0])
                 # The run is over either way: a stale task id would read as a dead
@@ -2126,19 +2128,25 @@ def _summarize_unfinished_investigation(
         return UNSUMMARIZED
 
 
-def _report_or_fail_dead_rca(user_id: str, incident_id: str, session_id, error_message: str) -> None:
+def _report_or_fail_dead_rca(
+    user_id: str, incident_id: str, session_id, error_message: str, run_task_id: Optional[str] = None,
+) -> None:
     """After the sweep failed an RCA whose worker is gone: report or announce it.
 
     An RCA that gathered evidence becomes a partial report, like one stopped by
     its time limit. *session_id* is None when the dead run was not the RCA (a
     follow-up chat on an incident that already has its report); that, and a run
-    with nothing to report, is announced as failed.
+    with nothing to report, is announced as failed. *run_task_id* is the dead
+    run's own claim: a newer run that owns the RCA since (a continuation) is
+    left alone.
     """
     if session_id:
         # The report path leaves the incident 'summarizing', so the sweep's own
         # cascade (which keys on 'error') would no longer stop these spinning.
         _mark_inflight_findings_failed(incident_id, user_id, "worker stopped")
-        if _summarize_unfinished_investigation(incident_id, user_id, str(session_id), "interrupted") == REPORTED:
+        if _summarize_unfinished_investigation(
+            incident_id, user_id, str(session_id), "interrupted", run_task_id=run_task_id,
+        ) == REPORTED:
             return
     try:
         from utils.notifications.dispatcher import notify_investigation_failed
@@ -3121,7 +3129,7 @@ def _sweep_stale_background_chats() -> Dict[str, Any]:
                     # queued, so it gets the old 20 minutes.
                     cursor.execute("""
                         SELECT cs.id, i.id as incident_id, i.rca_celery_task_id,
-                               (i.rca_run_task_id IS NOT NULL) AS rca_run
+                               i.rca_run_task_id
                         FROM chat_sessions cs
                         LEFT JOIN incidents i ON i.aurora_chat_session_id = cs.id::uuid
                         WHERE cs.status = 'in_progress' AND cs.user_id = %s
@@ -3130,7 +3138,7 @@ def _sweep_stale_background_chats() -> Dict[str, Any]:
                               OR (cs.heartbeat_at IS NULL AND cs.updated_at < %s)
                           )
                     """, (uid, dead_worker_threshold, stale_threshold))
-                    for session_id, incident_id, stale_task_id, rca_run in cursor.fetchall():
+                    for session_id, incident_id, stale_task_id, rca_run_task_id in cursor.fetchall():
                         # The claim repeats the staleness test: Postgres re-evaluates an
                         # UPDATE's WHERE after locking the row, so a beat that landed since
                         # the SELECT keeps the session alive.
@@ -3154,21 +3162,21 @@ def _sweep_stale_background_chats() -> Dict[str, Any]:
                         _notify_orphaned_chat_reply(uid, str(session_id), claimed[0][1])
                         if incident_id:
                             _report_or_fail_dead_rca(
-                                uid, str(incident_id), session_id if rca_run else None,
-                                "Investigation stalled and was cleaned up",
+                                uid, str(incident_id), session_id if rca_run_task_id else None,
+                                "Investigation stalled and was cleaned up", rca_run_task_id,
                             )
 
                     # --- 2. Dead Celery tasks (task no longer alive in broker) ---
                     cursor.execute("""
                         SELECT i.id, i.rca_celery_task_id, i.aurora_chat_session_id,
                                GREATEST(cs.heartbeat_at, COALESCE(cs.updated_at, i.updated_at)) as last_activity,
-                               (i.rca_run_task_id IS NOT NULL) AS rca_run
+                               i.rca_run_task_id
                         FROM incidents i
                         LEFT JOIN chat_sessions cs ON cs.id::text = i.aurora_chat_session_id::text
                         WHERE i.aurora_status = 'running' AND i.rca_celery_task_id IS NOT NULL
                           AND i.updated_at < %s AND i.user_id = %s
                     """, (dead_task_threshold, uid))
-                    for inc_id, task_id, session_id, last_activity, rca_run in cursor.fetchall():
+                    for inc_id, task_id, session_id, last_activity, rca_run_task_id in cursor.fetchall():
                         if not _is_task_dead(task_id, last_activity, dead_task_threshold,
                                              cursor=cursor, incident_id=inc_id):
                             continue
@@ -3198,14 +3206,15 @@ def _sweep_stale_background_chats() -> Dict[str, Any]:
                             _notify_orphaned_chat_reply(uid, str(session_id), claimed_ui)
                         dead_task_count += 1
                         _report_or_fail_dead_rca(
-                            uid, str(inc_id), session_id if rca_run else None,
-                            "Investigation worker died unexpectedly",
+                            uid, str(inc_id), session_id if rca_run_task_id else None,
+                            "Investigation worker died unexpectedly", rca_run_task_id,
                         )
 
                     # --- 3. Stuck investigating (RCA done or orphaned, no active session) ---
                     cursor.execute("""
                         SELECT i.id, i.aurora_status,
-                               CASE WHEN i.rca_run_task_id IS NOT NULL THEN i.aurora_chat_session_id END
+                               CASE WHEN i.rca_run_task_id IS NOT NULL THEN i.aurora_chat_session_id END,
+                               i.rca_run_task_id
                         FROM incidents i
                         WHERE i.status = 'investigating' AND i.updated_at < %s AND i.user_id = %s
                           AND NOT EXISTS (
@@ -3214,7 +3223,7 @@ def _sweep_stale_background_chats() -> Dict[str, Any]:
                                 AND cs.status = 'in_progress'
                           )
                     """, (stale_threshold, uid))
-                    for inc_id, cur_aurora, rca_session_id in cursor.fetchall():
+                    for inc_id, cur_aurora, rca_session_id, rca_run_task_id in cursor.fetchall():
                         if cur_aurora in ('complete', 'error'):
                             cursor.execute(
                                 "UPDATE incidents SET status = 'analyzed', analyzed_at = COALESCE(analyzed_at, NOW()), updated_at = NOW() WHERE id = %s AND status = 'investigating' RETURNING id",
@@ -3233,7 +3242,7 @@ def _sweep_stale_background_chats() -> Dict[str, Any]:
                         if cur_aurora not in ('complete', 'error'):
                             _report_or_fail_dead_rca(
                                 uid, str(inc_id), rca_session_id,
-                                "Investigation became orphaned and was cleaned up",
+                                "Investigation became orphaned and was cleaned up", rca_run_task_id,
                             )
 
                     # --- 4. Stale rca_findings: cascade from any incident already

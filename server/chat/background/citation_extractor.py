@@ -267,11 +267,20 @@ class CitationExtractor:
     def merge_citations(session: List[Citation], steps: List[Citation]) -> List[Citation]:
         """The recorded steps plus any session citation they lack, renumbered.
 
-        A session citation replaces the step with the same tool call: its
-        output was captured in full, a step's may be truncated.
+        A session citation with the same tool call replaces the step (its
+        command is recorded before arguments are truncated), keeping whichever
+        output is longer: a session excerpt is capped shorter than a step's.
         """
         by_call = {c.tool_call_id: c for c in session if c.tool_call_id}
-        merged = [by_call.pop(c.tool_call_id, c) if c.tool_call_id else c for c in steps]
+        merged: List[Citation] = []
+        for step in steps:
+            match = by_call.pop(step.tool_call_id, None) if step.tool_call_id else None
+            if match is None:
+                merged.append(step)
+                continue
+            if len(step.output or "") > len(match.output or ""):
+                match.output = step.output
+            merged.append(match)
         merged += [c for c in session if not c.tool_call_id or c.tool_call_id in by_call]
         for index, citation in enumerate(merged, start=1):
             citation.index = index

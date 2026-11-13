@@ -34,8 +34,9 @@ _STOPPED_BECAUSE = {
 }
 
 CONTINUE_PROMPT = (
-    "Continue this investigation. It stopped before it finished ({why}); the evidence "
-    "gathered so far is above, and this is the partial report written from it:\n\n"
+    "Continue this investigation of the alert \"{alert}\". It stopped before it finished "
+    "({why}); the evidence gathered so far is above, and this is the partial report "
+    "written from it:\n\n"
     "{report}\n\n"
     "- Do not repeat checks that already returned results.\n"
     "- Start with the areas listed as Not Checked and the open hypotheses.\n"
@@ -76,12 +77,18 @@ def is_continuation(trigger_metadata: Optional[Dict[str, Any]]) -> bool:
     return (trigger_metadata or {}).get("source") == CONTINUE_SOURCE
 
 
-def continuation_prompt(reason: Optional[str], report: Optional[str] = None) -> str:
+def continuation_prompt(reason: Optional[str], report: Optional[str] = None, alert: Optional[str] = None) -> str:
+    """The instruction that resumes the RCA.
+
+    It names the alert, so the run knows what it is investigating even when no
+    report was written: the original question is not replayed.
+    """
     report = (report or "").strip() or "(no report was written)"
+    alert = " ".join((alert or "").split())[:300] or "this incident"
     if len(report) > _MAX_REPORT_CHARS:
         report = report[:_MAX_REPORT_CHARS] + "\n[report truncated]"
     return CONTINUE_PROMPT.format(
-        why=_STOPPED_BECAUSE.get(reason or "", "it was interrupted"), report=report,
+        why=_STOPPED_BECAUSE.get(reason or "", "it was interrupted"), report=report, alert=alert,
     )
 
 
@@ -107,14 +114,14 @@ def continue_investigation(incident_id: str, requested_by: str, org_id: str) -> 
                 # The row lock makes two clicks start one continuation, not two.
                 cursor.execute(
                     """SELECT user_id, aurora_chat_session_id, aurora_status, status,
-                              rca_unfinished_reason, rca_continuations, aurora_summary
+                              rca_unfinished_reason, rca_continuations, aurora_summary, alert_title
                        FROM incidents WHERE id = %s FOR UPDATE""",
                     (incident_id,),
                 )
                 row = cursor.fetchone()
             session_status = None
             if row:
-                owner_id, session_id, aurora_status, status, reason, used, report = row
+                owner_id, session_id, aurora_status, status, reason, used, report, alert = row
                 refusal = _refusal(status, aurora_status, reason, session_id, used)
                 if refusal is None:
                     # A follow-up chat may be running in the session right now.
@@ -161,7 +168,7 @@ def continue_investigation(incident_id: str, requested_by: str, org_id: str) -> 
         run_background_chat.delay(
             user_id=owner_id,
             session_id=str(session_id),
-            initial_message=continuation_prompt(reason, report),
+            initial_message=continuation_prompt(reason, report, alert),
             trigger_metadata={"source": CONTINUE_SOURCE, "requested_by": requested_by},
             incident_id=incident_id,
             # The started card would announce a new investigation; the finished
@@ -182,6 +189,11 @@ def continue_investigation(incident_id: str, requested_by: str, org_id: str) -> 
 
 # Tool calls that coordinate rather than gather evidence.
 _NOT_EVIDENCE = frozenset({"dispatch_subagent", "write_findings", "load_skill", "trigger_rca"})
+# A recorded step that can back a report: a finished evidence tool call with
+# output. Use with RCA_STEPS_WHERE; takes a list of _NOT_EVIDENCE as its parameter.
+USABLE_EVIDENCE_WHERE = (
+    "es.tool_output IS NOT NULL AND btrim(es.tool_output) <> '' AND NOT (es.tool_name = ANY(%s))"
+)
 # The most recent steps replayed into a continuation; older ones are in the report.
 _MAX_REPLAYED_STEPS = 150
 _MAX_STEP_OUTPUT_CHARS = 2000

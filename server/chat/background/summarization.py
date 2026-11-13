@@ -904,11 +904,6 @@ def generate_incident_summary_from_chat(
                 used_keys.update(keys)
 
             used_citations = [c for c in all_citations if str(c.index) in used_keys]
-            if used_citations:
-                save_incident_citations(incident_id, used_citations)
-                logger.info(
-                    f"{_LOG_PREFIX} Saved {len(used_citations)} used citations for incident {incident_id}"
-                )
 
         # Generate next steps from the investigation trace (v3 recommender).
         # Falls back to summary-based extraction if the trace is empty.
@@ -948,6 +943,13 @@ def generate_incident_summary_from_chat(
         ) is not False
         if not summary_written:
             raise RuntimeError("The incident summary could not be saved")
+        # Citations replace the earlier report's only once its text is replaced,
+        # so a report kept after a failed write keeps its own citations.
+        if used_citations:
+            save_incident_citations(incident_id, used_citations)
+            logger.info(
+                f"{_LOG_PREFIX} Saved {len(used_citations)} used citations for incident {incident_id}"
+            )
 
         # Root-cause recurrence check (dedup layer 1): runs post-summary-write,
         # pre-notification — fold-then-notify is the ordering that Slack threading
@@ -1134,20 +1136,20 @@ def _plan_summary(
 
 
 def _read_unfinished_state(incident_id: str, user_id: str) -> tuple:
-    """(rca_unfinished_reason, rca_continuations) for the incident; (None, 0) if unreadable."""
-    try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                if not set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX):
-                    return None, 0
-                cursor.execute(
-                    "SELECT rca_unfinished_reason, rca_continuations FROM incidents WHERE id = %s",
-                    (incident_id,),
-                )
-                row = cursor.fetchone()
-    except Exception:
-        logger.warning(f"{_LOG_PREFIX} Could not read the unfinished state of incident {incident_id}")
-        return None, 0
+    """(rca_unfinished_reason, rca_continuations) for the incident.
+
+    A failed read raises, so the task retries: read as "finished", it would
+    turn a partial report into a conclusion.
+    """
+    with db_pool.get_admin_connection() as conn:
+        with conn.cursor() as cursor:
+            if not set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX):
+                raise RuntimeError("Could not set the org context to read the incident")
+            cursor.execute(
+                "SELECT rca_unfinished_reason, rca_continuations FROM incidents WHERE id = %s",
+                (incident_id,),
+            )
+            row = cursor.fetchone()
     if not row or len(row) != 2 or not isinstance(row[0], (str, type(None))):
         return None, 0
     return row[0], int(row[1] or 0)

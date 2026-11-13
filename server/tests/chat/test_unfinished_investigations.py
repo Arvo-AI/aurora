@@ -20,6 +20,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+import chat.background.summarization as summarization
+
 SESSION = "44444444-4444-4444-4444-444444444444"
 USER = "user-1"
 INCIDENT = "55555555-5555-5555-5555-555555555555"
@@ -32,7 +34,6 @@ INCIDENT = "55555555-5555-5555-5555-555555555555"
     ("stalled", "stopped making progress"),
 ])
 def test_the_summary_is_told_the_investigation_is_incomplete(reason, words):
-    import chat.background.summarization as summarization
 
     note = summarization._unfinished_investigation_note(reason)
     assert f"Investigation incomplete: it {words}" in note
@@ -66,7 +67,6 @@ class _Cursor:
 @pytest.fixture
 def task(monkeypatch):
     import chat.background.task as task_mod
-    import chat.background.summarization as summarization
 
     calls = SimpleNamespace(cursor=None, statuses=[], enqueued=[])
 
@@ -148,6 +148,10 @@ def test_evidence_is_the_rca_sessions_own(task):
     evidence_sql = next(sql for sql, _ in calls.cursor.executed if "FROM execution_steps" in sql)
     assert "es.session_id = rca.aurora_chat_session_id::text" in evidence_sql
     assert "OR session_id" not in evidence_sql
+    # A started call with no output, or a coordination call, is not evidence.
+    assert "es.tool_output IS NOT NULL AND btrim(es.tool_output) <> ''" in evidence_sql
+    params = next(p for sql, p in calls.cursor.executed if "FROM execution_steps" in sql)
+    assert "dispatch_subagent" in params[1]
 
 
 def test_an_rca_with_no_evidence_still_fails(task):
@@ -163,7 +167,6 @@ def test_an_rca_with_no_evidence_still_fails(task):
 def test_a_failure_to_queue_the_summary_falls_back_to_failing(task, monkeypatch):
     task_mod, calls = task
     calls.pool()
-    import chat.background.summarization as summarization
 
     def _broker_down(**kw):
         raise RuntimeError("broker unavailable")
@@ -221,7 +224,6 @@ def test_a_failed_step_read_gives_no_citations(monkeypatch):
 
 def test_an_unwritten_partial_report_is_announced(monkeypatch):
     import utils.notifications.dispatcher as dispatcher
-    import chat.background.summarization as summarization
     _notify_unwritten_partial_report = summarization._notify_unwritten_partial_report
 
     sent = []
@@ -240,9 +242,7 @@ def test_an_unwritten_partial_report_is_announced(monkeypatch):
 # --- what a summary does with the incident's unfinished state ------------------------
 
 def _plan(reason=None, finishes=False, prior=None, continuations=0):
-    from chat.background.summarization import _plan_summary
-
-    return _plan_summary(reason, finishes, prior, continuations)
+    return summarization._plan_summary(reason, finishes, prior, continuations)
 
 
 def test_a_finished_rca_writes_a_full_report():
@@ -275,7 +275,6 @@ def test_a_continuation_keeps_the_earlier_report_if_its_own_fails(reason, finish
 
 
 def test_a_finished_rcas_report_clears_its_unfinished_state_in_the_same_write(monkeypatch):
-    import chat.background.summarization as summarization
 
     cursor = MagicMock()
     cursor.rowcount = 1
@@ -296,7 +295,6 @@ def test_a_finished_rcas_report_clears_its_unfinished_state_in_the_same_write(mo
 
 
 def test_a_failed_summary_keeps_the_earlier_report(monkeypatch):
-    import chat.background.summarization as summarization
     import utils.notifications.dispatcher as dispatcher
 
     cursor = MagicMock()
@@ -366,3 +364,12 @@ def test_a_partial_report_updates_the_cards_only(dispatch):
 def test_a_finished_report_is_posted_back_and_routed(dispatch):
     sent = dispatch(None)
     assert {"slack", "email", "pagerduty", "routing"} <= set(sent)
+
+
+def test_an_unreadable_unfinished_state_raises_so_the_summary_retries(monkeypatch):
+    """Read as "finished", a failed lookup would turn a partial report into a conclusion."""
+    pool = MagicMock()
+    pool.get_admin_connection.side_effect = RuntimeError("db down")
+    monkeypatch.setattr(summarization, "db_pool", pool)
+    with pytest.raises(RuntimeError):
+        summarization._read_unfinished_state(INCIDENT, USER)
