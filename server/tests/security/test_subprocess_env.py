@@ -38,7 +38,7 @@ def test_mcp_base_env_keeps_only_allowlisted_keys(monkeypatch):
 
 
 def test_deny_same_uid_proc_access_is_noop_off_linux(monkeypatch):
-    monkeypatch.setattr(subprocess_env, "_dumpable_cleared", False)
+    monkeypatch.setattr(subprocess_env, "_dumpable_cleared", subprocess_env.threading.Event())
     monkeypatch.setattr(subprocess_env.sys, "platform", "darwin")
     assert subprocess_env.deny_same_uid_proc_access() is False
 

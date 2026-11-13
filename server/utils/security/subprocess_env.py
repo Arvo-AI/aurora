@@ -36,7 +36,7 @@ _MCP_SAFE_ENV_PREFIXES = ("NPM_CONFIG_", "npm_config_", "AWS_ENDPOINT_URL")
 
 _PR_SET_DUMPABLE = 4
 _dumpable_lock = threading.Lock()
-_dumpable_cleared = False
+_dumpable_cleared = threading.Event()
 
 
 def strip_github_app_secrets(env: MutableMapping[str, str]) -> MutableMapping[str, str]:
@@ -72,13 +72,12 @@ def deny_same_uid_proc_access() -> bool:
 
     Linux only; returns False elsewhere or if the call fails.
     """
-    global _dumpable_cleared
-    if _dumpable_cleared:
+    if _dumpable_cleared.is_set():
         return True
     if not sys.platform.startswith("linux"):
         return False
     with _dumpable_lock:
-        if _dumpable_cleared:
+        if _dumpable_cleared.is_set():
             return True
         try:
             libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6", use_errno=True)
@@ -88,6 +87,6 @@ def deny_same_uid_proc_access() -> bool:
         except Exception as exc:
             logger.warning("Could not mark process non-dumpable: %s", type(exc).__name__)
             return False
-        _dumpable_cleared = True
+        _dumpable_cleared.set()
         logger.info("Process marked non-dumpable before starting MCP servers")
         return True
