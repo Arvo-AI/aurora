@@ -217,6 +217,8 @@ services:
     command: ["sh", "-c", "gunicorn main_compute:app --bind 0.0.0.0:${FLASK_PORT:-5080} -k gthread --threads ${GUNICORN_THREADS:-32} --workers ${GUNICORN_WORKERS:-2} --timeout 300 --preload"]
     environment:
       <<: *common-env
+      # GitHub App private key (wins over the secrets backend when set): only services that sign App JWTs get it.
+      GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
       OTEL_SERVICE_NAME: aurora-server
       # The SSE stream cap in routes/incidents_sse.py is bounded by the thread
       # count; pass it in so the cap matches the command line above.
@@ -297,6 +299,8 @@ services:
         -Q high,celery
     environment:
       <<: *common-env
+      # GitHub App private key (wins over the secrets backend when set): only services that sign App JWTs get it.
+      GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
       OTEL_SERVICE_NAME: celery-worker
       INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
       CHATBOT_INTERNAL_URL: ${CHATBOT_INTERNAL_URL}
@@ -454,6 +458,8 @@ services:
       - terraform-workdir:/app/terraform_workdir
     environment:
       <<: *common-env
+      # GitHub App private key (wins over the secrets backend when set): only services that sign App JWTs get it.
+      GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
       OTEL_SERVICE_NAME: chatbot
       INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
       FRONTEND_URL: ${FRONTEND_URL}

@@ -240,6 +240,8 @@ services:
       GUNICORN_WORKERS: ${GUNICORN_WORKERS:-2}
       GUNICORN_THREADS: ${GUNICORN_THREADS:-32}
       <<: *common-env
+      # GitHub App private key (wins over the secrets backend when set): only services that sign App JWTs get it.
+      GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
       TEAMS_CLIENT_SECRET: ${TEAMS_CLIENT_SECRET}
       FLASK_PORT: ${FLASK_PORT:-5080}
       INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
@@ -346,6 +348,8 @@ services:
         -Q high,celery
     environment:
       <<: *common-env
+      # GitHub App private key (wins over the secrets backend when set): only services that sign App JWTs get it.
+      GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
       TEAMS_CLIENT_SECRET: ${TEAMS_CLIENT_SECRET}
       INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
       CHATBOT_INTERNAL_URL: ${CHATBOT_INTERNAL_URL}
@@ -483,6 +487,8 @@ services:
       - terraform-workdir:/app/terraform_workdir
     environment:
       <<: *common-env
+      # GitHub App private key (wins over the secrets backend when set): only services that sign App JWTs get it.
+      GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
       TEAMS_CLIENT_SECRET: ${TEAMS_CLIENT_SECRET}
       INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
 

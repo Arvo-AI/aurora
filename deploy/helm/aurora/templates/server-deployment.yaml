@@ -25,6 +25,9 @@ spec:
         {{- if not .Values.secrets.app.existingSecret }}
         checksum/secret-app: {{ include (print $.Template.BasePath "/secret-app.yaml") . | sha256sum }}
         {{- end }}
+        {{- with (include (print $.Template.BasePath "/secret-github-app-key.yaml") .) | trim }}
+        checksum/secret-github-app-key: {{ . | sha256sum }}
+        {{- end }}
       labels:
         app.kubernetes.io/name: {{ include "aurora.name" . }}-server
         app.kubernetes.io/instance: {{ .Release.Name }}
@@ -58,9 +61,15 @@ spec:
                 name: {{ include "aurora.secretName.backend" . }}
             - secretRef:
                 name: {{ include "aurora.secretName.app" . }}
-          {{- with .Values.extraEnv }}
+          {{- $githubAppKeyEnv := include "aurora.githubAppKeyEnv" . | trim }}
+          {{- if or $githubAppKeyEnv .Values.extraEnv }}
           env:
+            {{- with $githubAppKeyEnv }}
+            {{- . | nindent 12 }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
+            {{- end }}
           {{- end }}
           volumeMounts:
             - name: terraform-workdir

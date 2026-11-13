@@ -18,8 +18,8 @@ Setup:
     GITHUB_APP_CLIENT_ID=<Iv1.xxxxxxxxxxxxxxxx>
     GITHUB_APP_WEBHOOK_URL=https://<your-host>/github/webhook
     GITHUB_APP_SETUP_URL=https://<your-host>/github/app/install/callback
-    # GITHUB_APP_WEBHOOK_SECRET is consumed by ``vault_keys`` as a fallback
-    # when the Vault path is empty; it is NOT part of this config module.
+    # GITHUB_APP_WEBHOOK_SECRET is read by ``vault_keys``: when set it is used
+    # and the secrets backend is not read. It is NOT part of this config module.
 """
 
 from __future__ import annotations

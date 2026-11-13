@@ -14,13 +14,14 @@ import logging
 import os
 
 from services.discovery.enrichment.cli_utils import run_cli_json_command
+from utils.security.subprocess_env import strip_github_app_secrets
 
 logger = logging.getLogger(__name__)
 
 
 def _build_env(credentials):
     """Build environment variables for AWS CLI subprocess calls."""
-    env = os.environ.copy()
+    env = strip_github_app_secrets(os.environ.copy())
     env["AWS_ACCESS_KEY_ID"] = credentials["access_key_id"]
     env["AWS_SECRET_ACCESS_KEY"] = credentials["secret_access_key"]
     if credentials.get("session_token"):

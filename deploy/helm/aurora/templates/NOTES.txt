@@ -12,6 +12,9 @@ Aurora {{ .Chart.Version }} deployed to namespace {{ .Release.Namespace }}.
 {{- if .Values.secrets.app.existingSecret }}
 {{- $warnings = append $warnings (printf "app: using existing secret %q (must contain: FLASK_SECRET_KEY, AUTH_SECRET, SEARXNG_SECRET)" .Values.secrets.app.existingSecret) }}
 {{- end }}
+{{- with (.Values.secrets.githubAppKey | default dict).existingSecret }}
+{{- $warnings = append $warnings (printf "githubAppKey: using existing secret %q (must contain: GITHUB_APP_PRIVATE_KEY)" .) }}
+{{- end }}
 {{- if .Values.secrets.llm.existingSecret }}
 {{- $warnings = append $warnings (printf "llm: using existing secret %q (must contain at least one LLM API key)" .Values.secrets.llm.existingSecret) }}
 {{- end }}
