@@ -48,7 +48,6 @@ def test_child_cannot_read_parent_environ_after_deny():
     # Run in a fresh interpreter: the flag is process-wide and can't be undone.
     script = """
 import os, subprocess, sys
-os.environ["MARKER_SECRET"] = "x"
 from utils.security.subprocess_env import deny_same_uid_proc_access
 assert deny_same_uid_proc_access()
 child = "open('/proc/%d/environ','rb').read()" % os.getpid()
