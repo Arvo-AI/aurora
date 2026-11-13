@@ -690,9 +690,10 @@ def _handle_run_suggestion(payload: dict, action: dict, slack_user_id: str, team
 def _handle_continue_investigation(payload: dict, action: dict, slack_user_id: str, team_id: str, channel_id: str) -> dict:
     """Continue an RCA that stopped early, for a clicker who may write incidents.
 
-    Always acks with an empty body so the card stays as it is; the outcome goes
-    to the clicker (ephemeral) or the thread, and the finished report updates
-    the card in place.
+    Always acks with an empty body. On success the card's button becomes a
+    "continuing" note and a notice goes in the thread; the finished report
+    replaces the card and the notice says how it ended. A refusal goes to the
+    clicker (ephemeral) and leaves the card as it is.
     """
     from chat.background.continuation import ContinueRefused, continue_investigation
     from utils.auth.enforcer import enforce_with_reload
@@ -730,16 +731,32 @@ def _handle_continue_investigation(payload: dict, action: dict, slack_user_id: s
                         "Something went wrong continuing the investigation. Please try again.")
         return {"text": ""}
 
-    message_ts = (payload.get('message') or {}).get('ts')
+    from utils.notifications.slack_notification_service import continuing_blocks, remember_continue_notice
+
+    message = payload.get('message') or {}
+    message_ts = message.get('ts')
     clicker_name = (payload.get('user') or {}).get('name', 'someone')
     if feedback and message_ts:
+        # The button gives way to a "continuing" note until the new report
+        # replaces the card.
+        if message.get('blocks'):
+            try:
+                feedback.update_message(
+                    channel_id, message_ts, message.get('text') or "Investigation",
+                    blocks=continuing_blocks(message['blocks'], clicker_name),
+                )
+            except Exception:
+                logger.warning("Could not mark the card of incident %s as continuing", sanitize(incident_id))
         try:
-            feedback.send_message(
+            notice = feedback.send_message(
                 channel=channel_id,
                 text=f"Continuing the investigation (requested by {clicker_name}). "
                      "The report above will update when it finishes.",
                 thread_ts=message_ts,
             )
+            # Updated with the outcome when the continuation ends.
+            if isinstance(notice, dict) and notice.get('ts'):
+                remember_continue_notice(incident_id, channel_id, notice['ts'], clicker_name)
         except Exception:
             logger.warning("Could not post the continuation notice for incident %s", sanitize(incident_id))
     return {"text": ""}

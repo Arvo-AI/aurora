@@ -495,6 +495,7 @@ def notify_investigation_completed(user_id: str, incident_id: str, session_id: O
                 )
             except Exception:
                 logger.exception("[Dispatcher] Slack completed notification failed")
+            _finish_continue_notice(user_id, incident_data)
 
         # --- Microsoft Teams ---
         teams_card_enabled = bool(get_org_preference(org_id, 'teams_investigation_complete_notifications', default=True))
@@ -571,6 +572,15 @@ def notify_investigation_completed(user_id: str, incident_id: str, session_id: O
         logger.exception("[Dispatcher] Error in notify_investigation_completed")
 
 
+def _finish_continue_notice(user_id: str, incident_data: Dict[str, Any], failed: bool = False) -> None:
+    """A continuation started from Slack: say in its thread notice how it ended."""
+    try:
+        from utils.notifications.slack_notification_service import finish_continue_notice
+        finish_continue_notice(user_id, incident_data, failed=failed)
+    except Exception:
+        logger.exception("[Dispatcher] Could not update the continuation notice")
+
+
 def notify_investigation_failed(user_id: str, incident_id: str, error_message: Optional[str] = None) -> None:
     """Send notifications for investigation failed event across all enabled channels."""
     try:
@@ -593,6 +603,8 @@ def notify_investigation_failed(user_id: str, incident_id: str, error_message: O
                 send_slack_investigation_failed_notification(user_id, incident_data, error_message=error_message)
             except Exception:
                 logger.exception("[Dispatcher] Slack failed notification failed")
+        if _has_slack_connected(user_id):
+            _finish_continue_notice(user_id, incident_data, failed=True)
 
         teams_enabled = bool(get_org_preference(org_id, 'teams_investigation_complete_notifications', default=True))
         if teams_enabled and _has_teams_connected(user_id):

@@ -411,3 +411,93 @@ def test_the_prompt_names_the_alert_even_without_a_report():
     assert 'alert "High 5xx rate on checkout"' in prompt
     assert "(no report was written)" in prompt
     assert 'alert "this incident"' in continuation_prompt("time_limit")
+
+
+# --- the card and thread notice while a continuation runs ----------------------------
+
+def test_the_button_gives_way_to_a_continuing_note():
+    from utils.notifications.slack_notification_service import build_continue_blocks, continuing_blocks
+
+    header = {"type": "header", "text": {"type": "plain_text", "text": "Initial Analysis"}}
+    card = [header, *build_continue_blocks(
+        {"incident_id": INCIDENT, "unfinished_reason": "time_limit", "continuations": 0},
+    )]
+    blocks = continuing_blocks(card, "olivier")
+    assert blocks[0] == header
+    assert blocks[1]["type"] == "context"
+    assert "Continuing the investigation, requested by olivier" in blocks[1]["elements"][0]["text"]
+    assert not any("accessory" in b for b in blocks)
+
+
+class _FakeRedis:
+    def __init__(self):
+        self.store = {}
+
+    def set(self, key, value, ex=None):
+        self.store[key] = value
+
+    def get(self, key):
+        return self.store.get(key)
+
+    def delete(self, key):
+        self.store.pop(key, None)
+
+
+@pytest.fixture
+def notice(monkeypatch):
+    import utils.cache.redis_client as redis_mod
+    import utils.notifications.slack_notification_service as slack
+
+    fake = _FakeRedis()
+    client = MagicMock()
+    monkeypatch.setattr(redis_mod, "get_redis_client", lambda: fake)
+    monkeypatch.setattr(slack, "get_slack_client_for_user", lambda _u: client)
+    slack.remember_continue_notice(INCIDENT, "C1", "111.222", "olivier")
+    return slack, client, fake
+
+
+@pytest.mark.parametrize("data, failed, words", [
+    ({"unfinished_reason": None}, False, "finished. The report above is updated."),
+    ({"unfinished_reason": "time_limit"}, False, "stopped again before finishing"),
+    ({"unfinished_reason": "time_limit"}, True, "earlier report above is kept"),
+])
+def test_the_thread_notice_says_how_the_continuation_ended(notice, data, failed, words):
+    slack, client, fake = notice
+    assert slack.finish_continue_notice(OWNER, {"incident_id": INCIDENT, **data}, failed=failed) is True
+    channel, ts, text = client.update_message.call_args[0][:3]
+    assert (channel, ts) == ("C1", "111.222")
+    assert "requested by olivier" in text and words in text
+    assert fake.store == {}  # updated once
+
+
+def test_no_notice_means_nothing_to_update(notice):
+    slack, client, fake = notice
+    fake.store.clear()
+    assert slack.finish_continue_notice(OWNER, {"incident_id": INCIDENT}) is False
+    client.update_message.assert_not_called()
+
+
+def test_a_slack_click_marks_the_card_and_remembers_the_notice(monkeypatch):
+    import routes.slack.slack_events as events
+    import utils.auth.enforcer as enforcer
+    import utils.auth.stateless_auth as auth
+    import utils.notifications.slack_notification_service as slack
+
+    feedback = MagicMock()
+    feedback.send_message.return_value = {"ts": "999.000"}
+    remembered = []
+    monkeypatch.setattr(events, "aurora_user_for_slack_sender", lambda *_a: CLICKER)
+    monkeypatch.setattr(events, "_slack_client_for_feedback", lambda *_a: feedback)
+    monkeypatch.setattr(auth, "get_org_id_for_user", lambda _u: "org-1")
+    monkeypatch.setattr(enforcer, "enforce_with_reload", lambda *_a: True)
+    monkeypatch.setattr(continuation, "continue_investigation", lambda *_a: {"continuationsLeft": 2})
+    monkeypatch.setattr(slack, "remember_continue_notice", lambda *a: remembered.append(a))
+
+    card = slack.build_continue_blocks({"incident_id": INCIDENT, "unfinished_reason": "stalled", "continuations": 0})
+    events._handle_continue_investigation(
+        payload={"user": {"name": "olivier"}, "message": {"ts": "111.222", "text": "card", "blocks": card}},
+        action={"value": INCIDENT}, slack_user_id="U1", team_id="T1", channel_id="C1",
+    )
+    blocks = feedback.update_message.call_args.kwargs["blocks"]
+    assert blocks[0]["type"] == "context" and "requested by olivier" in blocks[0]["elements"][0]["text"]
+    assert remembered == [(INCIDENT, "C1", "999.000", "olivier")]

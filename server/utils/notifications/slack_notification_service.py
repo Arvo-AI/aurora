@@ -3,6 +3,7 @@ Slack notification service for sending incident alerts and updates.
 Sends messages to the incidents channel in the user's connected Slack workspace.
 """
 
+import json
 import logging
 import os
 from typing import Dict, Any, Optional
@@ -589,6 +590,87 @@ def build_continue_blocks(incident_data: Dict[str, Any]) -> list:
         },
         {"type": "divider"},
     ]
+
+
+_CONTINUE_NOTICE_KEY = "aurora:continue_notice:{}"
+# Longer than three back-to-back continuations at the longest time limit.
+_CONTINUE_NOTICE_TTL_SECONDS = 12 * 60 * 60
+
+
+def continuing_blocks(blocks: list, requested_by: str) -> list:
+    """The card's blocks with its Continue button replaced by a "continuing" note.
+
+    Shown from the click until the new report replaces the card, so the card
+    no longer looks as if nothing happened.
+    """
+    note = {
+        "type": "context",
+        "elements": [{
+            "type": "mrkdwn",
+            "text": f":hourglass_flowing_sand: Continuing the investigation, requested by {requested_by}. "
+                    "This card updates when it finishes.",
+        }],
+    }
+    out = []
+    for block in blocks or []:
+        action_id = ((block or {}).get("accessory") or {}).get("action_id", "")
+        out.append(note if action_id.startswith(CONTINUE_ACTION_PREFIX) else block)
+    return out
+
+
+def remember_continue_notice(incident_id: str, channel: str, ts: str, requested_by: str) -> None:
+    """Keep where the "Continuing the investigation" thread notice is, to update it at the end."""
+    from utils.cache.redis_client import get_redis_client
+
+    client = get_redis_client()
+    if not client:
+        return
+    try:
+        client.set(
+            _CONTINUE_NOTICE_KEY.format(incident_id),
+            json.dumps({"channel": channel, "ts": ts, "requested_by": requested_by}),
+            ex=_CONTINUE_NOTICE_TTL_SECONDS,
+        )
+    except Exception:
+        logger.warning("[SlackNotification] Could not remember the continuation notice for %s", incident_id)
+
+
+def finish_continue_notice(user_id: str, incident_data: Dict[str, Any], failed: bool = False) -> bool:
+    """Say in the thread notice how the continuation ended. False when there is no notice."""
+    from utils.cache.redis_client import get_redis_client
+
+    incident_id = str(incident_data.get("incident_id") or "")
+    redis_client = get_redis_client()
+    if not incident_id or not redis_client:
+        return False
+    key = _CONTINUE_NOTICE_KEY.format(incident_id)
+    try:
+        raw = redis_client.get(key)
+        if not raw:
+            return False
+        redis_client.delete(key)
+        notice = json.loads(raw)
+    except Exception:
+        logger.warning("[SlackNotification] Could not read the continuation notice for %s", incident_id)
+        return False
+    who = notice.get("requested_by") or "someone"
+    if failed:
+        text = (f"The continued investigation (requested by {who}) could not write a new report. "
+                "The earlier report above is kept.")
+    elif incident_data.get("unfinished_reason"):
+        text = (f"The continued investigation (requested by {who}) stopped again before finishing. "
+                "The report above is updated with what it found.")
+    else:
+        text = f"The continued investigation (requested by {who}) finished. The report above is updated."
+    try:
+        client = get_slack_client_for_user(user_id)
+        if not client:
+            return False
+        client.update_message(notice["channel"], notice["ts"], text, blocks=[])
+        return True
+    except Exception:
+        logger.warning("[SlackNotification] Could not update the continuation notice for %s", incident_id)
+        return False
 
 
 def send_slack_investigation_failed_notification(
