@@ -19,12 +19,13 @@ NC='\033[0m' # No Color
 
 echo -e "${GREEN}Generating secure secrets for Aurora...${NC}"
 
-# Check if .env file exists
-ENV_FILE=".env"
+# Check if .env file exists. ENV_FILE can be overridden so a throwaway stack
+# (scripts/preview/up.sh) gets its own secrets without touching your .env.
+ENV_FILE="${ENV_FILE:-.env}"
 if [[ ! -f "$ENV_FILE" ]]; then
-    echo -e "${YELLOW}Warning: .env file not found. Creating from .env.example...${NC}"
+    echo -e "${YELLOW}Warning: $ENV_FILE not found. Creating from .env.example...${NC}"
     if [[ -f ".env.example" ]]; then
-        cp .env.example .env
+        cp .env.example "$ENV_FILE"
     else
         echo "Error: .env.example not found. Please create .env manually."
         exit 1
