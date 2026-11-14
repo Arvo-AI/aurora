@@ -1749,6 +1749,12 @@ async def _execute_background_chat(
         # never return to the caller (worker process exits during event loop teardown
         # due to MCP subprocess cleanup), so this must happen before we return.
         guardrail_blocked = getattr(state, "guardrail_blocked", False)
+        last_tool_failure = getattr(state, "last_tool_failure", None)
+        action_failure_message = None
+        if isinstance(last_tool_failure, dict) and last_tool_failure:
+            action_failure_message = (
+                last_tool_failure.get("message") or "Action workflow failed."
+            )
         if guardrail_blocked:
             # Streaming copies are stripped at end of workflow; persist a real bot
             # message so Slack/Google Chat can replace the "Thinking..." placeholder.
@@ -1773,6 +1779,13 @@ async def _execute_background_chat(
                     )
                     action_status = 'error'
                     action_error_msg = _GUARDRAIL_BLOCKED_MSG
+                elif action_failure_message:
+                    update_action_run_status(
+                        run_id=trigger_metadata['run_id'], status='error',
+                        user_id=user_id, error_message=action_failure_message,
+                    )
+                    action_status = 'error'
+                    action_error_msg = action_failure_message
                 else:
                     update_action_run_status(run_id=trigger_metadata['run_id'], status='success', user_id=user_id)
                     action_status = 'success'
