@@ -121,6 +121,21 @@ def _extract_rail_text_from_payload(payload: Dict[str, Any]) -> str:
     return combined[:3000]
 
 
+def _split_pasted_evidence(
+    source: str, payload: Dict[str, Any]
+) -> tuple[Optional[str], Dict[str, Any]]:
+    """Separate user-pasted evidence from a chat RCA payload.
+
+    Returns ``(evidence, payload_without_evidence)``. Evidence is rendered
+    verbatim in its own block rather than JSON-escaped inside the payload, so
+    log lines stay readable and quotable. Webhook payloads are returned as-is.
+    """
+    evidence = payload.get("evidence") if source == "chat" else None
+    if not isinstance(evidence, str) or not evidence.strip():
+        return None, payload
+    return evidence, {k: v for k, v in payload.items() if k != "evidence"}
+
+
 def build_rca_prompt(
     source: str,
     title: str,
@@ -147,14 +162,8 @@ def build_rca_prompt(
 
     providers = get_user_providers(user_id) if user_id else []
 
-    # Pasted evidence is rendered verbatim in its own block rather than
-    # JSON-escaped inside the payload, so log lines stay readable and quotable.
-    evidence = payload.get("evidence") if source == "chat" else None
-    if not isinstance(evidence, str) or not evidence.strip():
-        evidence = None
     full_payload = payload
-    if evidence:
-        payload = {k: v for k, v in payload.items() if k != "evidence"}
+    evidence, payload = _split_pasted_evidence(source, payload)
 
     try:
         serialized = json.dumps(payload, ensure_ascii=False, default=str)

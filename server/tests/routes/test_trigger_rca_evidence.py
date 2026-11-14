@@ -43,7 +43,8 @@ def post(monkeypatch):
 def test_evidence_is_passed_through_to_the_rca(post):
     run, calls = post
     body, status = run({"title": "checkout 5xx", "issue_description": "checkout 5xx", "evidence": f"  {LOG_LINE}\n"})
-    assert status == 200 and body["incident_id"] == "inc-1"
+    assert status == 200
+    assert body["incident_id"] == "inc-1"
     assert calls[0]["evidence"] == LOG_LINE
     assert calls[0]["user_id"] == "user-1"
 
@@ -58,20 +59,24 @@ def test_evidence_alone_is_enough(post):
 def test_evidence_longer_than_the_description_cap_is_accepted(post):
     run, calls = post
     _, status = run({"issue_description": "x", "evidence": "a" * PASTED_EVIDENCE_MAX})
-    assert status == 200 and len(calls[0]["evidence"]) == PASTED_EVIDENCE_MAX
+    assert status == 200
+    assert len(calls[0]["evidence"]) == PASTED_EVIDENCE_MAX
 
 
 @pytest.mark.parametrize("evidence", ["a" * (PASTED_EVIDENCE_MAX + 1), ["not", "text"], 42])
 def test_oversized_or_non_text_evidence_is_400(post, evidence):
     run, calls = post
     body, status = run({"issue_description": "x", "evidence": evidence})
-    assert status == 400 and "evidence" in body["error"] and calls == []
+    assert status == 400
+    assert "evidence" in body["error"]
+    assert calls == []
 
 
 def test_description_is_still_required_without_evidence(post):
     run, calls = post
     _, status = run({"title": "only a title"})
-    assert status == 400 and calls == []
+    assert status == 400
+    assert calls == []
 
 
 def test_prompt_renders_evidence_verbatim_outside_the_json_payload():
@@ -89,4 +94,5 @@ def test_prompt_is_unchanged_without_evidence_and_for_webhook_sources():
     prompt, _ = build_rca_prompt("chat", "t", {"title": "t", "description": "d"})
     assert "PASTED EVIDENCE" not in prompt
     prompt, _ = build_rca_prompt("grafana", "t", {"title": "t", "evidence": LOG_LINE})
-    assert "PASTED EVIDENCE" not in prompt and "QueuePool limit of size 5" in prompt
+    assert "PASTED EVIDENCE" not in prompt
+    assert "QueuePool limit of size 5" in prompt

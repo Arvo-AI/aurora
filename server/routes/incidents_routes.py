@@ -1907,6 +1907,43 @@ def get_incident_action_runs(user_id, incident_id: str):
         return jsonify({"error": "Failed to retrieve action runs"}), 500
 
 
+def _text_field(data: dict, key: str) -> str:
+    return (data.get(key) or "").strip()
+
+
+def _parse_trigger_rca_body(data: dict) -> tuple[Optional[dict], Optional[str]]:
+    """Validate a trigger-rca request body. Returns ``(fields, error)``."""
+    # Optional pasted evidence (alert payload, logs, CI output). It lets a user
+    # with nothing connected get an investigation of their own incident.
+    evidence = data.get("evidence") or ""
+    if not isinstance(evidence, str):
+        return None, "evidence must be a string"
+    evidence = evidence.strip()
+    if len(evidence) > PASTED_EVIDENCE_MAX:
+        return None, f"evidence too long (max {PASTED_EVIDENCE_MAX} chars)"
+
+    title = _text_field(data, "title")
+    issue_description = _text_field(data, "issue_description")
+    if not issue_description and evidence:
+        issue_description = title or "Investigate the pasted evidence."
+    if not issue_description:
+        return None, "issue_description is required"
+    if len(issue_description) > 4000:
+        return None, "issue_description too long (max 4000 chars)"
+
+    severity = (_text_field(data, "severity") or "medium").lower()
+    if severity not in _ALLOWED_SEVERITIES:
+        return None, f"Invalid severity. Must be one of: {', '.join(sorted(_ALLOWED_SEVERITIES))}"
+
+    return {
+        "issue_description": issue_description,
+        "title": title,
+        "service": _text_field(data, "service"),
+        "severity": severity,
+        "evidence": evidence,
+    }, None
+
+
 @incidents_bp.route("/api/incidents/trigger-rca", methods=["POST"])
 @require_permission("incidents", "write")
 def trigger_rca_from_chat(user_id):
@@ -1916,44 +1953,14 @@ def trigger_rca_from_chat(user_id):
     endpoint so MCP / API clients can hit it without going through the chat
     agent. Returns the new incident_id and an RCA session_id for tracking.
     """
-    data = request.get_json(silent=True) or {}
-    issue_description = (data.get("issue_description") or "").strip()
-    # Optional pasted evidence (alert payload, logs, CI output). It lets a user
-    # with nothing connected get an investigation of their own incident.
-    evidence = data.get("evidence") or ""
-    if not isinstance(evidence, str):
-        return jsonify({"error": "evidence must be a string"}), 400
-    evidence = evidence.strip()
-    if len(evidence) > PASTED_EVIDENCE_MAX:
-        return jsonify({
-            "error": f"evidence too long (max {PASTED_EVIDENCE_MAX} chars)"
-        }), 400
-
-    title = (data.get("title") or "").strip()
-    if not issue_description and evidence:
-        issue_description = title or "Investigate the pasted evidence."
-    if not issue_description:
-        return jsonify({"error": "issue_description is required"}), 400
-    if len(issue_description) > 4000:
-        return jsonify({"error": "issue_description too long (max 4000 chars)"}), 400
-
-    service = (data.get("service") or "").strip()
-    severity = (data.get("severity") or "medium").strip().lower()
-    if severity not in _ALLOWED_SEVERITIES:
-        return jsonify({
-            "error": f"Invalid severity. Must be one of: {', '.join(sorted(_ALLOWED_SEVERITIES))}"
-        }), 400
+    data = request.get_json(silent=True)
+    fields, error = _parse_trigger_rca_body(data if isinstance(data, dict) else {})
+    if error:
+        return jsonify({"error": error}), 400
 
     from chat.backend.agent.tools.trigger_rca_tool import trigger_rca as _agent_trigger_rca
     try:
-        raw = _agent_trigger_rca(
-            issue_description=issue_description,
-            title=title,
-            service=service,
-            severity=severity,
-            user_id=user_id,
-            evidence=evidence,
-        )
+        raw = _agent_trigger_rca(user_id=user_id, **fields)
     except Exception:
         logger.exception("[INCIDENTS] trigger_rca tool raised")
         return jsonify({"error": "RCA dispatch failed"}), 500

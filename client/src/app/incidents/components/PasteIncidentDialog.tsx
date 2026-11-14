@@ -91,7 +91,7 @@ export default function PasteIncidentDialog({ open, onOpenChange }: PasteInciden
           </DialogDescription>
         </DialogHeader>
         <form
-          onSubmit={e => { e.preventDefault(); handleSubmit(); }}
+          onSubmit={e => { e.preventDefault(); void handleSubmit(); }}
           className="space-y-3"
         >
           <Input
