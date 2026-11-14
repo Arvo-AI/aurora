@@ -14,6 +14,7 @@ from chat.background.task import run_background_chat
 from typing import Any, Optional
 from utils.validation import is_valid_uuid
 from chat.background.task import create_background_chat_session, run_background_chat
+from chat.background.rca_prompt_builder import PASTED_EVIDENCE_MAX
 
 logger = logging.getLogger(__name__)
 
@@ -1917,12 +1918,25 @@ def trigger_rca_from_chat(user_id):
     """
     data = request.get_json(silent=True) or {}
     issue_description = (data.get("issue_description") or "").strip()
+    # Optional pasted evidence (alert payload, logs, CI output). It lets a user
+    # with nothing connected get an investigation of their own incident.
+    evidence = data.get("evidence") or ""
+    if not isinstance(evidence, str):
+        return jsonify({"error": "evidence must be a string"}), 400
+    evidence = evidence.strip()
+    if len(evidence) > PASTED_EVIDENCE_MAX:
+        return jsonify({
+            "error": f"evidence too long (max {PASTED_EVIDENCE_MAX} chars)"
+        }), 400
+
+    title = (data.get("title") or "").strip()
+    if not issue_description and evidence:
+        issue_description = title or "Investigate the pasted evidence."
     if not issue_description:
         return jsonify({"error": "issue_description is required"}), 400
     if len(issue_description) > 4000:
         return jsonify({"error": "issue_description too long (max 4000 chars)"}), 400
 
-    title = (data.get("title") or "").strip()
     service = (data.get("service") or "").strip()
     severity = (data.get("severity") or "medium").strip().lower()
     if severity not in _ALLOWED_SEVERITIES:
@@ -1938,6 +1952,7 @@ def trigger_rca_from_chat(user_id):
             service=service,
             severity=severity,
             user_id=user_id,
+            evidence=evidence,
         )
     except Exception:
         logger.exception("[INCIDENTS] trigger_rca tool raised")

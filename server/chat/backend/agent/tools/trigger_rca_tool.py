@@ -42,6 +42,7 @@ def trigger_rca(
     severity: str = "medium",
     user_id: str | None = None,
     session_id: str | None = None,
+    evidence: str = "",
     **kwargs,
 ) -> str:
     """
@@ -58,6 +59,8 @@ def trigger_rca(
         severity: critical/high/medium/low
         user_id: Injected by context wrapper
         session_id: Injected by context wrapper
+        evidence: Raw text the user pasted (alert payload, logs, CI output).
+            Only set by the HTTP route; the LLM tool schema does not expose it.
 
     Returns:
         JSON string with incident_id and session_id, or error message
@@ -116,6 +119,9 @@ def trigger_rca(
         "triggered_from_session": session_id,
         "triggered_at": timestamp_str,
     }
+    evidence = (evidence or "").strip()
+    if evidence:
+        alert_metadata["evidence"] = evidence
 
     from utils.auth.stateless_auth import get_org_id_for_user, set_rls_context
     from utils.db.connection_pool import db_pool
@@ -208,6 +214,8 @@ def trigger_rca(
             "service": service,
             "severity": severity,
         }
+        if evidence:
+            payload["evidence"] = evidence
 
         rca_prompt, rail_text = build_rca_prompt(
             "chat", incident_title, payload, user_id=user_id,
