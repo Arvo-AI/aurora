@@ -1,0 +1,241 @@
+name: PR Verification
+
+# Runs every pull request instead of only reading it.
+#
+#   frontend  lockfile, lint and type check for the Next.js app
+#   charts    both Helm charts lint and render
+#   preview   builds the production images, boots the whole stack on this
+#             runner, runs deterministic smoke checks and a browser test,
+#             uploads the evidence, then destroys the stack
+#
+# The runner is the per-PR environment: a fresh VM that exists for one run.
+# Nothing is reachable from outside it, so there is no preview URL yet; the
+# result is the check status plus the uploaded evidence.
+#
+# Uses no secrets and a read-only token, so it is safe on pull requests from
+# forks. Keep it that way: this workflow executes the pull request's code.
+
+on:
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - 'website/**'
+      - '**/*.md'
+  # Also on main: caches written here are the ones every pull request can read,
+  # and it verifies the merge result itself.
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'website/**'
+      - '**/*.md'
+  workflow_dispatch:
+
+# A new push to the same pull request makes the previous run pointless.
+concurrency:
+  group: pr-verify-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  BUN_VERSION: "1.2.22" # keep in step with client/Dockerfile
+
+jobs:
+  frontend:
+    name: Frontend static checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20'
+
+      - name: Install bun
+        run: npm install -g "bun@${BUN_VERSION}"
+
+      # Fails when package.json and bun.lock disagree. The image build runs a
+      # plain `bun install`, which would silently resolve new versions instead.
+      - name: Install dependencies (lockfile must be in sync)
+        run: bun install --frozen-lockfile
+
+      # next.config.ts sets ignoreDuringBuilds and ignoreBuildErrors, so the
+      # image build never lints or type-checks. These two steps are the only
+      # place that happens. They are advisory until main is clean; then remove
+      # continue-on-error to make them blocking.
+      - name: Lint (advisory)
+        id: lint
+        continue-on-error: true
+        run: bun run lint
+
+      - name: Type check (advisory)
+        id: typecheck
+        continue-on-error: true
+        run: bunx tsc --noEmit
+
+      - name: Report advisory results
+        if: always()
+        env:
+          LINT: ${{ steps.lint.outcome }}
+          TYPECHECK: ${{ steps.typecheck.outcome }}
+        run: |
+          {
+            echo "### Frontend static checks"
+            echo
+            echo "| Check | Result | Blocking |"
+            echo "|---|---|---|"
+            echo "| Lint | ${LINT:-skipped} | no |"
+            echo "| Type check | ${TYPECHECK:-skipped} | no |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  charts:
+    name: Helm charts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Install Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
+
+      # Without this a broken template is first found when a release tag is
+      # pushed (publish-helm.yml), which is the worst moment to find it.
+      - name: Lint and render the Aurora chart
+        run: |
+          helm lint deploy/helm/aurora
+          helm template aurora deploy/helm/aurora > /dev/null
+
+      - name: Lint and render the kubectl-agent chart
+        run: |
+          helm lint kubectl-agent/chart
+          helm template kubectl-agent kubectl-agent/chart > /dev/null
+
+  preview:
+    name: Preview environment
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      # The server image carries every cloud CLI and the stack pulls a dozen
+      # third-party images; the default runner disk is not enough for both.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      # Built once here with a layer cache, then tagged under every name the
+      # compose file expects. Letting compose build would rebuild the same
+      # image for each of the six services that share it, with no cache.
+      - name: Build server image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ./server
+          file: ./server/Dockerfile
+          target: prod
+          load: true
+          tags: aurora_server:latest
+          cache-from: type=gha,scope=preview-server
+          cache-to: type=gha,mode=max,scope=preview-server
+
+      # Same build arguments as publish-images.yml, so the preview runs the
+      # image that would be published. Runtime values still come from the env
+      # file through docker-entrypoint.sh.
+      - name: Build frontend image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ./client
+          file: ./client/Dockerfile
+          target: prod
+          load: true
+          tags: aurora_frontend:latest
+          build-args: |
+            NEXT_PUBLIC_BACKEND_URL=http://localhost:5080
+            NEXT_PUBLIC_WEBSOCKET_URL=ws://localhost:5006
+            NEXT_PUBLIC_ENABLE_OVH=true
+            NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH=true
+            NEXT_PUBLIC_ENABLE_SHAREPOINT=true
+          cache-from: type=gha,scope=preview-frontend
+          cache-to: type=gha,mode=max,scope=preview-frontend
+
+      # The names come from the compose file, so a service added there later
+      # is picked up without editing this workflow.
+      - name: Tag the server image for every service that uses it
+        run: |
+          images="$(docker compose --env-file .env.example -f docker-compose.prod-local.yml config --images \
+            | grep '^aurora_' | grep -v '^aurora_frontend' | sort -u)"
+          for image in $images; do
+            echo "aurora_server:latest -> $image"
+            docker tag aurora_server:latest "$image"
+          done
+
+      - name: Boot the stack
+        env:
+          PREVIEW_BUILD: "0"
+        run: scripts/preview/up.sh
+
+      - name: Smoke checks
+        run: scripts/preview/smoke.sh
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20'
+
+      - name: Install browser test dependencies
+        working-directory: client
+        run: |
+          npm install -g "bun@${BUN_VERSION}"
+          bun install --frozen-lockfile
+          npx playwright install --with-deps chromium
+
+      - name: Browser smoke test
+        working-directory: client
+        env:
+          CI: "true"
+          PLAYWRIGHT_BASE_URL: http://localhost:3000
+        run: npx playwright test -c tests/playwright.config.ts --project=chromium
+
+      - name: Collect evidence
+        if: always()
+        run: scripts/preview/evidence.sh
+
+      - name: Publish summary
+        if: always()
+        run: |
+          if [ -f preview-evidence/summary.md ]; then
+            cat preview-evidence/summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### Preview did not get as far as the smoke checks" >> "$GITHUB_STEP_SUMMARY"
+            echo "See the job log and the uploaded service logs." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: preview-evidence
+          path: |
+            preview-evidence/
+            client/tests/playwright-report/
+            client/tests/test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      # The runner is thrown away regardless. Tearing down explicitly keeps
+      # the lifecycle honest for when this moves to a longer-lived machine.
+      - name: Destroy the stack
+        if: always()
+        run: scripts/preview/down.sh
