@@ -4,10 +4,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
-import { Zap, Clock, ChevronRight, Loader2, CheckCircle2, Link2, GitMerge, Plus, AlertTriangle } from 'lucide-react';
+import { Zap, Clock, ChevronRight, Loader2, CheckCircle2, Link2, GitMerge, Plus, AlertTriangle, ClipboardPaste } from 'lucide-react';
 import { Incident, incidentsService } from '@/lib/services/incidents';
 import { groupIncidents, IncidentGroup, isStalled } from '@/lib/incident-grouping';
 import IncidentGroupRow from './components/IncidentGroupRow';
+import PasteIncidentDialog from './components/PasteIncidentDialog';
 import { useConnectedAccounts } from '@/hooks/useConnectedAccounts';
 import { connectorRegistry } from '@/components/connectors/ConnectorRegistry';
 import { useQuery } from '@/lib/query';
@@ -74,6 +75,7 @@ const incidentsFetcher = async (key: string, signal: AbortSignal) => {
 
 export default function IncidentsPage() {
   const { providerIds, isLoading: isLoadingAccounts } = useConnectedAccounts();
+  const [pasteOpen, setPasteOpen] = useState(false);
 
   const isConnectedToIncidentPlatform = useMemo(
     () => providerIds.some(id => ALERT_PROVIDERS.has(id)),
@@ -166,12 +168,17 @@ export default function IncidentsPage() {
 
   return (
     <div className="max-w-4xl mx-auto py-8 px-4">
-      <div className="mb-8">
+      <div className="mb-8 flex items-center justify-between">
         <h1 className="text-3xl font-bold flex items-center gap-2">
           <Zap className="h-6 w-6 text-foreground" />
           Incidents
         </h1>
+        <Button variant="outline" size="sm" onClick={() => setPasteOpen(true)}>
+          <ClipboardPaste className="h-4 w-4 mr-2" />
+          Paste an incident
+        </Button>
       </div>
+      <PasteIncidentDialog open={pasteOpen} onOpenChange={setPasteOpen} />
 
       {isLoading ? (
         <div className="flex justify-center py-12">
@@ -226,7 +233,17 @@ export default function IncidentsPage() {
             <Card>
               <CardContent className="py-12 text-center">
                 {!isConnectedToIncidentPlatform && !isLoadingAccounts ? (
-                  <ConnectPlatformCTA />
+                  <>
+                    <p className="font-medium mb-1">Get a first investigation in minutes</p>
+                    <p className="text-sm text-muted-foreground mb-4">
+                      Paste an alert, a log excerpt or a CI failure. Nothing to connect.
+                    </p>
+                    <Button onClick={() => setPasteOpen(true)} className="mb-8">
+                      <ClipboardPaste className="h-4 w-4 mr-2" />
+                      Paste an incident
+                    </Button>
+                    <ConnectPlatformCTA />
+                  </>
                 ) : (
                   <>
                     <CheckCircle2 className="h-10 w-10 mx-auto text-green-500 mb-3" />
