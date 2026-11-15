@@ -48,6 +48,12 @@ warn_redundant_casts = true
 show_error_codes = true
 files = ["verifier"]
 
+# PyYAML ships no type stubs. The loader is the only module that imports it,
+# and it narrows the result to a dict before anything else reads it.
+[[tool.mypy.overrides]]
+module = ["yaml"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]

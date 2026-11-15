@@ -22,17 +22,15 @@ from enum import StrEnum
 from importlib import metadata
 from pathlib import Path
 
+from verifier.config import LAB_COMMIT, PROJECT_ROOT
+
 LOGGER = logging.getLogger(__name__)
 
 MINIMUM_PYTHON = (3, 11)
 MINIMUM_PYYAML = (6, 0)
 COMMAND_TIMEOUT_S = 10
 
-# The lab commit every observation in this project is pinned to.
-LAB_COMMIT = "4edcd9dfbc48cbd9ca8ea031e429832cf72842d0"
-
-ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_LAB_DIR = ROOT.parent.parent / "aurora-lab"
+DEFAULT_LAB_DIR = PROJECT_ROOT.parent.parent / "aurora-lab"
 
 DEV_TOOLS = ("mypy", "pytest", "ruff")
 

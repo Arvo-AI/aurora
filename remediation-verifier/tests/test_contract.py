@@ -290,7 +290,7 @@ class TestDecisions:
 
     def test_the_risky_choices_are_frozen(self) -> None:
         decisions = read_text(DECISIONS_FILE)
-        for identifier in ("D2", "D5", "D11", "D12", "D23", "D24"):
+        for identifier in ("D2", "D5", "D11", "D12", "D23", "D24", "D27"):
             assert identifier in decisions, f"{identifier} is not recorded"
 
     def test_the_resolved_tool_versions_are_recorded(self) -> None:
