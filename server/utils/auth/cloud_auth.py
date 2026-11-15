@@ -33,23 +33,33 @@ def _resolve_azure_credentials(token_data: Dict[str, Any], normalized_mode: str,
         "subscription_id": token_data.get("subscription_id"),
     }
 
-    if normalized_mode == READ_ONLY_MODE:
-        read_only_block = token_data.get("read_only") or {}
-        if isinstance(read_only_block, dict):
-            candidate = {
-                "tenant_id": read_only_block.get("tenant_id") or base["tenant_id"],
-                "client_id": read_only_block.get("client_id"),
-                "client_secret": read_only_block.get("client_secret"),
-                "subscription_id": read_only_block.get("subscription_id") or base.get("subscription_id"),
-            }
-            if candidate["client_id"] and candidate["client_secret"]:
-                return candidate
-            logger.warning(
-                "Azure read-only credentials incomplete for user %s; using full-access identity",
-                user_id,
-            )
+    if normalized_mode != READ_ONLY_MODE:
+        return base
 
-    return base
+    # Fail closed: Azure RBAC has no session-policy equivalent, so the separate
+    # read-only identity IS the enforcement boundary. Falling back to the
+    # full-access identity here would silently hand ask mode write credentials.
+    read_only_block = token_data.get("read_only") or {}
+    # The block comes from operator-pasted JSON, so a truthy non-dict (string, list)
+    # is plausible and would raise AttributeError on .get below. Fail with the same
+    # explicit error this function raises for missing credentials.
+    if not isinstance(read_only_block, dict):
+        raise ValueError(
+            "Azure read-only credentials are malformed (expected an object). "
+            "Re-run the setup script and paste the full JSON."
+        )
+    candidate = {
+        "tenant_id": read_only_block.get("tenant_id") or base["tenant_id"],
+        "client_id": read_only_block.get("client_id"),
+        "client_secret": read_only_block.get("client_secret"),
+        "subscription_id": read_only_block.get("subscription_id") or base.get("subscription_id"),
+    }
+    if not (candidate["client_id"] and candidate["client_secret"]):
+        raise ValueError(
+            "Azure read-only credentials are not configured. Re-run the Azure setup script "
+            "to provision a read-only service principal, or switch out of Ask mode."
+        )
+    return candidate
 
 
 def generate_azure_access_token(user_id: str, subscription_id: Optional[str] = None, force_new: bool = False,
@@ -86,6 +96,7 @@ def generate_azure_access_token(user_id: str, subscription_id: Optional[str] = N
                 else:
                     # Check if token is still valid (with 5-minute buffer)
                     expires_on = existing_token.get('expires_on')
+                    token_is_fresh = False
                     if expires_on:
                         try:
                             # Azure expires_on is typically a timestamp
@@ -111,17 +122,7 @@ def generate_azure_access_token(user_id: str, subscription_id: Optional[str] = N
                                     normalized_mode,
                                     remaining_seconds,
                                 )
-                                
-                                return {
-                                    'access_token': existing_token['access_token'],
-                                    'subscription_id': existing_token.get('subscription_id') or subscription_id,
-                                    'tenant_id': existing_token.get('tenant_id'),
-                                    'client_id': existing_token.get('client_id'),  # Include for CLI auth
-                                    'client_secret': existing_token.get('client_secret'),  # Include for CLI auth
-                                    'expires_on': existing_token.get('expires_on'),
-                                    'auth_method': existing_token.get('auth_method', 'service_principal'),
-                                    'mode': normalized_mode,
-                                }
+                                token_is_fresh = True
                             else:
                                 logger.info(
                                     "Existing Azure token for user %s expires soon (%.0fs), generating new one",
@@ -132,6 +133,25 @@ def generate_azure_access_token(user_id: str, subscription_id: Optional[str] = N
                             logger.warning(f"Could not parse Azure token expiry time '{expires_on}': {parse_error}")
                     else:
                         logger.info(f"Existing Azure token for user {user_id} has no expiry time, generating new one")
+
+                    # Ask mode must return the read-only app, not the stored agent principal.
+                    if token_is_fresh:
+                        cli_identity = _resolve_azure_credentials(
+                            existing_token, normalized_mode, user_id
+                        )
+                        return {
+                            'access_token': existing_token['access_token'],
+                            # Requested subscription wins: the ARM token is tenant-scoped, so
+                            # reusing it across subscriptions is valid, but the caller's target
+                            # must not be overridden by the stored default (multi-subscription).
+                            'subscription_id': subscription_id or existing_token.get('subscription_id'),
+                            'tenant_id': cli_identity.get('tenant_id'),
+                            'client_id': cli_identity.get('client_id'),
+                            'client_secret': cli_identity.get('client_secret'),
+                            'expires_on': existing_token.get('expires_on'),
+                            'auth_method': existing_token.get('auth_method', 'service_principal'),
+                            'mode': normalized_mode,
+                        }
             else:
                 logger.info(f"No existing Azure token found for user {user_id}")
         except Exception as check_error:
@@ -180,14 +200,13 @@ def generate_azure_access_token(user_id: str, subscription_id: Optional[str] = N
         if not token:
             raise ValueError("Failed to get Azure management token")
         
-        # Store the token for reuse (preserve existing metadata such as read-only config)
+        # Ask mode mints with the read-only app. Persisting that app's client,
+        # tenant, or subscription erases the agent principal. A targeted
+        # subscription must not replace the stored default.
         azure_token_data = dict(token_data)
         azure_token_data.update({
             "access_token": token.token,
-            "subscription_id": target_subscription_id,
-            "tenant_id": tenant_id,
-            "client_id": client_id,
-            "client_secret": client_secret,
+            "subscription_id": token_data.get("subscription_id") or target_subscription_id,
             "expires_on": token.expires_on,
             "auth_method": "service_principal",
             "generated_at": time.time(),
@@ -202,7 +221,10 @@ def generate_azure_access_token(user_id: str, subscription_id: Optional[str] = N
             from utils.auth.token_management import store_tokens_in_db
             from utils.secrets.secret_ref_utils import get_token_owner_id
             owner_id = get_token_owner_id(user_id, "azure")
-            store_tokens_in_db(owner_id, azure_token_data, "azure")
+            # Refreshing an existing connector must not look like a new connect.
+            store_tokens_in_db(
+                owner_id, azure_token_data, "azure", schedule_prediscovery=False
+            )
             logger.info(f"Stored new Azure token in database for user {user_id}")
         except Exception as store_error:
             logger.warning(f"Failed to store Azure token in database: {store_error}")

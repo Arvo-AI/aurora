@@ -5,7 +5,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --user -r requirements.txt
 ARG KUBECTL_VERSION=v1.31.0
 ARG TARGETARCH=amd64
-RUN curl -LO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl" && chmod +x kubectl
+RUN curl -fsSL --proto '=https' --proto-redir '=https' -O "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl" && chmod +x kubectl
 
 FROM python:3.12-slim
 WORKDIR /app

@@ -87,6 +87,21 @@ STORAGE_SECRET_KEY=...
 
 ### MinIO
 
+:::warning MinIO images were removed from public registries
+In September 2026 MinIO deleted `minio/minio` and `minio/mc` from Docker Hub, closed
+anonymous pulls on `quay.io`, and `dl.min.io` now returns `410 Gone`. The community
+edition is [source-only and no longer maintained](https://github.com/minio/minio).
+
+Aurora's chart therefore uses [`pgsty/silo`](https://github.com/pgsty/silo), a
+maintained fork of MinIO's final release. It keeps the S3 API, `MINIO_*` variables,
+health routes, and the on-disk format, so **existing volumes upgrade with no
+migration** — and it still ships CVE fixes. Snapshot the volume first anyway if your
+storage class supports it.
+
+In-cluster storage is still intended for local dev. For production, use one of the
+managed options above.
+:::
+
 ```bash
 STORAGE_TYPE=minio
 STORAGE_BUCKET=aurora

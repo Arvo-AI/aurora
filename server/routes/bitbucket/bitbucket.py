@@ -101,7 +101,7 @@ def bitbucket_login(user_id):
                     "display_name": display_name,
                 }
 
-                store_tokens_in_db(user_id, token_data, "bitbucket")
+                store_tokens_in_db(user_id, token_data, "bitbucket", schedule_prediscovery=True)
                 logger.info("Stored Bitbucket API token credentials")
 
                 return jsonify({
@@ -215,7 +215,7 @@ def bitbucket_callback():
                 "display_name": display_name,
             }
 
-            store_tokens_in_db(user_id, bb_token_data, "bitbucket")
+            store_tokens_in_db(user_id, bb_token_data, "bitbucket", schedule_prediscovery=True)
             logger.info("Stored Bitbucket OAuth credentials")
         except Exception as e:
             logger.error(f"Failed to store Bitbucket credentials: {e}", exc_info=True)

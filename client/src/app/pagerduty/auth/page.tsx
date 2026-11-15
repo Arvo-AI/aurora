@@ -5,6 +5,7 @@ import { useToast } from "@/hooks/use-toast";
 import { pagerdutyService, PagerDutyStatus } from "@/lib/services/pagerduty";
 import { PagerDutyConnectionStep } from "@/components/pagerduty/PagerDutyConnectionStep";
 import { PagerDutyConnectedView } from "@/components/pagerduty/PagerDutyConnectedView";
+import { PagerDutyNotesCard } from "@/components/pagerduty/PagerDutyNotesCard";
 import { PagerDutyWebhookStep } from "@/components/pagerduty/PagerDutyWebhookStep";
 import { TokenInputModal } from "@/components/pagerduty/TokenInputModal";
 import { ConnectionLoadingOverlay } from "@/components/ui/connection-loading-overlay";
@@ -14,6 +15,7 @@ import { getUserFriendlyError } from "@/lib/utils";
 import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
 
 const CACHE_KEY = 'pagerduty_connection_status';
+const NOTES_DISABLED_MESSAGE = "PagerDuty notes were turned off because this token cannot post notes.";
 
 export default function PagerDutyAuthPage() {
   const { toast } = useToast();
@@ -26,6 +28,12 @@ export default function PagerDutyAuthPage() {
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [showRotateModal, setShowRotateModal] = useState(false);
   const [showDisconnectDialog, setShowDisconnectDialog] = useState(false);
+
+  const warnIfNotesDisabled = (result: PagerDutyStatus) => {
+    if (result.notesDisabled) {
+      toast({ description: NOTES_DISABLED_MESSAGE });
+    }
+  };
 
   const updateLocalStorageConnection = (connected: boolean) => {
     if (typeof window === 'undefined') return;
@@ -179,6 +187,7 @@ export default function PagerDutyAuthPage() {
         title: 'Success',
         description: 'PagerDuty connected successfully.',
       });
+      warnIfNotesDisabled(result);
 
       updateLocalStorageConnection(true);
 
@@ -221,6 +230,7 @@ export default function PagerDutyAuthPage() {
       title: 'Success',
       description: 'PagerDuty token changed successfully.',
     });
+    warnIfNotesDisabled(result);
   };
 
   const handleDisconnectConfirm = async () => {
@@ -302,6 +312,7 @@ export default function PagerDutyAuthPage() {
                 onDisconnect={() => setShowDisconnectDialog(true)}
                 loading={loading}
               />
+              <PagerDutyNotesCard status={status} />
               <PagerDutyWebhookStep />
             </div>
           ) : null}

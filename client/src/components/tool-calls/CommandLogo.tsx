@@ -132,6 +132,14 @@ const logos = {
       onError={(e) => console.error('Failed to load Splunk logo:', e)}
     />
   ),
+  elastic: (
+    <img
+      src="/elastic.svg"
+      className="w-4 h-4 min-w-4 min-h-4 object-contain"
+      alt="Elastic"
+      onError={(e) => console.error('Failed to load Elastic logo:', e)}
+    />
+  ),
   jenkins: (
     <img
       src="/jenkins.svg"
@@ -162,6 +170,14 @@ const logos = {
       className="w-4 h-4 min-w-4 min-h-4 object-contain"
       alt="Coroot"
       onError={(e) => console.error('Failed to load Coroot logo:', e)}
+    />
+  ),
+  rabbitmq: (
+    <img
+      src="/rabbitmq.svg"
+      className="w-4 h-4 min-w-4 min-h-4 object-contain"
+      alt="RabbitMQ"
+      onError={(e) => console.error('Failed to load RabbitMQ logo:', e)}
     />
   ),
   dynatrace: (
@@ -294,6 +310,14 @@ const logos = {
       onError={(e) => console.error('Failed to load incident.io logo:', e)}
     />
   ),
+  servicenow: (
+    <img
+      src="/servicenow.svg"
+      className="w-4 h-4 min-w-4 min-h-4 object-contain rounded-sm"
+      alt="ServiceNow"
+      onError={(e) => console.error('Failed to load ServiceNow logo:', e)}
+    />
+  ),
   web: (
     <svg
       className="w-4 h-4 min-w-4 min-h-4 text-blue-600 dark:text-blue-400"
@@ -387,6 +411,18 @@ const logos = {
   )
 }
 
+/** Tool names exposed by the built-in GitHub MCP server, as `mcp_<name>`. */
+const GITHUB_MCP_TOOLS = new Set([
+  'search_repositories', 'create_repository', 'get_repository', 'list_repositories',
+  'get_file_contents', 'create_or_update_file', 'push_files', 'create_issue',
+  'get_issue', 'list_issues', 'update_issue', 'add_issue_comment',
+  'create_pull_request', 'list_pull_requests', 'get_pull_request',
+  'create_pull_request_review', 'merge_pull_request', 'get_pull_request_files',
+  'get_pull_request_status', 'update_pull_request_branch', 'get_pull_request_comments',
+  'get_pull_request_reviews', 'create_release', 'fork_repository', 'create_branch',
+  'list_commits', 'search_code', 'search_issues', 'search_users',
+])
+
 const getLogoForCommand = (command: string | any, toolName: string, provider?: string): keyof typeof logos => {
   const cmd = (typeof command === 'string' ? command : String(command || '')).toLowerCase().trim()
   const tool = toolName.toLowerCase()
@@ -412,8 +448,9 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
     return 'web'
   }
 
-  // Knowledge base tool
-  if (tool === 'knowledge_base_search') {
+  // Memory tools
+  if (tool === 'list_memories' || tool === 'read_memory' || tool === 'write_memory'
+      || tool === 'append_to_memory' || tool === 'edit_memory' || tool === 'grep_memories') {
     return 'knowledgeBase'
   }
 
@@ -425,6 +462,11 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
   // Splunk tools
   if (tool.includes('splunk') || tool === 'search_splunk' || tool === 'list_splunk_indexes' || tool === 'list_splunk_sourcetypes') {
     return 'splunk'
+  }
+
+  // Elastic tools
+  if (tool.startsWith('elastic_')) {
+    return 'elastic'
   }
 
   // CloudBees tools
@@ -445,6 +487,10 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
   // Coroot tools
   if (tool.includes('coroot')) {
     return 'coroot'
+  }
+
+  if (tool.includes('rabbitmq')) {
+    return 'rabbitmq'
   }
 
   if (tool.includes('dynatrace') || tool === 'query_dynatrace') {
@@ -511,6 +557,11 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
     return 'incidentio'
   }
 
+  // ServiceNow tools
+  if (tool === 'list_servicenow_incidents' || tool === 'get_servicenow_incident' || tool.includes('servicenow')) {
+    return 'servicenow'
+  }
+
   // Slack tools
   if (tool.includes('slack') || tool === 'get_channel_history' || tool === 'get_thread_replies') {
     return 'slack'
@@ -573,40 +624,12 @@ const getLogoForCommand = (command: string | any, toolName: string, provider?: s
     return 'aws'
   }
 
-  // GitHub MCP tools - detect with mcp_ prefix
+  // GitHub's MCP server registers its tools as `mcp_<tool>`. Customer-registered
+  // MCP servers are namespaced `mcp_<label>_<tool>`, so matching the tool name
+  // *exactly* after the prefix is what keeps the two apart -- a substring match
+  // gave any custom server exposing a `get_issue` the GitHub logo.
   const isGithubMcpTool = (
-    // Check for GitHub MCP tools with mcp_ prefix
-    tool.startsWith('mcp_') && (
-      tool.includes('search_repositories') ||
-      tool.includes('create_repository') ||
-      tool.includes('get_repository') ||
-      tool.includes('list_repositories') ||
-      tool.includes('get_file_contents') ||
-      tool.includes('create_or_update_file') ||
-      tool.includes('push_files') ||
-      tool.includes('create_issue') ||
-      tool.includes('get_issue') ||
-      tool.includes('list_issues') ||
-      tool.includes('update_issue') ||
-      tool.includes('add_issue_comment') ||
-      tool.includes('create_pull_request') ||
-      tool.includes('list_pull_requests') ||
-      tool.includes('get_pull_request') ||
-      tool.includes('create_pull_request_review') ||
-      tool.includes('merge_pull_request') ||
-      tool.includes('get_pull_request_files') ||
-      tool.includes('get_pull_request_status') ||
-      tool.includes('update_pull_request_branch') ||
-      tool.includes('get_pull_request_comments') ||
-      tool.includes('get_pull_request_reviews') ||
-      tool.includes('create_release') ||
-      tool.includes('fork_repository') ||
-      tool.includes('create_branch') ||
-      tool.includes('list_commits') ||
-      tool.includes('search_code') ||
-      tool.includes('search_issues') ||
-      tool.includes('search_users')
-    ) ||
+    (tool.startsWith('mcp_') && GITHUB_MCP_TOOLS.has(tool.slice(4))) ||
     tool === 'github' ||
     tool === 'github_rca' ||
     // Also check command for GitHub-related keywords

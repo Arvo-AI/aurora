@@ -92,12 +92,14 @@ export function PagerDutyConnectionStep({
             <div className="p-4 bg-muted/50 border rounded-lg">
               <p className="text-sm font-medium mb-2">How to get your API token</p>
               <ol className="text-xs text-muted-foreground space-y-1.5 ml-4 list-decimal">
-                <li>Log in to your PagerDuty account</li>
-                <li>Go to <strong className="text-foreground">Integrations &gt; Developer Tools &gt; API Access Keys</strong></li>
-                <li>Click <strong className="text-foreground">Create New API Key</strong></li>
-                <li>Check <strong className="text-foreground">Read-only API Key</strong> — Aurora only reads incidents and services</li>
+                <li>Log in to PagerDuty as a user with write access (Responder or higher). A dedicated &quot;Aurora&quot; user works best.</li>
+                <li>Go to <strong className="text-foreground">User Icon &gt; My Profile &gt; User Settings &gt; API Access</strong></li>
+                <li>Click <strong className="text-foreground">Create API User Token</strong></li>
                 <li>Copy the key and paste it above</li>
               </ol>
+              <p className="text-xs text-muted-foreground mt-2">
+                A read-only or account-level key still works for reading incidents and triggering RCA, but cannot post RCA notes back to PagerDuty.
+              </p>
               <a
                 href="https://support.pagerduty.com/docs/api-access-keys"
                 target="_blank"

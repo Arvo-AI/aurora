@@ -37,7 +37,7 @@ check_aws_cli() {
 
 # Function to generate a random suffix for unique names
 generate_suffix() {
-    echo $(date +%s%N | md5sum | head -c 6)
+    echo $(date +%s%N | sha256sum | head -c 6)
 }
 
 # Main setup function

@@ -5,11 +5,11 @@ Mirrors the Slack events helpers for feature parity.
 
 import html
 import logging
-import os
 import re
 import requests
 from typing import Optional, Tuple
 from utils.db.connection_pool import db_pool
+from utils.web.public_url import external_backend_url
 from datetime import datetime
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
@@ -39,9 +39,7 @@ def verify_google_chat_request(request_data: dict) -> bool:
         logger.warning("Google Chat request missing Bearer token")
         return False
 
-    backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "").rstrip("/")
-    ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")
-    audience = ngrok_url if ngrok_url and backend_url.startswith("http://localhost") else backend_url
+    audience = external_backend_url()
     events_url = f"{audience}/google-chat/events"
 
     if not events_url or events_url == "/google-chat/events":
@@ -89,16 +87,37 @@ def get_org_google_chat_credentials(sender_email: str) -> Optional[Tuple[str, st
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 # No RLS needed — users not RLS-protected
+                # Google sends whatever case is on the Workspace profile. Fetch 2
+                # so an ambiguous case-insensitive match is detectable below.
                 cursor.execute(
-                    "SELECT id, org_id FROM users WHERE email = %s",
-                    (sender_email,),
+                    "SELECT id, org_id, email FROM users WHERE LOWER(email) = LOWER(%s) "
+                    "ORDER BY (email = %s) DESC, created_at ASC LIMIT 2",
+                    (sender_email, sender_email),
                 )
-                user_row = cursor.fetchone()
-                if not user_row or not user_row[1]:
+                user_rows = cursor.fetchall()
+                if not user_rows:
                     logger.warning(f"No Aurora user or org found for {_mask_email(sender_email)}")
                     return None
 
-                sender_user_id, org_id = user_row
+                # users.email is UNIQUE, so an exact-case hit is unambiguous.
+                exact_match = user_rows[0][2] == sender_email
+
+                # Case-variant rows can span two orgs and, unlike /login, there's
+                # no password here to prove ownership — the OIDC check only
+                # authenticates Google's service account, not the sender. Guessing
+                # would run the event in the wrong tenant, so fail closed.
+                if not exact_match and len(user_rows) > 1:
+                    logger.warning(
+                        "Ambiguous Aurora accounts for Google Chat sender %s; "
+                        "refusing to guess an organization. Reconcile the duplicate users.",
+                        _mask_email(sender_email),
+                    )
+                    return None
+
+                sender_user_id, org_id = user_rows[0][0], user_rows[0][1]
+                if not org_id:
+                    logger.warning(f"No Aurora org found for {_mask_email(sender_email)}")
+                    return None
 
                 from utils.auth.stateless_auth import set_rls_context
                 set_rls_context(cursor, conn, sender_user_id, log_prefix="[GChatHelpers:get_org_creds]")
@@ -395,7 +414,12 @@ def send_message_to_aurora(
                 f"{space_context}\n--- End of space context ---\n"
             )
 
-        full_message = f"{message_text}{context_str}"
+        # Lead with an explicit space identity so the agent can resolve "this
+        # space"/"this channel" and scope any directive it saves to the right
+        # space. Google Chat spaces have no local registry, so the stable
+        # resource id is the anchor.
+        space_header = f"[Google Chat message from space {space_name}]\n\n"
+        full_message = f"{space_header}{message_text}{context_str}"
 
         trigger_metadata = {
             "source": "google_chat",

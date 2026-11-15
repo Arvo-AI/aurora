@@ -22,16 +22,62 @@ fullnameOverride: ""
 services:
   postgres:
     enabled: true    # Set false to use external Postgres (RDS, Cloud SQL, etc.)
+    # max_connections for the in-cluster Postgres (postgres:15-alpine ships 100).
+    # Every Aurora Python process opens its own pool of up to config.DB_POOL_MAX
+    # connections, so the worst case the configured pods can open is:
+    #   server pods  x GUNICORN_WORKERS   x (DB_POOL_MAX + 15)   # +15 for the RBAC engine
+    # + worker pods  x CELERY_CONCURRENCY x DB_POOL_MAX
+    # + chatbot pods x DB_POOL_MAX + celery-beat x DB_POOL_MAX + mcp x 10
+    # With the config defaults (2 workers, pool 20, concurrency 4) one replica of
+    # each is 200, two server + two worker replicas is 350 and 3 + 3 is 500. The
+    # chart refuses to render when that worst case exceeds maxConnections, so
+    # raise it here before adding replicas or enabling autoscaling, and size
+    # resources.postgres.limits.memory with it (about 10Mi per connection on top
+    # of shared_buffers). Changing it restarts the Postgres pod once. Ignored
+    # when services.postgres.enabled is false: set max_connections on your
+    # managed Postgres instead.
+    maxConnections: 300
+    # Extra "postgres -c key=value" style arguments, e.g. ["-c", "shared_buffers=256MB"]
+    extraArgs: []
   redis:
     enabled: true    # Set false to use external Redis (ElastiCache, Memorystore, etc.)
-  weaviate:
-    enabled: true    # Set false to use Weaviate Cloud or external instance
   vault:
     enabled: true    # Set false to use external Vault or other secrets manager
   memgraph:
     enabled: true    # Set false if graph features are not needed
   minio:
     enabled: false   # Set true for local dev (provides S3-compatible storage in-cluster)
+    # minio/minio was pulled from Docker Hub in Sept 2026. pgsty/silo is a
+    # maintained fork of its final release: same S3 API, MINIO_* vars, and
+    # on-disk format, so existing volumes need no migration.
+    # Digest-pinned because Docker Hub tags are mutable.
+    # image.images.minio replaces this block when any of its fields are set
+    # (use repository pgsty/silo plus a registry, not this full path).
+    image:
+      repository: docker.io/pgsty/silo
+      # digest wins: to move to another tag, set it AND clear digest to "".
+      tag: "RELEASE.2026-09-16T00-00-00Z"
+      # Multi-arch index (linux/amd64 + linux/arm64) for the tag above.
+      # Keep this digest equal to aurora.minioPin in templates/_helpers.tpl.
+      digest: "sha256:635197cb9f36d01bee221d34d1c7d7960f6a95c48b0b6c01d99cd13bdae51a46"
+    # Bucket-creation hook. aws-cli, not minio/mc — that was deleted too.
+    # image.images.minioInit replaces this string when any of its fields are set.
+    initImage: "amazon/aws-cli:2.34.6"
+
+# ------------------------------------------------------------------------------
+# Slack Socket Mode (optional)
+# ------------------------------------------------------------------------------
+# Socket Mode runs a listener that opens an OUTBOUND WebSocket to Slack, so
+# Slack events/interactions work with NO public inbound webhook URL — the path
+# for private / self-hosted clusters. The listener deployment renders when
+# either of these is true:
+#   - slackSocketMode.enabled: true, OR
+#   - secrets.backend.SLACK_APP_TOKEN is set inline (see secrets.backend below).
+# If you provide the app token via an EXISTING SECRET (secrets.backend.existingSecret),
+# the chart can't see the value, so you MUST set slackSocketMode.enabled: true to
+# render the listener. The secret must contain SLACK_APP_TOKEN (xapp-...).
+slackSocketMode:
+  enabled: false
 
 # ------------------------------------------------------------------------------
 # ServiceAccount configuration
@@ -66,24 +112,82 @@ serviceAccount:
 # ------------------------------------------------------------------------------
 # Container images
 # ------------------------------------------------------------------------------
+# image.registry / image.tag apply to Aurora images only (server and frontend).
+# chatbot, celery-worker, celery-beat, mcp, and slack run the server image.
+# Everything else (postgres, redis, vault, searxng, memgraph, minio, minioInit)
+# keeps its public name until image.images.<name>.registry is set, so one
+# private registry does not get prepended to redis:7-alpine.
+#
+# Precedence for each image, first match wins:
+#   1. image.images.<name>.digest, or digest on the legacy keys below
+#   2. image.images.<name>.tag, or a non-default repository (own tag, no digest pin)
+#   3. image.digests.<name> from values.images-<version>.yaml
+#   4. image.tag, or the chart appVersion when tag is empty
+# A digest overlay must not set image.registry. Helm merges maps, so a registry
+# key in that file used to replace the registry from values.generated.yaml.
+# The default below is what `-f values.images-<version>.yaml` alone resolves to.
 image:
-  # Container registry where images are stored
-  registry: "your-registry"  #Examples: docker.io/myorg, gcr.io/project-id, ghcr.io/myorg
-  
-  # Image tag (version) to deploy
-  tag: "latest"
-  
-  # Optional: Pull secrets for private registries
+  # Published Aurora images (server, frontend). Set another registry to push
+  # elsewhere (docker.io/myorg, gcr.io/project-id, ghcr.io/myorg).
+  registry: "ghcr.io/arvo-ai"
+
+  # Tag for stock Aurora images. Empty = chart appVersion. Avoid "latest".
+  tag: ""
+
+  # Release digest pins. Empty here; values.images-<version>.yaml fills these
+  # and nothing else, so it composes with the registry in values.generated.yaml.
+  digests: {}
+    # server: "sha256:..."
+    # frontend: "sha256:..."
+
+  # Pull secrets for Aurora images, and for any third-party image whose
+  # registry is overridden and does not set its own pullSecrets.
   # pullSecrets:
   #   - name: regcred
 
-# ------------------------------------------------------------------------------
-# Frontend image override
-# ------------------------------------------------------------------------------
-# When set, the frontend deployment uses this image instead of the default
-# aurora-frontend from image.registry. Useful for custom frontend builds
-# (e.g. with additional analytics or SaaS overlay features).
-# Deploy with: helm upgrade --reuse-values --set frontendImage.tag=sha-abc1234
+  # Set only the fields that differ. A non-default repository ignores image.digests.
+  images: {}
+    # server:
+    #   registry: "registry.example.com/aurora"
+    #   repository: "aurora-server"
+    # frontend:
+    #   registry: "registry.example.com/apps"
+    #   repository: "aurora-frontend"
+    #   tag: "1.5.12"
+    #   pullSecrets:
+    #     - name: frontend-pull
+    # postgres:
+    #   registry: "mirror.example.com"
+    #   repository: "postgres"
+    #   tag: "15-alpine"
+    # redis:
+    #   registry: "mirror.example.com"
+    #   repository: "redis"
+    #   tag: "7-alpine"
+    # vault:
+    #   registry: "mirror.example.com"
+    #   repository: "hashicorp/vault"
+    #   tag: "1.15"
+    # searxng:
+    #   registry: "mirror.example.com"
+    #   repository: "searxng/searxng"
+    #   tag: "2025.5.8-7ca24eee4"
+    # memgraph:
+    #   registry: "mirror.example.com"
+    #   repository: "memgraph/memgraph-mage"
+    #   tag: "3.8.1"
+    # minio:
+    #   registry: "mirror.example.com"
+    #   repository: "pgsty/silo"
+    # minioInit:
+    #   registry: "mirror.example.com"
+    #   repository: "amazon/aws-cli"
+    #   tag: "2.34.6"
+
+# Legacy frontend override. Prefer image.images.frontend — that entry wins
+# per field when both are set. A repository here is a different image: it
+# keeps its own tag and does not take image.digests.frontend.
+# helm upgrade --reuse-values --set frontendImage.repository=aurora-frontend-custom
 frontendImage: {}
   # registry: "ghcr.io/your-org"
   # repository: "aurora-frontend-custom"
@@ -94,18 +198,57 @@ frontendImage: {}
 # ------------------------------------------------------------------------------
 # Autoscaling (HPA)
 # ------------------------------------------------------------------------------
+# Every extra server or worker replica adds GUNICORN_WORKERS x (DB_POOL_MAX + 15)
+# or CELERY_CONCURRENCY x DB_POOL_MAX Postgres connections. With the config
+# defaults, maxReplicas 3 + 3 can open ~500, so raise
+# services.postgres.maxConnections (and the Postgres memory limit) first:
+# helm refuses to render when the worst case for maxReplicas exceeds it.
 autoscaling:
   server:
     enabled: false
     minReplicas: 2
-    maxReplicas: 6
+    maxReplicas: 3
     targetCPU: 70
     targetMemory:         # optional — set to e.g. 80 to also scale on memory
   celeryWorker:
     enabled: false
     minReplicas: 2
-    maxReplicas: 6
+    maxReplicas: 3
     targetCPU: 70
+
+# ------------------------------------------------------------------------------
+# API server probes
+# ------------------------------------------------------------------------------
+# Liveness is a TCP check on port 5080 by default: a saturated pod (every
+# gunicorn thread busy with requests or SSE streams) is not restarted, readiness
+# takes it out of the Service until it drains. server.probes.liveness.type: http
+# instead restarts a pod that cannot answer GET /health/liveness (which needs a
+# free thread) for failureThreshold x periodSeconds.
+# /health/readiness checks Postgres + Redis with short bounded waits and reports
+# a busy connection pool as degraded (HTTP 200) instead of 503, so a busy pool
+# alone never takes the pod out of the Service; only a pod with no free thread
+# for failureThreshold x timeoutSeconds is.
+server:
+  probes:
+    startup:
+      initialDelaySeconds: 10
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 30
+    readiness:
+      periodSeconds: 10
+      timeoutSeconds: 10
+      failureThreshold: 3
+    liveness:
+      # "tcp" (default) = restart only when port 5080 stops accepting
+      # connections; gunicorn's own --timeout replaces a worker whose main loop
+      # hangs. "http" = GET /health/liveness, which needs a free gunicorn
+      # thread, so a pod saturated by an alert burst is restarted after
+      # failureThreshold x periodSeconds instead of being left to drain.
+      type: tcp
+      periodSeconds: 20
+      timeoutSeconds: 10
+      failureThreshold: 6
 
 # ------------------------------------------------------------------------------
 # Extra environment variables (for marketplace metering, custom integrations, etc.)
@@ -122,8 +265,9 @@ extraEnv: []
 # Celery worker pod settings
 # ------------------------------------------------------------------------------
 celeryWorker:
-  # Must exceed run_background_chat's time_limit (1800s) to avoid SIGKILL mid-task
-  terminationGracePeriodSeconds: 1860
+  # Floor is INVESTIGATION_TIMEOUT_SECONDS + 60s. A lower value is raised
+  # in the template so a rolling update does not SIGKILL a running investigation.
+  terminationGracePeriodSeconds: 3660
 
 # ------------------------------------------------------------------------------
 # Replica counts per service
@@ -137,12 +281,10 @@ replicaCounts:
   chatbot: 1         # WebSocket chatbot - stateless, can scale (session affinity enabled by default)
   frontend: 1        # Next.js frontend - stateless, can scale
   searxng: 1         # Web search engine - stateless, can scale
-  transformers: 1    # ML model service - stateless, can scale
   
   # Single-instance services (do NOT increase without additional config)
   celeryBeat: 1      # Task scheduler - only 1 to avoid duplicate tasks
   redis: 1           # Redis - single instance, no clustering configured
-  weaviate: 1        # Vector database - single instance, clustering requires additional config
   memgraph: 1        # Graph database - single instance, in-memory
   vault: 1           # Secrets manager - single instance, HA requires additional config
   postgres: 1        # Database - single instance, replication requires additional config
@@ -172,16 +314,11 @@ config:
   STORAGE_CACHE_ENABLED: "true"
   STORAGE_CACHE_TTL: "60"
   
-  # --- Vector Database (Weaviate) ---
-  WEAVIATE_HOST: ""  # Auto-generated if empty: <release>-weaviate
-  WEAVIATE_PORT: "8080"
-  WEAVIATE_GRPC_PORT: "50051"
-  
   # --- Graph Database (Memgraph) ---
   MEMGRAPH_HOST: ""  # Auto-generated if empty: <release>-memgraph
   MEMGRAPH_PORT: "7687"
   MEMGRAPH_SCHEME: "bolt"  # Use "bolt+ssc" for Memgraph Cloud (SSL, self-signed), "bolt+s" for CA-signed SSL
-  MEMGRAPH_MEMORY_LIMIT: "512"  # MB, passed to --memory-limit flag
+  MEMGRAPH_MEMORY_LIMIT: "1536"  # MB, passed to --memory-limit flag; keep below resources.memgraph.limits.memory
   
   # --- SSL/TLS for External Services ---
   # PostgreSQL: "prefer" auto-negotiates TLS (works for RDS/Cloud SQL out of box)
@@ -190,8 +327,6 @@ config:
   # Redis: use rediss:// in REDIS_URL to enable TLS
   REDIS_SSL_CA_CERTS: ""          # Path to CA cert for Redis TLS
   REDIS_SSL_CERT_REQS: ""         # "none", "optional", "required"
-  # Weaviate: set to "true" for HTTPS+gRPC-TLS
-  WEAVIATE_SECURE: "false"
   
   # --- Public URLs (REQUIRED) ---
   # NEXT_PUBLIC_* vars are written to window.__ENV by docker-entrypoint.sh at startup.
@@ -224,6 +359,12 @@ config:
   # --- LLM Configuration ---
   LLM_PROVIDER_MODE: "openrouter"  #Provider: openrouter, openai, anthropic, google
   AGENT_RECURSION_LIMIT: "240" #Maximum number of steps an agent can take
+  # Wall-clock limit for one investigation, in seconds. Default is one hour.
+  # Clamped to 120–10800. Worker grace and nginx proxy timeouts follow this.
+  INVESTIGATION_TIMEOUT_SECONDS: "3600"
+  # Stop an investigation that makes no progress for this long, in seconds.
+  # Minimum 120; "0" turns the check off.
+  INVESTIGATION_STALL_SECONDS: "600"
   # Tool-output context budgets. Values must be positive integers and the
   # pass-through limit must remain smaller than the summarization-input limit.
   TOOL_OUTPUT_PASS_THROUGH_CHARS: "40000"
@@ -240,13 +381,44 @@ config:
   GUARDRAILS_SIGMA_ENABLED: "true"
   # Safety judge / input rail model (provider/model format). Empty = use MAIN_MODEL.
   GUARDRAILS_LLM_MODEL: ""
+  # On by default. 3.6 Flash uses minimal; 3.8 Flash, Pro, and Argon use low.
+  # 2.5 Flash uses budget 0; 2.5 Pro uses 128. GPT-5 and o-series use effort
+  # low; gpt-5.5-pro uses medium. Set false for the model default. Haiku, and
+  # Ollama/OpenRouter weights that think, get an off switch. Restart required.
+  GUARDRAILS_DISABLE_THINKING: "true"
+  # Seconds the judge may run before the command is blocked. Default 10.
+  # Clamped to 5–60. A restart is not required.
+  GUARDRAILS_LLM_TIMEOUT_SECONDS: "10"
+
+  # --- Slack live progress ---
+  # Keep editing the "Thinking…" placeholder with elapsed time, the running tool
+  # and the agent's latest thought while a background investigation runs.
+  SLACK_PROGRESS_UPDATES_ENABLED: "true"
+  # Seconds between edits (min 10; one chat.update per interval per thread).
+  SLACK_PROGRESS_UPDATE_INTERVAL_SECONDS: "30"
 
   # --- Concurrency & Pool Sizing ---
+  # Each of GUNICORN_WORKERS and CELERY_CONCURRENCY is a separate process with
+  # its own DB_POOL_MAX-sized pool, and this config reaches every pod (server,
+  # worker, chatbot, beat), so size Postgres for all of them: see
+  # services.postgres.maxConnections. A request that finds its pool empty waits
+  # DB_POOL_WAIT_TIMEOUT seconds before failing; the readiness probe waits 1s
+  # and reports "degraded" instead. DB_CONNECT_TIMEOUT bounds the TCP connect
+  # to Postgres so an unreachable database fails fast instead of hanging threads.
+  # Incident SSE streams (one per open Incidents tab; each pins a thread for
+  # its lifetime) are capped per server process at SSE_MAX_STREAMS_PER_PROCESS,
+  # never more than GUNICORN_THREADS - 2; extra tabs are told to retry in 15s.
   GUNICORN_WORKERS: "2"
-  GUNICORN_THREADS: "4"
+  GUNICORN_THREADS: "32"
   CELERY_CONCURRENCY: "4"
   DB_POOL_MIN: "2"
   DB_POOL_MAX: "20"
+  DB_POOL_WAIT_TIMEOUT: "5"
+  # Seconds a starting server waits for the migration lock before failing;
+  # keep it under the startup probe window.
+  DB_MIGRATION_LOCK_TIMEOUT: "240"
+  DB_CONNECT_TIMEOUT: "10"
+  SSE_MAX_STREAMS_PER_PROCESS: "8"
 
   # --- Performance & Caching ---
   AURORA_SETUP_CACHE_ENABLED: "true"
@@ -254,6 +426,15 @@ config:
   AURORA_CACHE_TOKEN_IN_REDIS: "false"
   RCA_OPTIMIZE_COSTS: "false"
   GEMINI_DISABLE_THINKING: "false"
+
+  # --- Embedding model for alert correlation (optional) ---
+  # Improves alert-to-incident grouping with semantic similarity.
+  # Requires a DIRECT API key — OpenRouter does NOT support embeddings.
+  # If empty, uses Jaccard token similarity (works fine for most cases).
+  # Format: provider/model-name
+  # Examples: openai/text-embedding-3-small, google/text-embedding-004,
+  #           bedrock/amazon.titan-embed-text-v2:0
+  EMBEDDING_MODEL: ""
 
   # --- Multi-agent RCA orchestrator (opt-in) ---
   # When "false" (default), background RCA uses the legacy single-agent path.
@@ -271,6 +452,20 @@ config:
   SUMMARIZATION_MODEL: ""
   # Model used by the Next Steps enrichment pass (rationale, undo commands, safety labels). Empty = falls back to MAIN_MODEL.
   ENRICHMENT_MODEL: ""
+  # Memory selector. Empty = a small model the active provider can serve.
+  # The loader used to return only the newest 200 memories.
+  MEMORY_SELECTOR_MODEL: ""
+  # Root-cause recurrence detection (dedup layer 1): off | shadow | live.
+  # Defaults to "live" (folding on). Set to "off" to disable, or "shadow" to
+  # log verdicts without folding.
+  RECURRENCE_DETECTION_MODE: "live"
+  # Wall-clock budget (seconds) for one recurrence check; keep well under the
+  # summarization task's soft time limit (330s) minus summary work.
+  RECURRENCE_AGENT_TIMEOUT_SECONDS: "120"
+  # Model for the recurrence agent. Empty = falls back to MAIN_MODEL.
+  RECURRENCE_AGENT_MODEL: ""
+  # Yes/no model for Jira automatic RCA. Empty = falls back to the resolved RCA_MODEL.
+  JIRA_RCA_JUDGE_MODEL: ""
 
   # --- AWS Bedrock (non-secret config; credentials live in secrets.llm) ---
   # Gateway mode: set BEDROCK_BASE_URL to an OpenAI-compatible endpoint in front of
@@ -284,7 +479,13 @@ config:
   RATE_LIMITING_ENABLED: "false"
   RATE_LIMIT_HEADERS_ENABLED: "true"
   SPLUNK_SSL_VERIFY: "false" # "false" (default), "true", or path to a private CA bundle
+  RABBITMQ_SSL_VERIFY: "false" # "false" (default), "true", or path to a private CA bundle
+  ELASTIC_SSL_VERIFY: "true" # "true" (default), "false", or path to a private CA bundle
   AURORA_VERIFY_CLI_IDENTITY: "false"
+  # Custom MCP servers: allow private/loopback MCP URLs (default for OSS Helm).
+  # Set "false" on multi-tenant SaaS so a tenant cannot SSRF Aurora toward
+  # internal services (metadata endpoints, Vault, the database, etc.).
+  MCP_ALLOW_PRIVATE_TARGETS: "true"
   
   # --- Optional Features (enable as needed) ---
   ENABLE_POD_ISOLATION: "false"               # Isolate terminal commands in separate pods
@@ -292,17 +493,19 @@ config:
   NEXT_PUBLIC_ENABLE_OVH: "false"            # OVH Cloud integration
   NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH: "false" # PagerDuty integration
   NEXT_PUBLIC_ENABLE_SHAREPOINT: "false"     # SharePoint integration
-  NEXT_PUBLIC_ENABLE_JIRA: "false"           # Jira integration
   NEXT_PUBLIC_ENABLE_NOTION: "false"         # Notion integration
   NEXT_PUBLIC_ENABLE_SPINNAKER: "false"      # Spinnaker integration
   NEXT_PUBLIC_ENABLE_VISUALIZATION: "false"  # Incident infra visualization UI (pairs with VISUALIZATION_ENABLED)
+  HOSTED_SIGNUP_ENABLED: "false"             # One-click GitHub App / "Add to Slack" signup from website (GitHub needs GITHUB_APP_CLIENT_SECRET)
+  MARKETING_SITE_URL: ""                     # Website a cancelled "Add to Slack" returns to; empty = app sign-in page
+  SSO_ENFORCE_DOMAIN_VERIFICATION: "false"   # SAML SSO: require DNS proof of email-domain ownership (set true when multi-tenant)
   
   # --- Pod Isolation Settings ---
   # When enabled, the chart automatically creates:
   #   - Terminal namespace (TERMINAL_NAMESPACE)
   #   - RBAC Role/RoleBindings for server and chatbot to manage terminal pods
   #   - NetworkPolicy blocking terminal pods from accessing cluster services
-  #     (Vault, Weaviate, Postgres, Redis, etc.) while allowing external internet
+  #     (Vault, Postgres, Redis, etc.) while allowing external internet
   #   - K8s API tokens mounted on server/chatbot pods
   # Optional additional hardening (manual):
   #   - Create RuntimeClass for gVisor/Kata sandboxing (set TERMINAL_RUNTIME_CLASS)
@@ -367,6 +570,14 @@ secrets:
     SLACK_CLIENT_ID: ""          # Get from: https://api.slack.com/apps
     SLACK_CLIENT_SECRET: ""
     SLACK_SIGNING_SECRET: ""
+    # Socket Mode: for private/self-hosted clusters with NO public webhook URL.
+    # Set SLACK_APP_TOKEN to an app-level token (xapp-...) with connections:write
+    # to make Aurora open an outbound WebSocket to Slack (no ingress/TLS endpoint
+    # needed) and render the slack-socket-mode deployment. Leave empty for HTTP
+    # webhooks. Also enable Socket Mode in the Slack app config. If you supply this
+    # token via existingSecret instead of inline, set slackSocketMode.enabled: true
+    # (above) so the listener still renders.
+    SLACK_APP_TOKEN: ""
 
     # --- Optional: Google Chat Integration ---
     GOOGLE_CHAT_CLIENT_ID: ""              # OAuth client ID (for setup flow)
@@ -381,6 +592,7 @@ secrets:
     NEXT_PUBLIC_GITHUB_APP_SLUG: ""        # URL slug (e.g. aurora-acme-prod)
     GITHUB_APP_WEBHOOK_URL: ""             # https://<your-host>/github/webhook
     GITHUB_APP_SETUP_URL: ""               # https://<your-host>/github
+    GITHUB_APP_CLIENT_SECRET: ""            # OAuth client secret (for hosted signup flow)
     GITHUB_APP_WEBHOOK_SECRET: ""          # openssl rand -hex 32 (also stored in secrets backend)
 
     # --- GitHub OAuth (only when GITHUB_AUTH_MODE=oauth or hybrid) ---
@@ -514,12 +726,12 @@ containerSecurityContext:
 resources:
   server:
     requests:
-      cpu: "200m"
-      memory: "512Mi"
+      cpu: "500m"
+      memory: "1Gi"
       ephemeral-storage: "1Gi"
     limits:
       cpu: "2000m"
-      memory: "2Gi"
+      memory: "4Gi"
       ephemeral-storage: "2Gi"
   mcp:
     requests:
@@ -532,37 +744,46 @@ resources:
       ephemeral-storage: "500Mi"
   celeryWorker:
     requests:
-      cpu: "100m"
+      cpu: "500m"
       memory: "1Gi"
       ephemeral-storage: "1Gi"
     limits:
-      cpu: "1000m"
+      cpu: "2000m"
       memory: "4Gi"
       ephemeral-storage: "2Gi"
   celeryBeat:
     requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  # Slack Socket Mode listener: lightweight, just holds a WebSocket and
+  # dispatches events into the same background chat pipeline as the webhook.
+  slackSocketMode:
+    requests:
       cpu: "50m"
       memory: "128Mi"
     limits:
-      cpu: "200m"
-      memory: "256Mi"
+      cpu: "300m"
+      memory: "512Mi"
   chatbot:
     requests:
-      cpu: "100m"
-      memory: "256Mi"
+      cpu: "200m"
+      memory: "512Mi"
       ephemeral-storage: "100Mi"
     limits:
-      cpu: "500m"
-      memory: "1Gi"
+      cpu: "1000m"
+      memory: "2Gi"
       ephemeral-storage: "1Gi"
   frontend:
     requests:
-      cpu: "50m"
-      memory: "256Mi"
+      cpu: "200m"
+      memory: "512Mi"
       ephemeral-storage: "512Mi"
     limits:
-      cpu: "300m"
-      memory: "512Mi"
+      cpu: "2000m"
+      memory: "2Gi"
       ephemeral-storage: "1Gi"
   redis:
     requests:
@@ -582,31 +803,15 @@ resources:
       cpu: "300m"
       memory: "512Mi"
       ephemeral-storage: "1Gi"
-  weaviate:
-    requests:
-      cpu: "100m"
-      memory: "512Mi"
-      ephemeral-storage: "100Mi"
-    limits:
-      cpu: "500m"
-      memory: "1Gi"
-      ephemeral-storage: "1Gi"
   memgraph:
     requests:
-      cpu: "100m"
-      memory: "512Mi"
+      cpu: "250m"
+      memory: "1Gi"
       ephemeral-storage: "100Mi"
     limits:
-      cpu: "500m"
-      memory: "1Gi"
-      ephemeral-storage: "500Mi"
-  transformers:
-    requests:
-      cpu: "100m"
-      memory: "512Mi"
-    limits:
-      cpu: "500m"
+      cpu: "1000m"
       memory: "2Gi"
+      ephemeral-storage: "500Mi"
   vault:
     requests:
       cpu: "50m"
@@ -617,13 +822,16 @@ resources:
       memory: "256Mi"
       ephemeral-storage: "1Gi"
   postgres:
+    # Each open connection is a Postgres backend (~5-10Mi); size the limit for
+    # services.postgres.maxConnections on top of shared_buffers (128MB on this
+    # image) so a busy hour cannot OOMKill the database.
     requests:
       cpu: "100m"
-      memory: "512Mi"
+      memory: "1Gi"
       ephemeral-storage: "50Mi"
     limits:
-      cpu: "500m"
-      memory: "1Gi"
+      cpu: "1000m"
+      memory: "2Gi"
       ephemeral-storage: "1Gi"
   minio:
     requests:
@@ -691,19 +899,11 @@ affinity: {}
 #     tolerations: []
 #     nodeSelector: {}
 #     affinity: {}
-#   transformers:
-#     tolerations: []
-#     nodeSelector: {}
-#     affinity: {}
 #   postgres:
 #     tolerations: []
 #     nodeSelector: {}
 #     affinity: {}
 #   redis:
-#     tolerations: []
-#     nodeSelector: {}
-#     affinity: {}
-#   weaviate:
 #     tolerations: []
 #     nodeSelector: {}
 #     affinity: {}
@@ -722,8 +922,6 @@ affinity: {}
 persistence:
   postgres:
     size: 50Gi           # Database storage
-  weaviate:
-    size: 50Gi           # Vector embeddings storage
   vault:
     size: 10Gi           # Secrets storage
   redis:
@@ -762,13 +960,13 @@ ingress:
   # Controller-specific annotations (auto-applied based on className)
   # ----------------------------------------------------------------
   # These are critical for Aurora's functionality:
-  #   - proxy-read-timeout: 3600s - Required for long-running RCA analysis (240 agent iterations can take 30+ minutes)
+  #   - proxy-read-timeout: 7200s - Must cover INVESTIGATION_TIMEOUT_SECONDS (default one hour)
   #   - proxy-http-version: 1.1 - Required for WebSocket upgrade
   #   - proxy-body-size: 50m - Required for file uploads
   #
   # WARNING: Regardless of which controller you use, you MUST ensure these
   # settings are configured (via annotations, IngressClass params, or controller config):
-  #   - Read and send timeout: 3600s - Required for long-running RCA analysis
+  #   - Read and send timeout: at least INVESTIGATION_TIMEOUT_SECONDS (default 3600; chart default 7200)
   #   - HTTP version: 1.1 - Required for WebSocket upgrade
   #   - Max body size: 50m - Required for file uploads
   # Without these, you'll experience WebSocket disconnects, failed upgrades,
@@ -781,8 +979,8 @@ ingress:
   nginx:
     # Auto-apply nginx annotations when className is "nginx"
     enabled: true  # Set to false to disable nginx defaults even when className is nginx
-    proxyReadTimeout: "3600"
-    proxySendTimeout: "3600"
+    proxyReadTimeout: "7200"
+    proxySendTimeout: "7200"
     proxyBodySize: "50m"
     proxyHttpVersion: "1.1"
     # Cookie-based session affinity for WebSocket connections
@@ -790,7 +988,7 @@ ingress:
     sessionAffinity:
       enabled: true
       cookieName: "aurora-ws-affinity"
-      cookieMaxAge: "3600"
+      cookieMaxAge: "7200"
   
   # TLS/HTTPS Configuration
   # ------------------------
@@ -851,7 +1049,7 @@ ingress:
 # MITIGATIONS IN PLACE:
 #   1. Terminal pods run in an isolated namespace with a default-deny NetworkPolicy
 #      that blocks all egress to cluster-internal IPs (see pod-isolation.yaml).
-#      Untrusted pods cannot reach Vault, Weaviate, Postgres, Redis, or any other internal services.
+#      Untrusted pods cannot reach Vault, Postgres, Redis, or any other internal services.
 #   2. Terminal pods never receive Vault tokens - credentials are fetched by
 #      trusted pods and injected per-command via environment variables.
 #
@@ -872,7 +1070,7 @@ ingress:
 # WARNING: If KMS key is deleted, Vault data is permanently unrecoverable.
 vault:
   seal:
-    # Options: "shamir" (default), "gcpckms", "awskms"
+    # Options: "shamir" (default), "gcpckms", "awskms", "azurekeyvault"
     type: "shamir"
     
     # GCP Cloud KMS Configuration
@@ -895,3 +1093,15 @@ vault:
     #   #     --from-literal=access_key=AKIA... \
     #   #     --from-literal=secret_key=...
     #   # credentials: true
+
+    # Azure Key Vault Configuration
+    # See website/docs/deployment/vault-kms-setup.md for setup instructions
+    # Uses AKS Workload Identity: also set
+    #   serviceAccount.vault.annotations:
+    #     azure.workload.identity/client-id: "<managed identity client id>"
+    # azurekeyvault:
+    #   tenant_id: "00000000-0000-0000-0000-000000000000"
+    #   vault_name: "my-keyvault"        # Key Vault name, not its URL
+    #   key_name: "vault-unseal-key"     # RSA key in that Key Vault
+    #   # environment: "AzurePublicCloud" # or AzureUSGovernmentCloud, AzureChinaCloud
+    #   # workloadIdentity: false         # skip the pod label (e.g. node managed identity)

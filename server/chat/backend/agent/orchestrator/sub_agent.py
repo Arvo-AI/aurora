@@ -282,7 +282,11 @@ async def _run_with_timeout(input_dict: dict) -> FindingRef:
         logger.debug("sub_agent: role_meta lookup failed, using default timeout %ds", _DEFAULT_TIMEOUT_SECONDS, exc_info=True)
 
     try:
-        return await asyncio.wait_for(_run(input_dict), timeout=timeout)
+        # wait_for enforces the limit, so the stall watchdog waits for it too.
+        # A sub-agent's own steps may not reach the parent's event stream.
+        from utils.progress_watch import bounded_call
+        with bounded_call(timeout, f"sub-agent {agent_id}"):
+            return await asyncio.wait_for(_run(input_dict), timeout=timeout)
     except asyncio.TimeoutError:
         logger.warning(
             "sub_agent_node: timeout agent=%s incident=%s after %ds",
@@ -482,7 +486,6 @@ async def _run(input_dict: dict) -> FindingRef:
     try:
         from chat.backend.agent.agent import Agent
         from chat.backend.agent.db import PostgreSQLClient
-        from chat.backend.agent.weaviate_client import WeaviateClient
         from chat.backend.agent.utils.state import State
         from langchain_core.messages import HumanMessage
 
@@ -506,10 +509,8 @@ async def _run(input_dict: dict) -> FindingRef:
         )
 
         postgres_client = PostgreSQLClient()
-        weaviate_client = WeaviateClient(postgres_client)
         try:
             agent = Agent(
-                weaviate_client=weaviate_client,
                 postgres_client=postgres_client,
             )
             if tool_capture is not None:
@@ -524,10 +525,6 @@ async def _run(input_dict: dict) -> FindingRef:
 
             logger.info("sub_agent: agent completed for agent=%s incident=%s", inp.agent_id, inc_hash)
         finally:
-            try:
-                weaviate_client.close()
-            except Exception:
-                logger.exception("sub_agent: failed to close weaviate_client for agent=%s", inp.agent_id)
             try:
                 postgres_client.close()
             except Exception:

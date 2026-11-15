@@ -12,8 +12,11 @@ from pydantic import BaseModel, Field
 from routes.datadog.config import MAX_OUTPUT_SIZE, MAX_RESULTS_CAP
 from routes.datadog.datadog_routes import (
     DatadogAPIError,
-    _get_stored_datadog_credentials,
+    account_label,
+    _account_summary,
     _build_client_from_creds,
+    list_datadog_accounts,
+    select_datadog_account,
 )
 
 logger = logging.getLogger(__name__)
@@ -21,13 +24,16 @@ logger = logging.getLogger(__name__)
 
 class QueryDatadogArgs(BaseModel):
     resource_type: str = Field(
-        description="Type of data to query: 'logs', 'metrics', 'metric_stats', 'monitors', "
-        "'events', 'traces', 'hosts', or 'incidents'"
+        description="Type of data to query: 'accounts', 'logs', 'metrics', 'metric_stats', "
+        "'monitors', 'events', 'traces', 'hosts', or 'incidents'. Use 'accounts' to list the "
+        "connected Datadog organizations before querying, since more than one may be connected."
     )
     query: str = Field(
         default="",
         description="Search query. Syntax varies by resource type. "
-        "Logs: 'service:web status:error'. Metrics: 'avg:system.cpu.user{*}'. "
+        "Logs: 'service:web status:error'. Metrics: one expression, 'avg:system.cpu.user{*}'. "
+        "A comma inside {} is a tag filter; a comma outside {} is another expression "
+        "and is queried separately. Do not send a formula (a + b, avg:cpu{*} / avg:mem{*}). "
         "Metric_stats: same metric syntax as metrics, grouping encouraged "
         "e.g. 'sum:kubernetes.memory.usage{env:production} by {kube_deployment}'. "
         "Monitors: name filter. Events: source filter. "
@@ -50,6 +56,14 @@ class QueryDatadogArgs(BaseModel):
         "granularity that keeps each series under ~1000 points (a 30-day window "
         "auto-picks 1h). For 'metrics', omitting it leaves Datadog's own default "
         "resolution in place.",
+    )
+    account: Optional[str] = Field(
+        default=None,
+        description="Which connected Datadog organization to query, by its label from "
+        "resource_type='accounts'. Labels default to the Datadog org name and may be "
+        "overridden. Several orgs are commonly connected (per environment, region, business "
+        "unit or customer); omitting this queries the primary, which may be the wrong org "
+        "for the alert under investigation.",
     )
 
 
@@ -110,9 +124,12 @@ def _to_unix_ms(time_str: str) -> int:
 
 
 def is_datadog_connected(user_id: str) -> bool:
-    """Check if a user has valid Datadog credentials stored."""
-    creds = _get_stored_datadog_credentials(user_id)
-    return _build_client_from_creds(creds) is not None if creds else False
+    """Check if a user has at least one usable Datadog connection.
+
+    Must stay list-aware: returning False here silently removes query_datadog
+    from the agent's toolset, with no error anywhere to explain the absence.
+    """
+    return bool(list_datadog_accounts(user_id))
 
 
 # ---------------------------------------------------------------------------
@@ -143,9 +160,138 @@ def _query_logs(client, query: str, time_from: str, time_to: str, limit: int, **
     return {"resource_type": "logs", "count": len(logs), "results": logs}
 
 
+def _split_top_level_commas(query: str) -> list[str]:
+    """Split on commas that separate expressions, not commas inside a filter or a call."""
+    parts: list[str] = []
+    buf: list[str] = []
+    brace = paren = bracket = 0
+    quote = None
+    i, n = 0, len(query)
+    while i < n:
+        c = query[i]
+        if quote:
+            buf.append(c)
+            # Escaped quote stays inside the string.
+            if c == "\\" and i + 1 < n:
+                buf.append(query[i + 1])
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+            i += 1
+            continue
+        if c in ("'", '"'):
+            quote = c
+            buf.append(c)
+            i += 1
+            continue
+        if c == "{":
+            brace += 1
+        elif c == "}" and brace:
+            brace -= 1
+        elif c == "(":
+            paren += 1
+        elif c == ")" and paren:
+            paren -= 1
+        elif c == "[":
+            bracket += 1
+        elif c == "]" and bracket:
+            bracket -= 1
+        # A comma here separates expressions. Inside {} or () it is a tag or an argument.
+        elif c == "," and brace == paren == bracket == 0:
+            parts.append("".join(buf))
+            buf = []
+            i += 1
+            continue
+        buf.append(c)
+        i += 1
+    parts.append("".join(buf))
+    return parts
+
+
+def _is_binary_minus(expr: str, index: int) -> bool:
+    """A hyphen inside a metric name is not subtraction."""
+    prev = expr[index - 1] if index else ""
+    nxt = expr[index + 1] if index + 1 < len(expr) else ""
+    if (prev.isalnum() or prev in "._") and (nxt.isalnum() or nxt in "._"):
+        return False
+    # timeshift(avg:m{*}, -3600) is a function argument, not a formula.
+    stripped = expr[:index].rstrip()
+    if not stripped or stripped[-1] in "(,":
+        return False
+    return True
+
+
+def _is_metric_formula(expr: str) -> bool:
+    """Arithmetic between metrics belongs in a formula, which this API does not send."""
+    brace = 0
+    quote = None
+    i, n = 0, len(expr)
+    while i < n:
+        c = expr[i]
+        if quote:
+            if c == "\\" and i + 1 < n:
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+            i += 1
+            continue
+        if c in ("'", '"'):
+            quote = c
+            i += 1
+            continue
+        if c == "{":
+            brace += 1
+        elif c == "}" and brace:
+            brace -= 1
+        # {*} is a scope wildcard, not multiplication.
+        elif brace == 0 and c in "+*/":
+            return True
+        # Subtraction between two metrics. A hyphen inside a name is not this.
+        elif brace == 0 and c == "-" and _is_binary_minus(expr, i):
+            return True
+        i += 1
+    return False
+
+
+def _metric_expressions(query: str) -> list[str]:
+    """One timeseries query per expression. A formula is rejected, not forwarded."""
+    expressions = []
+    for part in _split_top_level_commas(query):
+        expr = part.strip()
+        # A trailing comma would otherwise be sent as an empty query.
+        if not expr:
+            raise ValueError(
+                "Metric query has an empty expression. Pass one expression "
+                "such as avg:system.cpu.user{*}, or several separated by commas."
+            )
+        # Arithmetic is a formula. The timeseries query field rejects it.
+        if _is_metric_formula(expr):
+            raise ValueError(
+                "Metric query must be one expression, not a formula. "
+                "Query each metric on its own (avg:system.cpu.user{*}) "
+                "instead of combining them with + - * /."
+            )
+        expressions.append(expr)
+    return expressions
+
+
+def _one_metrics_result(client, expr: str, start_ms: int, end_ms: int, interval) -> dict:
+    response = client.query_metrics(query=expr, start_ms=start_ms, end_ms=end_ms, interval=interval)
+    data = response.get("data", {})
+    attrs = data.get("attributes", {}) if isinstance(data, dict) else {}
+    return {
+        "series": attrs.get("series", []),
+        "times": attrs.get("times", []),
+        "values": attrs.get("values", []),
+    }
+
+
 def _query_metrics(client, query: str, time_from: str, time_to: str, limit: int, **kwargs) -> dict:
     if not query:
         raise ValueError("query is required for resource_type='metrics' (e.g., 'avg:system.cpu.user{*}')")
+    expressions = _metric_expressions(query)
     start_ms = _to_unix_ms(time_from)
     end_ms = _to_unix_ms(time_to)
     # Honour an explicit interval, but do NOT auto-pick one here. Datadog's own
@@ -154,15 +300,16 @@ def _query_metrics(client, query: str, time_from: str, time_to: str, limit: int,
     # right-sizing. metric_stats auto-picks because it is new and owns its own
     # contract.
     interval = _clamp_interval(kwargs.get("interval"))
-    response = client.query_metrics(query=query, start_ms=start_ms, end_ms=end_ms, interval=interval)
-    data = response.get("data", {})
-    attrs = data.get("attributes", {}) if isinstance(data, dict) else {}
-    result_data = {
-        "series": attrs.get("series", []),
-        "times": attrs.get("times", []),
-        "values": attrs.get("values", []),
-    }
-    return {"resource_type": "metrics", "count": len(result_data["series"]), "results": [result_data]}
+    results = []
+    total = 0
+    for expr in expressions:
+        item = _one_metrics_result(client, expr, start_ms, end_ms, interval)
+        # Several expressions came in as one string. Name each result.
+        if len(expressions) > 1:
+            item["query"] = expr
+        results.append(item)
+        total += len(item["series"])
+    return {"resource_type": "metrics", "count": total, "results": results}
 
 
 # ---------------------------------------------------------------------------
@@ -371,9 +518,56 @@ def _point_cap_note(span_ms: int, chosen_interval: int, caller_interval: Optiona
     )
 
 
+def _combine_metric_stats(parts: list[dict]) -> dict:
+    results = []
+    for part in parts:
+        results.extend(part.get("results") or [])
+    combined = {
+        "resource_type": "metric_stats",
+        "metrics_source": "datadog",
+        "interval_ms": parts[0].get("interval_ms"),
+        "series_returned": sum(part.get("series_returned", 0) for part in parts),
+        "series_included": len(results),
+        "count": len(results),
+        "results": results,
+    }
+    notes = [part["note"] for part in parts if part.get("note")]
+    # A per-query warning has to survive the merge or the agent reads a partial window as complete.
+    if notes:
+        combined["note"] = " ".join(notes)
+    malformed = sum(part.get("malformed_series", 0) for part in parts)
+    if malformed:
+        combined["malformed_series"] = malformed
+        combined["malformed_note"] = " ".join(
+            part["malformed_note"] for part in parts if part.get("malformed_note")
+        )
+    window = next((part for part in parts if part.get("window_note")), None)
+    if window:
+        combined["window_exceeds_point_cap"] = True
+        combined["window_note"] = window["window_note"]
+    if any(part.get("series_truncated") for part in parts):
+        combined["series_truncated"] = True
+    dropped = sum(part.get("series_dropped", 0) for part in parts)
+    if dropped:
+        combined["series_dropped"] = dropped
+    return combined
+
+
 def _p95_datadog(client, query: str, time_from: str, time_to: str, limit: int,
                  interval: Optional[int] = None) -> dict:
     """Datadog backend: fetch raw rolled-up points and reduce them in Python."""
+    expressions = _metric_expressions(query)
+    # The timeseries API accepts one expression. A comma-separated list is N calls.
+    if len(expressions) > 1:
+        parts = []
+        for expr in expressions:
+            part = _p95_datadog(client, expr, time_from, time_to, limit, interval)
+            for row in part.get("results") or []:
+                row["query"] = expr
+            parts.append(part)
+        return _combine_metric_stats(parts)
+
+    query = expressions[0]
     start_ms = _to_unix_ms(time_from)
     end_ms = _to_unix_ms(time_to)
     chosen_interval = _pick_interval(end_ms - start_ms, interval)
@@ -561,6 +755,11 @@ _HANDLERS = {
     "incidents": _query_incidents,
 }
 
+# 'accounts' is deliberately not in _HANDLERS: it reads local credential metadata
+# and needs no DatadogClient, so it is served before account resolution (which
+# would otherwise have to pick an org just to be told which orgs exist).
+_ACCOUNTS_RESOURCE = "accounts"
+
 
 # ---------------------------------------------------------------------------
 # Main entry point
@@ -574,6 +773,7 @@ def query_datadog(
     time_to: str = "now",
     limit: int = 100,
     interval: Optional[int] = None,
+    account: Optional[str] = None,
     user_id: Optional[str] = None,
     **kwargs,
 ) -> str:
@@ -581,21 +781,44 @@ def query_datadog(
     if not user_id:
         return json.dumps({"error": "User context not available"})
 
-    creds = _get_stored_datadog_credentials(user_id)
-    if not creds:
+    resource_type = resource_type.lower().strip()
+
+    accounts = list_datadog_accounts(user_id)
+    if not accounts:
         return json.dumps({"error": "Datadog not connected. Please connect Datadog first."})
 
-    client = _build_client_from_creds(creds)
+    if resource_type == _ACCOUNTS_RESOURCE:
+        summaries = [_account_summary(a) for a in accounts]
+        return json.dumps({
+            "resource_type": _ACCOUNTS_RESOURCE,
+            "success": True,
+            "count": len(summaries),
+            "results": summaries,
+            "default_account": summaries[0]["label"],
+            "note": (
+                "Pass account=<label> to query a specific organization. Omitting it uses "
+                f"'{summaries[0]['label']}'."
+            ) if len(summaries) > 1 else None,
+        })
+
+    handler = _HANDLERS.get(resource_type)
+    if not handler:
+        valid = ", ".join([_ACCOUNTS_RESOURCE, *_HANDLERS])
+        return json.dumps({"error": f"Invalid resource_type '{resource_type}'. Must be one of: {valid}"})
+
+    selected = select_datadog_account(accounts, account)
+    if not selected:
+        known = ", ".join(account_label(a) for a in accounts)
+        return json.dumps({"error": f"Unknown Datadog account '{account}'. Connected: {known}"})
+
+    client = _build_client_from_creds(selected)
     if not client:
         return json.dumps({"error": "Datadog credentials are incomplete. Please reconnect Datadog."})
 
-    resource_type = resource_type.lower().strip()
-    handler = _HANDLERS.get(resource_type)
-    if not handler:
-        return json.dumps({"error": f"Invalid resource_type '{resource_type}'. Must be one of: {', '.join(_HANDLERS)}"})
-
+    selected_label = account_label(selected)
     limit = min(max(limit, 1), MAX_RESULTS_CAP)
-    logger.info("[DATADOG-TOOL] user=%s resource=%s query=%s", user_id, resource_type, query[:100] if query else "")
+    logger.info("[DATADOG-TOOL] user=%s account=%s resource=%s query=%s",
+                user_id, selected_label, resource_type, query[:100] if query else "")
 
     try:
         # Forward **kwargs so internal-only handler options (e.g. metric_stats'
@@ -605,6 +828,9 @@ def query_datadog(
         result = handler(client, query, time_from, time_to, limit, interval=interval, **_handler_kwargs)
         result["success"] = True
         result["time_range"] = f"{time_from} to {time_to}"
+        # Name the org that answered: with several connected, an answer from the
+        # wrong environment is otherwise indistinguishable from a correct one.
+        result["account"] = selected_label
 
         results_list = result.get("results", [])
         serialized = [json.dumps(item) for item in results_list]

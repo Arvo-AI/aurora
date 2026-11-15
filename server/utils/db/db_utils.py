@@ -5,6 +5,7 @@ from psycopg2 import DatabaseError
 from dotenv import load_dotenv
 import os
 from utils.db.connection_pool import db_pool
+from utils.log_sanitizer import sanitize
 
 # Load environment variables
 load_dotenv()
@@ -325,6 +326,34 @@ def initialize_tables():
                         UNIQUE(user_id, provider, repo_full_name)
                     );
                 """,
+                # Slack channels Aurora can see. Mirrors connected_repos: each
+                # channel carries an LLM-generated (and user/agent-editable)
+                # description in metadata_summary so the agent can decide which
+                # channel(s) are relevant for a given incident/notification.
+                # channel_type is a best-effort classification
+                # ('incident'/'team'/'general') from the description task.
+                "slack_channels": """
+                    CREATE TABLE IF NOT EXISTS slack_channels (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
+                        provider VARCHAR(20) NOT NULL DEFAULT 'slack',
+                        team_id VARCHAR(64),
+                        channel_id VARCHAR(64) NOT NULL,
+                        channel_name VARCHAR(512),
+                        is_private BOOLEAN DEFAULT false,
+                        is_member BOOLEAN DEFAULT false,
+                        is_archived BOOLEAN DEFAULT false,
+                        channel_type VARCHAR(20) DEFAULT 'unknown',
+                        detected_platform VARCHAR(40),
+                        metadata_summary TEXT,
+                        metadata_status VARCHAR(20) DEFAULT 'pending',
+                        channel_data JSONB,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(user_id, provider, channel_id)
+                    );
+                """,
                 "github_installations": """
                     CREATE TABLE IF NOT EXISTS github_installations (
                         id SERIAL PRIMARY KEY,
@@ -354,6 +383,17 @@ def initialize_tables():
                         UNIQUE(user_id, installation_id)
                     );
                 """,
+                # Repos an org removed in the repo picker. Automatic imports
+                # skip them; picking one again, or granting it again on
+                # GitHub, clears the row.
+                "github_repo_exclusions": """
+                    CREATE TABLE IF NOT EXISTS github_repo_exclusions (
+                        org_id VARCHAR(255) NOT NULL,
+                        repo_full_name VARCHAR(512) NOT NULL,
+                        excluded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (org_id, repo_full_name)
+                    );
+                """,
                 "webhook_deliveries": """
                     CREATE TABLE IF NOT EXISTS webhook_deliveries (
                         id SERIAL PRIMARY KEY,
@@ -363,7 +403,9 @@ def initialize_tables():
                         received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         processed_at TIMESTAMP NULL,
                         status VARCHAR(20) NOT NULL DEFAULT 'received',
-                        error TEXT NULL
+                        error TEXT NULL,
+                        repo_full_name VARCHAR(255) NULL,
+                        gating_outcome VARCHAR(32) NULL
                     );
 
                     CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_received_at
@@ -508,6 +550,8 @@ def initialize_tables():
                         request_type VARCHAR(100),
                         input_tokens INTEGER NOT NULL DEFAULT 0,
                         output_tokens INTEGER NOT NULL DEFAULT 0,
+                        cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+                        cache_write_tokens INTEGER NOT NULL DEFAULT 0,
                         total_tokens INTEGER GENERATED ALWAYS AS (input_tokens + output_tokens) STORED,
                         estimated_cost DECIMAL(10,6) DEFAULT 0.00,
                         surcharge_rate DECIMAL(5,4) DEFAULT 0.0000,
@@ -715,6 +759,26 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_pagerduty_events_status ON pagerduty_events(incident_status);
                     CREATE INDEX IF NOT EXISTS idx_pagerduty_events_received_at ON pagerduty_events(received_at DESC);
                 """,
+                "servicenow_events": """
+                    CREATE TABLE IF NOT EXISTS servicenow_events (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
+                        event_type VARCHAR(50),
+                        sys_id VARCHAR(64),
+                        number VARCHAR(64),
+                        incident_title TEXT,
+                        incident_status VARCHAR(50),
+                        severity VARCHAR(20),
+                        payload JSONB NOT NULL,
+                        received_at TIMESTAMP NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_servicenow_events_user_id ON servicenow_events(user_id, received_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_servicenow_events_sys_id ON servicenow_events(sys_id);
+                    CREATE INDEX IF NOT EXISTS idx_servicenow_events_received_at ON servicenow_events(received_at DESC);
+                """,
                 "opsgenie_events": """
                     CREATE TABLE IF NOT EXISTS opsgenie_events (
                         id SERIAL PRIMARY KEY,
@@ -755,6 +819,8 @@ def initialize_tables():
                          analyzed_at TIMESTAMP,
                          slack_message_ts VARCHAR(50),
                          google_chat_message_name VARCHAR(255),
+                         pagerduty_note_id VARCHAR(64),
+                         incidentio_update_id VARCHAR(64),
                          active_tab VARCHAR(10) DEFAULT 'thoughts',
                          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -846,7 +912,8 @@ def initialize_tables():
                 "execution_steps": """
                     CREATE TABLE IF NOT EXISTS execution_steps (
                         id SERIAL PRIMARY KEY,
-                        incident_id UUID NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+                        -- NULL for tool calls made in a regular chat (no incident)
+                        incident_id UUID REFERENCES incidents(id) ON DELETE CASCADE,
                         session_id VARCHAR(50) NOT NULL,
                         org_id VARCHAR(255),
                         step_index INTEGER NOT NULL,
@@ -906,6 +973,32 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_splunk_alerts_user_id ON splunk_alerts(user_id, received_at DESC);
                     CREATE INDEX IF NOT EXISTS idx_splunk_alerts_state ON splunk_alerts(alert_state);
                     CREATE INDEX IF NOT EXISTS idx_splunk_alerts_received_at ON splunk_alerts(received_at DESC);
+                """,
+                "elastic_alerts": """
+                    CREATE TABLE IF NOT EXISTS elastic_alerts (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
+                        alert_id VARCHAR(255),
+                        alert_uuid VARCHAR(255),
+                        alert_title TEXT,
+                        alert_state VARCHAR(50),
+                        rule_id VARCHAR(255),
+                        rule_name TEXT,
+                        rule_type VARCHAR(255),
+                        action_group VARCHAR(100),
+                        reason TEXT,
+                        severity VARCHAR(50),
+                        view_in_app_url TEXT,
+                        payload JSONB NOT NULL,
+                        received_at TIMESTAMP NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_elastic_alerts_user_id ON elastic_alerts(user_id, received_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_elastic_alerts_org_uuid_state ON elastic_alerts(org_id, alert_uuid, alert_state);
+                    CREATE INDEX IF NOT EXISTS idx_elastic_alerts_state ON elastic_alerts(alert_state);
+                    CREATE INDEX IF NOT EXISTS idx_elastic_alerts_received_at ON elastic_alerts(received_at DESC);
                 """,
                 "incidentio_alerts": """
                     CREATE TABLE IF NOT EXISTS incidentio_alerts (
@@ -1165,6 +1258,7 @@ def initialize_tables():
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         updated_by VARCHAR(255),
                         source VARCHAR(20) DEFAULT 'custom' NOT NULL,
+                        scope VARCHAR(20) NOT NULL DEFAULT 'agent',
                         UNIQUE(org_id, mode, pattern, source)
                     );
                     CREATE INDEX IF NOT EXISTS idx_ocp_org
@@ -1183,6 +1277,45 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_otp_org
                         ON org_tool_permissions(org_id);
                 """,
+                "org_connector_access": """
+                    CREATE TABLE IF NOT EXISTS org_connector_access (
+                        org_id VARCHAR(255) NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+                        team_id VARCHAR(255) NOT NULL DEFAULT '',
+                        connector VARCHAR(128) NOT NULL,
+                        scope_id VARCHAR(256) NOT NULL DEFAULT '',
+                        credential VARCHAR(64) NOT NULL DEFAULT '',
+                        role VARCHAR(50) NOT NULL,
+                        updated_by VARCHAR(255),
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (org_id, team_id, connector, scope_id, credential, role)
+                    );
+                """,
+                "org_teams": """
+                    CREATE TABLE IF NOT EXISTS org_teams (
+                        id VARCHAR(255) PRIMARY KEY DEFAULT gen_random_uuid()::text,
+                        org_id VARCHAR(255) NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+                        name VARCHAR(80) NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE (org_id, name)
+                    );
+                """,
+                "org_team_members": """
+                    CREATE TABLE IF NOT EXISTS org_team_members (
+                        org_id VARCHAR(255) NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+                        team_id VARCHAR(255) NOT NULL REFERENCES org_teams(id) ON DELETE CASCADE,
+                        user_id VARCHAR(255) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                        PRIMARY KEY (team_id, user_id)
+                    );
+                """,
+                "org_team_grants": """
+                    CREATE TABLE IF NOT EXISTS org_team_grants (
+                        org_id VARCHAR(255) NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+                        team_id VARCHAR(255) NOT NULL REFERENCES org_teams(id) ON DELETE CASCADE,
+                        connector VARCHAR(128) NOT NULL,
+                        scope_id VARCHAR(256) NOT NULL DEFAULT '',
+                        PRIMARY KEY (team_id, connector, scope_id)
+                    );
+                """,
                 "org_invitations": """
                     CREATE TABLE IF NOT EXISTS org_invitations (
                         id VARCHAR(255) PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
@@ -1198,6 +1331,49 @@ def initialize_tables():
 
                     CREATE INDEX IF NOT EXISTS idx_org_invitations_org_id ON org_invitations(org_id);
                     CREATE INDEX IF NOT EXISTS idx_org_invitations_email ON org_invitations(email);
+                """,
+                # SAML SSO. Read before any session exists (domain discovery,
+                # ACS), so these are not RLS-protected — like organizations.
+                "org_sso_configs": """
+                    CREATE TABLE IF NOT EXISTS org_sso_configs (
+                        org_id VARCHAR(255) PRIMARY KEY REFERENCES organizations(id) ON DELETE CASCADE,
+                        idp_entity_id TEXT NOT NULL,
+                        idp_sso_url TEXT NOT NULL,
+                        idp_x509_cert TEXT NOT NULL,
+                        default_role VARCHAR(50) NOT NULL DEFAULT 'viewer',
+                        enabled BOOLEAN NOT NULL DEFAULT FALSE,
+                        require_sso BOOLEAN NOT NULL DEFAULT FALSE,
+                        updated_by VARCHAR(255) REFERENCES users(id) ON DELETE SET NULL,
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        updated_at TIMESTAMP DEFAULT NOW()
+                    );
+                """,
+                # Several orgs may claim a domain, but only one can verify it:
+                # the verified owner is who SSO discovery routes that domain to.
+                "org_sso_domains": """
+                    CREATE TABLE IF NOT EXISTS org_sso_domains (
+                        id VARCHAR(255) PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+                        org_id VARCHAR(255) NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+                        domain VARCHAR(253) NOT NULL,
+                        verification_token VARCHAR(64) NOT NULL,
+                        verified_at TIMESTAMP,
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        UNIQUE(org_id, domain)
+                    );
+
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_org_sso_domains_verified
+                        ON org_sso_domains(domain) WHERE verified_at IS NOT NULL;
+                """,
+                # Outstanding AuthnRequest IDs; the ACS burns one per response
+                # so an assertion can't be replayed or posted to another org.
+                "saml_requests": """
+                    CREATE TABLE IF NOT EXISTS saml_requests (
+                        request_id VARCHAR(255) PRIMARY KEY,
+                        org_id VARCHAR(255) NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+                        expires_at TIMESTAMP NOT NULL
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_saml_requests_expires ON saml_requests(expires_at);
                 """,
                 "knowledge_base_memory": """
                     CREATE TABLE IF NOT EXISTS knowledge_base_memory (
@@ -1234,23 +1410,6 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_kb_documents_user_id ON knowledge_base_documents(user_id);
                     CREATE INDEX IF NOT EXISTS idx_kb_documents_status ON knowledge_base_documents(status);
                 """,
-                "incident_feedback": """
-                    CREATE TABLE IF NOT EXISTS incident_feedback (
-                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                        user_id VARCHAR(255) NOT NULL,
-                        org_id VARCHAR(255),
-                        incident_id UUID NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
-                        feedback_type VARCHAR(20) NOT NULL,
-                        comment TEXT,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    );
-
-                    CREATE UNIQUE INDEX IF NOT EXISTS idx_incident_feedback_user_incident
-                    ON incident_feedback(user_id, incident_id);
-
-                    CREATE INDEX IF NOT EXISTS idx_incident_feedback_user_id ON incident_feedback(user_id);
-                    CREATE INDEX IF NOT EXISTS idx_incident_feedback_type ON incident_feedback(feedback_type);
-                """,
                 "postmortems": """
                     CREATE TABLE IF NOT EXISTS postmortems (
                         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1282,13 +1441,14 @@ def initialize_tables():
                         user_id VARCHAR(255) NOT NULL,
                         title VARCHAR(500) NOT NULL,
                         content TEXT,
+                        category VARCHAR(50) NOT NULL,
+                        description TEXT,
                         last_edited_by VARCHAR(20) NOT NULL DEFAULT 'agent',
+                        last_edited_by_name VARCHAR(255),
                         current_version_id UUID,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     );
-
-                    CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_org_title ON artifacts(org_id, title);
                 """,
                 "artifact_versions": """
                     CREATE TABLE IF NOT EXISTS artifact_versions (
@@ -1353,6 +1513,35 @@ def initialize_tables():
                     ON rca_findings(incident_id, status);
                     CREATE INDEX IF NOT EXISTS idx_rca_findings_org_started
                     ON rca_findings(org_id, started_at DESC);
+                """,
+                # One row per recurrence-detection check (root-cause dedup layer 1).
+                # claimed_recurrence_of is the agent's verbatim claim (may be garbage,
+                # kept for audit); accepted_recurrence_of is the server-validated id.
+                # The unique (incident_id, decision_point) index makes Celery retries
+                # idempotent: a re-run sees the existing row and skips the check.
+                "recurrence_verdicts": """
+                    CREATE TABLE IF NOT EXISTS recurrence_verdicts (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        incident_id UUID NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+                        user_id VARCHAR(255) NOT NULL,
+                        org_id VARCHAR(255),
+                        decision_point VARCHAR(10) NOT NULL DEFAULT 'after',
+                        mode VARCHAR(10) NOT NULL,
+                        claimed_recurrence_of TEXT,
+                        accepted_recurrence_of UUID REFERENCES incidents(id) ON DELETE SET NULL,
+                        reasoning TEXT,
+                        correlator_score FLOAT,
+                        folded BOOLEAN NOT NULL DEFAULT FALSE,
+                        reject_reason VARCHAR(30),
+                        elapsed_ms INTEGER,
+                        model VARCHAR(100),
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_recurrence_verdicts_incident_point
+                        ON recurrence_verdicts(incident_id, decision_point);
+                    CREATE INDEX IF NOT EXISTS idx_recurrence_verdicts_org_created
+                        ON recurrence_verdicts(org_id, created_at DESC);
                 """,
                 "audit_log": """
                     CREATE TABLE IF NOT EXISTS audit_log (
@@ -1516,12 +1705,14 @@ def initialize_tables():
             #   Celery task runs cross-org sweeps with no user context; needs SECURITY
             #   DEFINER function or BYPASSRLS role before RLS can be added
             rls_tables.append("workspaces")
+            rls_tables.append("github_repo_exclusions")
             rls_tables.append("aurora_deployments")
             rls_tables.append("cloud_feed_metadata")
             rls_tables.append("cloud_ingestion_state")
             rls_tables.append("newrelic_events")
             rls_tables.append("sentry_events")
             rls_tables.append("pagerduty_events")
+            rls_tables.append("servicenow_events")
 
             # Add monitoring tables
             rls_tables.append("cloudwatch_alarms")
@@ -1529,6 +1720,7 @@ def initialize_tables():
             rls_tables.append("datadog_events")
             rls_tables.append("netdata_alerts")
             rls_tables.append("splunk_alerts")
+            rls_tables.append("elastic_alerts")
             rls_tables.append("incidentio_alerts")
             rls_tables.append("bigpanda_events")
             rls_tables.append("jenkins_deployment_events")
@@ -1541,14 +1733,18 @@ def initialize_tables():
             # so they don't need RLS - incident_alerts is protected separately for safety
             rls_tables.append("incidents")
             rls_tables.append("incident_alerts")
-            rls_tables.append("incident_feedback")
             rls_tables.append("postmortems")
             rls_tables.append("postmortem_exports")
             rls_tables.append("incident_lifecycle_events")
             rls_tables.append("connected_repos")
+            rls_tables.append("slack_channels")
             rls_tables.append("execution_steps")
             rls_tables.append("org_command_policies")
             rls_tables.append("org_tool_permissions")
+            rls_tables.append("org_connector_access")
+            rls_tables.append("org_teams")
+            rls_tables.append("org_team_members")
+            rls_tables.append("org_team_grants")
             rls_tables.append("rca_findings")
             rls_tables.append("actions")
             rls_tables.append("action_runs")
@@ -1556,6 +1752,7 @@ def initialize_tables():
             rls_tables.append("artifacts")
             rls_tables.append("artifact_versions")
             rls_tables.append("hpa_vpa_recommendations")
+            rls_tables.append("recurrence_verdicts")
 
 
             # Migration: Add rca_celery_task_id column to incidents table if it doesn't exist
@@ -1649,6 +1846,32 @@ def initialize_tables():
                 cursor.execute(create_script)
                 logging.info(f"Table '{table_name}' initialized successfully.")
 
+            # Existing installs predate team_id. The CREATE above includes it,
+            # so this only rewrites the primary key on a table that already existed.
+            try:
+                cursor.execute(
+                    "ALTER TABLE org_connector_access "
+                    "ADD COLUMN IF NOT EXISTS team_id VARCHAR(255) NOT NULL DEFAULT '';"
+                )
+                cursor.execute(
+                    """SELECT pg_get_constraintdef(oid) FROM pg_constraint
+                        WHERE conrelid = 'org_connector_access'::regclass AND contype = 'p'"""
+                )
+                primary = cursor.fetchone()
+                # Old primary key has no team, so two audiences could not store the same role
+                if primary and "team_id" not in primary[0]:
+                    cursor.execute(
+                        "ALTER TABLE org_connector_access DROP CONSTRAINT org_connector_access_pkey"
+                    )
+                    cursor.execute(
+                        """ALTER TABLE org_connector_access
+                           ADD PRIMARY KEY (org_id, team_id, connector, scope_id, credential, role)"""
+                    )
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error ensuring team_id on org_connector_access: {e}")
+                conn.rollback()
+
             # Migration: hpa_vpa_recommendations timestamp migration. The table
             # shipped with naive TIMESTAMPs but Python writes aware UTC and SQL
             # compares against NOW(), so a naive column drifts the 30-day cooldown
@@ -1722,6 +1945,53 @@ def initialize_tables():
                 )
                 conn.rollback()
 
+            # Migration: record which repo a webhook came from and what change
+            # gating did with it, so a PR without a review can be explained.
+            try:
+                cursor.execute(
+                    """ALTER TABLE webhook_deliveries
+                       ADD COLUMN IF NOT EXISTS repo_full_name VARCHAR(255) NULL,
+                       ADD COLUMN IF NOT EXISTS gating_outcome VARCHAR(32) NULL;"""
+                )
+                conn.commit()
+                logging.info("Ensured gating outcome columns exist on webhook_deliveries table.")
+            except Exception as e:
+                logging.warning(f"Error adding gating outcome columns to webhook_deliveries: {e}")
+                conn.rollback()
+
+            # Migration: remember when an installation's first full repo
+            # import landed, so later automatic imports only add repos created
+            # after it (github_repo_exclusions covers removals). Links that
+            # exist when the column is added count as imported: the backfill
+            # repairs specific installations by id instead of guessing.
+            try:
+                cursor.execute(
+                    """SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'user_github_installations'
+                          AND column_name = 'repos_imported_at'"""
+                )
+                had_marker = cursor.fetchone() is not None
+                cursor.execute(
+                    """ALTER TABLE user_github_installations
+                       ADD COLUMN IF NOT EXISTS disconnected_at TIMESTAMP NULL,
+                       ADD COLUMN IF NOT EXISTS repos_imported_at TIMESTAMP NULL,
+                       ADD COLUMN IF NOT EXISTS repos_import_legacy BOOLEAN NOT NULL DEFAULT FALSE;"""
+                )
+                if not had_marker:
+                    # Legacy: removals before this deploy were never recorded,
+                    # so the sync only adds repos created after the marker.
+                    cursor.execute(
+                        """UPDATE user_github_installations
+                              SET repos_imported_at = COALESCE(linked_at, NOW() AT TIME ZONE 'UTC'),
+                                  repos_import_legacy = TRUE
+                            WHERE disconnected_at IS NULL"""
+                    )
+                conn.commit()
+                logging.info("Ensured GitHub repo import marker exists.")
+            except Exception as e:
+                logging.warning(f"Error adding GitHub repo import marker: {e}")
+                conn.rollback()
+
             # Migration: Add change_gating_enabled to connected_repos so
             # existing deployments can enroll repos in PR change gating.
             try:
@@ -1737,6 +2007,16 @@ def initialize_tables():
                     f"Error adding change_gating_enabled column to connected_repos: {e}"
                 )
                 conn.rollback()
+
+            # NOTE: The slack_channels.is_dismissed column is now unused —
+            # channel membership is the single source of truth (a channel is
+            # Active iff Aurora is a member of it), so the old "dismiss without
+            # leaving" flag no longer exists. We intentionally do NOT drop it here
+            # yet: dropping a column at startup breaks any still-running pods from
+            # the previous release during a rolling deploy (their INSERT/SELECT of
+            # is_dismissed would error until the rollout completes). Leaving the
+            # column in place is harmless (nothing reads or writes it). Drop it in
+            # a follow-up release once all pods are on this version.
 
             # Migration: Bitbucket Incident Prevention (DEV-1439).
             # - webhook_hook_uuid: the Bitbucket repo hook UUID (when Aurora
@@ -1802,6 +2082,18 @@ def initialize_tables():
                     f"Error adding disconnected_at column/index to user_github_installations: {e}"
                 )
                 conn.rollback()
+
+            # Ask mode can honor a customer allow rule. Existing rows stay agent-only.
+            try:
+                cursor.execute(
+                    "ALTER TABLE org_command_policies "
+                    "ADD COLUMN IF NOT EXISTS scope VARCHAR(20) NOT NULL DEFAULT 'agent';"
+                )
+                conn.commit()
+                logging.info("Ensured scope column exists on org_command_policies.")
+            except Exception as e:
+                conn.rollback()
+                logging.warning(f"Migration for org_command_policies.scope: {e}")
 
             # Migration: add system action columns to actions table
             try:
@@ -2052,10 +2344,23 @@ def initialize_tables():
                 logging.warning(f"Error adding status column: {e}")
                 conn.rollback()
 
+            # Migration: heartbeat_at is written every 30 seconds by the worker
+            # running a background session (chat.background.liveness). NULL means
+            # no worker has picked the session up yet.
+            try:
+                cursor.execute("""
+                    ALTER TABLE chat_sessions
+                    ADD COLUMN IF NOT EXISTS heartbeat_at TIMESTAMP NULL;
+                """)
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error adding heartbeat_at column: {e}")
+                conn.rollback()
+
             # Migration: Add incident_id column to chat_sessions if it doesn't exist
             try:
                 cursor.execute("""
-                    ALTER TABLE chat_sessions 
+                    ALTER TABLE chat_sessions
                     ADD COLUMN IF NOT EXISTS incident_id UUID;
                 """)
                 logging.info(
@@ -2159,6 +2464,18 @@ def initialize_tables():
                 logging.warning(
                     f"Error adding surcharge fields to llm_usage_tracking: {e}"
                 )
+                conn.rollback()
+
+            # Migration: Add prompt-cache token columns to llm_usage_tracking
+            try:
+                cursor.execute("""
+                    ALTER TABLE llm_usage_tracking
+                    ADD COLUMN IF NOT EXISTS cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+                    ADD COLUMN IF NOT EXISTS cache_write_tokens INTEGER NOT NULL DEFAULT 0;
+                """)
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error adding cache token columns to llm_usage_tracking: {e}")
                 conn.rollback()
 
             # Migration: Zero out surcharge_rate (markup removed, raw provider costs only)
@@ -2349,6 +2666,67 @@ def initialize_tables():
                 )
                 conn.rollback()
 
+            # Ensure alert_environment exists on incidents. It's in the base
+            # CREATE TABLE, but that only helps fresh installs; older databases
+            # created before the column was added need this idempotent backfill
+            # so inserts that populate it (incident.io/jenkins alert ingestion)
+            # don't fail.
+            try:
+                cursor.execute(
+                    """
+                    ALTER TABLE incidents
+                    ADD COLUMN IF NOT EXISTS alert_environment TEXT;
+                    """
+                )
+                conn.commit()
+            except Exception as e:
+                logging.warning(
+                    f"Error adding alert_environment column to incidents: {e}"
+                )
+                conn.rollback()
+
+            # Add pagerduty_note_id column to incidents: id of the RCA note posted back
+            # to the PagerDuty incident ('pending' while a post is in flight)
+            try:
+                cursor.execute(
+                    """
+                    ALTER TABLE incidents
+                    ADD COLUMN IF NOT EXISTS pagerduty_note_id VARCHAR(64);
+                    """
+                )
+                conn.commit()
+            except Exception:
+                logging.exception("Failed to add pagerduty_note_id column to incidents")
+                conn.rollback()
+
+            # Add incidentio_update_id column to incidents: id of the RCA update posted
+            # back to the incident.io incident ('pending' while a post is in flight)
+            try:
+                cursor.execute(
+                    """
+                    ALTER TABLE incidents
+                    ADD COLUMN IF NOT EXISTS incidentio_update_id VARCHAR(64);
+                    """
+                )
+                conn.commit()
+            except Exception:
+                logging.exception("Failed to add incidentio_update_id column to incidents")
+                conn.rollback()
+
+            # Add servicenow_note_id column to incidents: marker of the RCA work note posted
+            # back to the ServiceNow incident ('pending' while a post is in flight)
+            try:
+                cursor.execute(
+                    """
+                    ALTER TABLE incidents
+                    ADD COLUMN IF NOT EXISTS servicenow_note_id VARCHAR(64);
+                    """
+                )
+                conn.commit()
+            except Exception:
+                logging.exception("Failed to add servicenow_note_id column to incidents")
+                conn.rollback()
+
             # Migration: Add active_tab column to incidents for UI state persistence
             try:
                 cursor.execute(
@@ -2394,6 +2772,29 @@ def initialize_tables():
             except Exception as e:
                 logging.warning(
                     f"Error adding affected_services column to incidents: {e}"
+                )
+                conn.rollback()
+
+            # Add recurrence_of_incident_id column to incidents table
+            # (root-cause dedup layer 1: pointer to the anchor incident this one
+            # is a recurrence of; index name/shape consumed verbatim by layer 2)
+            try:
+                cursor.execute("""
+                    ALTER TABLE incidents
+                    ADD COLUMN IF NOT EXISTS recurrence_of_incident_id UUID REFERENCES incidents(id) ON DELETE SET NULL;
+                """)
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_incidents_recurrence
+                        ON incidents(recurrence_of_incident_id)
+                        WHERE recurrence_of_incident_id IS NOT NULL;
+                """)
+                logging.info(
+                    "Added recurrence_of_incident_id column to incidents table (if not exists)."
+                )
+                conn.commit()
+            except Exception as e:
+                logging.warning(
+                    f"Error adding recurrence_of_incident_id column to incidents: {e}"
                 )
                 conn.rollback()
 
@@ -2739,7 +3140,7 @@ def initialize_tables():
             _org_id_tables = list(set(rls_tables + [
                 "users", "workspaces", "aurora_deployments",
                 "cloud_feed_metadata", "cloud_ingestion_state",
-                "pagerduty_events", "opsgenie_events", "knowledge_base_memory",
+                "pagerduty_events", "opsgenie_events", "servicenow_events", "knowledge_base_memory",
                 "knowledge_base_documents",
             ]))
             for tbl in _org_id_tables:
@@ -2911,6 +3312,56 @@ def initialize_tables():
                 logging.warning(f"Error adding must_change_password column: {e}")
                 cursor.execute("ROLLBACK TO SAVEPOINT sp_mcp_col")
 
+            # Migration: GitHub identity + one-time signup handoff (hosted
+            # one-click website signup). github_user_id is UNIQUE — it is the
+            # auto-login key, so two Aurora accounts must never claim the
+            # same GitHub identity.
+            try:
+                cursor.execute("SAVEPOINT sp_gh_signup_cols")
+                cursor.execute("""
+                    ALTER TABLE users ADD COLUMN IF NOT EXISTS github_user_id BIGINT;
+                    ALTER TABLE users ADD COLUMN IF NOT EXISTS github_login VARCHAR(255);
+                    ALTER TABLE users ADD COLUMN IF NOT EXISTS signup_handoff_hash VARCHAR(64);
+                    ALTER TABLE users ADD COLUMN IF NOT EXISTS signup_handoff_expires_at TIMESTAMP;
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_users_github_user_id
+                        ON users (github_user_id) WHERE github_user_id IS NOT NULL;
+                """)
+                cursor.execute("RELEASE SAVEPOINT sp_gh_signup_cols")
+            except Exception as e:
+                logging.warning(f"Error adding GitHub signup columns: {e}")
+                cursor.execute("ROLLBACK TO SAVEPOINT sp_gh_signup_cols")
+
+            # Migration: Slack identity (one-click "Add to Slack" signup and
+            # "Sign in with Slack"). The (team, user) pair is the auto-login
+            # key, so it is UNIQUE like github_user_id.
+            try:
+                cursor.execute("SAVEPOINT sp_slack_identity_cols")
+                cursor.execute("""
+                    ALTER TABLE users ADD COLUMN IF NOT EXISTS slack_team_id VARCHAR(32);
+                    ALTER TABLE users ADD COLUMN IF NOT EXISTS slack_user_id VARCHAR(32);
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_users_slack_identity
+                        ON users (slack_team_id, slack_user_id)
+                        WHERE slack_user_id IS NOT NULL;
+                """)
+                cursor.execute("RELEASE SAVEPOINT sp_slack_identity_cols")
+            except Exception as e:
+                logging.warning(f"Error adding Slack identity columns: {e}")
+                cursor.execute("ROLLBACK TO SAVEPOINT sp_slack_identity_cols")
+
+            # Migration: SAML SSO identity. The IdP's subject is only unique
+            # within that org's IdP, so the auto-login key is (org, subject).
+            try:
+                cursor.execute("SAVEPOINT sp_sso_cols")
+                cursor.execute("""
+                    ALTER TABLE users ADD COLUMN IF NOT EXISTS sso_subject TEXT;
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_users_org_sso_subject
+                        ON users (org_id, sso_subject) WHERE sso_subject IS NOT NULL;
+                """)
+                cursor.execute("RELEASE SAVEPOINT sp_sso_cols")
+            except Exception as e:
+                logging.warning(f"Error adding SSO columns: {e}")
+                cursor.execute("ROLLBACK TO SAVEPOINT sp_sso_cols")
+
             conn.commit()
 
             # Migration: Add org_id column to users and all org-scoped tables
@@ -2920,8 +3371,8 @@ def initialize_tables():
                 "deployment_tasks", "deployments", "chat_sessions",
                 "llm_usage_tracking", "cloud_feed_metadata", "cloud_ingestion_state",
                 "grafana_alerts", "datadog_events", "netdata_alerts",
-                "pagerduty_events", "opsgenie_events", "incidents", "incident_alerts",
-                "rca_notification_emails", "splunk_alerts",
+                "pagerduty_events", "opsgenie_events", "servicenow_events", "incidents", "incident_alerts",
+                "rca_notification_emails", "splunk_alerts", "elastic_alerts",
                 "jenkins_deployment_events", "dynatrace_problems",
                 "bigpanda_events", "kubectl_agent_tokens",
                 "cloudwatch_alarms",
@@ -2931,9 +3382,10 @@ def initialize_tables():
                 "k8s_pod_metrics", "k8s_node_metrics",
                 "cloud_billing_usage", "provider_metrics",
                 "knowledge_base_memory", "knowledge_base_documents",
-                "incident_feedback", "postmortems",
+                "postmortems",
                 "incident_lifecycle_events",
                 "connected_repos",
+                "slack_channels",
             ]
             for tbl in org_id_tables:
                 try:
@@ -3000,6 +3452,27 @@ def initialize_tables():
                 logging.warning(f"Error adding tool_call_id to execution_steps: {e}")
                 cursor.execute("ROLLBACK TO SAVEPOINT sp_es_tcid")
 
+            # Regular chats record their tool calls too, so incident_id is
+            # optional. Checked first: DROP NOT NULL takes an ACCESS EXCLUSIVE
+            # lock, which every boot would otherwise take again.
+            try:
+                cursor.execute("SAVEPOINT sp_es_chat")
+                cursor.execute(
+                    "SELECT a.attnotnull FROM pg_attribute a "
+                    "WHERE a.attrelid = 'execution_steps'::regclass AND a.attname = 'incident_id'"
+                )
+                row = cursor.fetchone()
+                if row and row[0]:
+                    cursor.execute(
+                        "ALTER TABLE execution_steps ALTER COLUMN incident_id DROP NOT NULL;"
+                    )
+                cursor.execute("RELEASE SAVEPOINT sp_es_chat")
+            except Exception as e:
+                logging.warning(f"Error relaxing execution_steps.incident_id: {e}")
+                cursor.execute("ROLLBACK TO SAVEPOINT sp_es_chat")
+            # The chat audit's indexes are built concurrently after this
+            # transaction commits (see utils/db/chat_audit_indexes.py).
+
             # DB triggers: auto-inherit org_id from parent incident on INSERT.
             # This means no INSERT statement in the codebase ever needs to set
             # org_id on these tables — the trigger handles it unconditionally.
@@ -3012,8 +3485,11 @@ def initialize_tables():
                         CREATE OR REPLACE FUNCTION {fn_name}()
                         RETURNS TRIGGER AS $trg$
                         BEGIN
-                            NEW.org_id := (
-                                SELECT org_id FROM incidents WHERE id = NEW.incident_id
+                            -- Rows without a parent incident (chat tool calls in
+                            -- execution_steps) keep the org_id they were inserted with.
+                            NEW.org_id := COALESCE(
+                                (SELECT org_id FROM incidents WHERE id = NEW.incident_id),
+                                NEW.org_id
                             );
                             RETURN NEW;
                         END;
@@ -3053,6 +3529,69 @@ def initialize_tables():
             except Exception as e:
                 logging.warning(f"Error adding users.org_id FK: {e}")
                 cursor.execute("ROLLBACK TO SAVEPOINT sp_org_fk")
+
+            # Migration: normalize users.email to lowercase and enforce
+            # case-insensitive uniqueness. Login matched email case-sensitively
+            # while registration stored a lowercased copy, so a user typing any
+            # capitalization got "Invalid credentials" and could then register a
+            # duplicate row. Enforced in the DB so no code path can reintroduce it.
+            try:
+                cursor.execute("SAVEPOINT sp_email_ci")
+
+                # Skip rows that would collide — genuine duplicates are reported
+                # below, never merged, since picking a winner discards an account.
+                cursor.execute("""
+                    UPDATE users u
+                    SET email = LOWER(u.email)
+                    WHERE u.email <> LOWER(u.email)
+                      AND NOT EXISTS (
+                          SELECT 1 FROM users o
+                          WHERE o.id <> u.id AND LOWER(o.email) = LOWER(u.email)
+                      );
+                """)
+                if cursor.rowcount:
+                    logging.info(
+                        "Normalized %d mixed-case user email(s) to lowercase.",
+                        cursor.rowcount,
+                    )
+
+                # Surface any remaining collisions for manual reconciliation.
+                cursor.execute("""
+                    SELECT LOWER(email), COUNT(*) FROM users
+                    GROUP BY LOWER(email) HAVING COUNT(*) > 1;
+                """)
+                dupes = cursor.fetchall()
+                for norm_email, dupe_count in dupes:
+                    logging.error(
+                        "Duplicate accounts share email %s (%d rows). "
+                        "Case-insensitive unique index NOT applied. Reconcile these "
+                        "accounts manually, then restart to enforce uniqueness.",
+                        # /register does not validate email format, so a stored
+                        # address can carry newlines and forge log lines here.
+                        sanitize(norm_email), dupe_count,
+                    )
+
+                # Only safe to add the unique index once no collisions remain —
+                # creating it with duplicates present would fail the whole
+                # migration and, worse, imply the data is already clean.
+                if not dupes:
+                    cursor.execute(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_lower "
+                        "ON users (LOWER(email));"
+                    )
+                    logging.info("Enforced case-insensitive uniqueness on users.email.")
+
+                cursor.execute("RELEASE SAVEPOINT sp_email_ci")
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error normalizing user emails: {e}")
+                # Defensive: if the transaction is already aborted the rollback
+                # itself raises, which at boot would take the whole server down
+                # over a non-critical migration.
+                try:
+                    cursor.execute("ROLLBACK TO SAVEPOINT sp_email_ci")
+                except Exception:
+                    logging.debug("ROLLBACK TO SAVEPOINT also failed for sp_email_ci")
 
             # Backfill org_id on all data tables — single source of truth
             # in utils/db/org_backfill.py.  Covers user-scoped tables (dynamic
@@ -3241,6 +3780,24 @@ def initialize_tables():
                 conn.rollback()
                 raise RuntimeError("Required email verification migration failed") from e
 
+            # Migration: Add password reset columns to users table.
+            # Mirrors the email_verification_* columns — a hashed one-time code,
+            # its expiry, and an attempt counter so a stolen code can't be
+            # brute-forced. Non-fatal: a deployment missing these columns should
+            # lose "forgot password", not fail to boot.
+            try:
+                cursor.execute("""
+                    ALTER TABLE users ADD COLUMN IF NOT EXISTS password_reset_code VARCHAR(64);
+                    ALTER TABLE users ADD COLUMN IF NOT EXISTS password_reset_code_expires_at TIMESTAMP;
+                    ALTER TABLE users ADD COLUMN IF NOT EXISTS password_reset_attempts INTEGER DEFAULT 0;
+                    ALTER TABLE users ADD COLUMN IF NOT EXISTS password_reset_attempts_at TIMESTAMP;
+                """)
+                conn.commit()
+                logging.info("Ensured password reset columns exist on users table.")
+            except Exception as e:
+                logging.warning("Error adding password reset columns to users: %s", e)
+                conn.rollback()
+
             # Create k8s_clusters view (after org_id migration so the column exists)
             # DROP first because CREATE OR REPLACE VIEW cannot remove columns from an existing view
             try:
@@ -3276,9 +3833,246 @@ def initialize_tables():
                 logging.warning(f"Error de-duplicating organization names: {e}")
                 conn.rollback()
 
+            # artifacts: add category + description columns for memory system
+            try:
+                cursor.execute("""
+                    ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS category VARCHAR(50);
+                    ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS description TEXT;
+                """)
+                # Set default before NOT NULL so new rows inserted mid-migration are safe.
+                # Pre-migration rows were all written by the artifact store (system-maintained),
+                # so 'artifact' is the correct default and backfill value — see backfill note below.
+                cursor.execute("""
+                    ALTER TABLE artifacts ALTER COLUMN category SET DEFAULT 'artifact';
+                """)
+                # FORCE RLS is already active — temporarily disable so backfill can reach all rows
+                cursor.execute("ALTER TABLE artifacts NO FORCE ROW LEVEL SECURITY")
+                # Backfill legacy rows to 'artifact', NOT 'context': every pre-migration row was
+                # created by services/artifacts/store.py:upsert_artifact_by_title, which inserts
+                # category='artifact' and relies on ON CONFLICT (org_id, category, title) for
+                # idempotency. Stamping them 'context' would make that conflict clause miss on
+                # existing titles, so each subsequent agent/UI write would INSERT a duplicate row.
+                cursor.execute("""
+                    UPDATE artifacts SET category = 'artifact'
+                    WHERE category IS NULL OR category = ''
+                """)
+                cursor.execute("ALTER TABLE artifacts FORCE ROW LEVEL SECURITY")
+                # Now enforce NOT NULL — all existing rows guaranteed non-null
+                cursor.execute("""
+                    ALTER TABLE artifacts ALTER COLUMN category SET NOT NULL;
+                """)
+                # Replace legacy (org_id, title) uniqueness with (org_id, category, title)
+                cursor.execute("""
+                    DROP INDEX IF EXISTS idx_artifacts_org_title;
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_org_cat_title
+                        ON artifacts(org_id, category, title);
+                    CREATE INDEX IF NOT EXISTS idx_artifacts_org_category
+                        ON artifacts(org_id, category);
+                """)
+                conn.commit()
+            except Exception as e:
+                logging.error(f"CRITICAL: Failed to migrate artifacts table — memory writes will fail: {e}")
+                conn.rollback()
+                raise
+
+            # artifacts: add last_edited_by_name to record the actual person who
+            # last edited an entry (last_edited_by only stores 'user'/'agent').
+            # NULL means an agent edit or a pre-migration human edit — the UI
+            # falls back to the generic 'User'/'Agent' label in that case.
+            try:
+                cursor.execute("""
+                    ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS last_edited_by_name VARCHAR(255);
+                """)
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error adding last_edited_by_name to artifacts: {e}")
+                conn.rollback()
+
+            # artifacts: add incident_id + generation_session_id for postmortem unification
+            try:
+                cursor.execute("""
+                    ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS incident_id UUID REFERENCES incidents(id) ON DELETE CASCADE;
+                    ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS generation_session_id VARCHAR(255);
+                """)
+                # Self-healing: older DBs shipped a NON-unique idx_artifacts_incident_id.
+                # `CREATE UNIQUE INDEX IF NOT EXISTS` silently no-ops when a same-named
+                # index already exists, so the postmortem upserts' `ON CONFLICT (incident_id)`
+                # never finds its target. Detect that case and rebuild the index as unique.
+                cursor.execute("""
+                    DO $$
+                    DECLARE
+                        is_unique boolean;
+                    BEGIN
+                        SELECT indisunique INTO is_unique
+                        FROM pg_index
+                        WHERE indexrelid = 'idx_artifacts_incident_id'::regclass;
+
+                        -- Existing index is not unique — drop so we can recreate it correctly
+                        IF is_unique IS NOT NULL AND is_unique = false THEN
+                            DROP INDEX idx_artifacts_incident_id;
+                        END IF;
+                    EXCEPTION
+                        -- Index doesn't exist yet — nothing to drop
+                        WHEN undefined_table THEN NULL;
+                    END $$;
+                """)
+                # Drop duplicate incident_id values before the partial unique index, else
+                # CREATE UNIQUE INDEX raises (swallowed below) and ON CONFLICT upserts break.
+                # Keep best artifact per incident (content first, then newest), detach the rest.
+                # Relax FORCE RLS or the UPDATE matches 0 rows (no org context here).
+                cursor.execute("ALTER TABLE artifacts NO FORCE ROW LEVEL SECURITY")
+                cursor.execute("""
+                    WITH ranked AS (
+                        SELECT id,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY incident_id
+                                   ORDER BY (content IS NOT NULL) DESC,
+                                            updated_at DESC NULLS LAST,
+                                            created_at DESC NULLS LAST,
+                                            id DESC
+                               ) AS rn
+                        FROM artifacts
+                        WHERE incident_id IS NOT NULL
+                    )
+                    UPDATE artifacts a
+                    SET incident_id = NULL
+                    FROM ranked r
+                    WHERE a.id = r.id AND r.rn > 1
+                """)
+                if cursor.rowcount > 0:
+                    logging.info(
+                        f"Detached incident_id from {cursor.rowcount} duplicate artifact(s) "
+                        "before creating unique index."
+                    )
+                cursor.execute("ALTER TABLE artifacts FORCE ROW LEVEL SECURITY")
+                cursor.execute("""
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_incident_id ON artifacts(incident_id) WHERE incident_id IS NOT NULL;
+                """)
+                # Drop FK constraint on postmortem_exports so it can reference artifact IDs
+                cursor.execute("""
+                    ALTER TABLE postmortem_exports DROP CONSTRAINT IF EXISTS postmortem_exports_postmortem_id_fkey;
+                """)
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error adding incident_id/generation_session_id to artifacts: {e}")
+                conn.rollback()
+
+            # Migrate postmortem data into artifacts (idempotent)
+            # Temporarily relax RLS on source tables so the migration works on managed Postgres
+            # (where the app user doesn't have BYPASSRLS)
+            try:
+                cursor.execute("ALTER TABLE postmortems DISABLE ROW LEVEL SECURITY")
+                cursor.execute("ALTER TABLE incidents DISABLE ROW LEVEL SECURITY")
+                conn.commit()
+
+                cursor.execute("""
+                    SELECT DISTINCT COALESCE(p.org_id, i.org_id) as org_id
+                    FROM postmortems p
+                    JOIN incidents i ON i.id = p.incident_id
+                    WHERE p.content IS NOT NULL
+                      AND COALESCE(p.org_id, i.org_id) IS NOT NULL
+                """)
+                pm_orgs = [row[0] for row in cursor.fetchall()]
+                conn.commit()
+
+                migrated_count = 0
+                for pm_org_id in pm_orgs:
+                    cursor.execute("SET myapp.current_org_id = %s", (pm_org_id,))
+                    cursor.execute("""
+                        INSERT INTO artifacts (org_id, user_id, title, content, category, description,
+                                              incident_id, generation_session_id, last_edited_by,
+                                              created_at, updated_at)
+                        SELECT COALESCE(p.org_id, i.org_id), p.user_id,
+                               COALESCE('Postmortem: ' || i.alert_title || ' [' || LEFT(p.incident_id::text, 8) || ']',
+                                        'Postmortem (' || p.incident_id || ')'),
+                               p.content, 'postmortem',
+                               'Generated postmortem for incident: ' || COALESCE(i.alert_title, p.incident_id::text),
+                               p.incident_id, p.generation_session_id, 'system',
+                               p.generated_at, p.updated_at
+                        FROM postmortems p
+                        JOIN incidents i ON i.id = p.incident_id
+                        WHERE p.content IS NOT NULL
+                          AND COALESCE(p.org_id, i.org_id) = %s
+                        ON CONFLICT (org_id, category, title) DO NOTHING
+                    """, (pm_org_id,))
+                    migrated_count += cursor.rowcount
+                    conn.commit()
+
+                cursor.execute("RESET myapp.current_org_id")
+                # Re-enable RLS (will be re-forced by the RLS setup if it runs again)
+                cursor.execute("ALTER TABLE postmortems ENABLE ROW LEVEL SECURITY")
+                cursor.execute("ALTER TABLE postmortems FORCE ROW LEVEL SECURITY")
+                cursor.execute("ALTER TABLE incidents ENABLE ROW LEVEL SECURITY")
+                cursor.execute("ALTER TABLE incidents FORCE ROW LEVEL SECURITY")
+                conn.commit()
+                if migrated_count > 0:
+                    logging.info(f"Migrated {migrated_count} postmortems into artifacts table.")
+            except Exception as e:
+                logging.warning(f"Error migrating postmortems to artifacts: {e}")
+                conn.rollback()
+
+            # Auto-trigger memory migration if old KB tables still have data
+            _should_trigger_migration = False
+            try:
+                cursor.execute("""
+                    SELECT EXISTS (
+                        SELECT 1 FROM information_schema.tables
+                        WHERE table_name = 'knowledge_base_memory'
+                    )
+                """)
+                old_tables_exist = cursor.fetchone()[0]
+
+                if old_tables_exist:
+                    cursor.execute("""
+                        SELECT EXISTS (
+                            SELECT 1 FROM knowledge_base_memory
+                            WHERE content IS NOT NULL AND content != ''
+                            LIMIT 1
+                        )
+                        OR EXISTS (
+                            SELECT 1 FROM infrastructure_context
+                            WHERE content IS NOT NULL AND content != ''
+                            LIMIT 1
+                        )
+                        OR EXISTS (
+                            SELECT 1 FROM knowledge_base_documents
+                            WHERE status IN ('processed', 'ready')
+                              AND storage_path IS NOT NULL
+                            LIMIT 1
+                        )
+                    """)
+                    has_source_data = cursor.fetchone()[0]
+
+                    cursor.execute("""
+                        SELECT EXISTS (
+                            SELECT 1 FROM artifacts
+                            WHERE category IN ('context', 'infrastructure', 'runbook')
+                            LIMIT 1
+                        )
+                    """)
+                    already_migrated = cursor.fetchone()[0]
+
+                    if has_source_data and not already_migrated:
+                        _should_trigger_migration = True
+            except Exception as e:
+                logging.warning(f"Error checking/triggering memory migration: {e}")
+                conn.rollback()
+
             conn.commit()
+
+            # Enqueue migration AFTER commit so the worker sees the final schema
+            if _should_trigger_migration:
+                from services.memory.migration_task import migrate_kb_to_memory
+                migrate_kb_to_memory.delay()
+                logging.info("Triggered automatic KB → memory migration task")
+
             logging.info("Database tables initialized successfully.")
             cursor.close()
+
+        # Outside the init transaction: CREATE INDEX CONCURRENTLY can't run in
+        # one, and a plain build would block chat writes on large tables.
+        from utils.db.chat_audit_indexes import build_indexes_in_background
+        build_indexes_in_background(DB_PARAMS)
 
     except Exception as e:
         logging.error(f"Error initializing tables: {e}")

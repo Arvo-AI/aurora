@@ -10,7 +10,7 @@ from typing import Any
 from celery_config import celery_app
 from chat.background.rca_prompt_builder import build_rca_prompt
 from services.correlation.alert_correlator import AlertCorrelator
-from services.correlation import handle_correlated_alert
+from services.correlation import apply_correlation_outcome
 from utils.auth.stateless_auth import get_user_preference
 from utils.payload_timestamp import extract_alert_fired_at
 
@@ -104,14 +104,17 @@ def process_dynatrace_problem(
                     alert_service=service, alert_severity=severity,
                     alert_metadata=alert_metadata, org_id=org_id,
                 )
-                if result.is_correlated:
-                    handle_correlated_alert(
-                        cursor=cursor, user_id=user_id, incident_id=result.incident_id,
-                        source_type="dynatrace", source_alert_id=alert_db_id,
-                        alert_title=title, alert_service=service, alert_severity=severity,
-                        correlation_result=result, alert_metadata=alert_metadata,
-                        raw_payload=payload, org_id=org_id,
-                    )
+                if result.is_correlated and apply_correlation_outcome(
+                    cursor=cursor, user_id=user_id, incident_id=result.incident_id,
+                    source_type="dynatrace", source_alert_id=alert_db_id,
+                    alert_title=title, alert_service=service, alert_severity=severity,
+                    correlation_result=result, alert_metadata=alert_metadata,
+                    raw_payload=payload, org_id=org_id,
+                    # Live hint-only mode needs the fall-through to actually
+                    # create an incident; with RCA disabled it would not, so
+                    # keep the legacy attach in that case.
+                    hint_only_eligible=_should_trigger_rca(user_id),
+                ):
                     conn.commit()
                     return
             except Exception as corr_exc:

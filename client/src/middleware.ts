@@ -17,6 +17,11 @@ const publicRoutes = [
   "/api/auth/register",   // Public registration endpoint
   "/api/auth/verify-email", // Email verification
   "/api/auth/resend-verification", // Resend verification code
+  "/api/auth/forgot-password", // Reset-code request (caller is locked out)
+  "/api/auth/reset-password", // Reset completion (emailed code is the proof)
+  "/api/auth/password-reset-available", // Whether SMTP is configured (no account data)
+  "/api/auth/sso-discover", // Email domain -> SSO login URL (caller isn't signed in yet)
+  "/api/slack/signin-available", // Whether to show "Continue with Slack" (no account data)
   "/google-chat/events",  // Google Chat event POSTs (rewritten to backend)
   "/api/ping",            // Connection health check
 ]
@@ -65,12 +70,19 @@ export default auth((req) => {
   // If user is logged in and tries to access auth pages, redirect to home
   // (but not if they're on verify-email or change-password modes)
   const signInMode = nextUrl.searchParams.get('mode')
-  if (isAuthRoute && isLoggedIn && signInMode !== 'verify-email' && signInMode !== 'change-password') {
+  // A pending GitHub install (gh_claim, gh_new) is finished on /sign-in, also
+  // for someone already signed in, and the install-request notice shows there.
+  const isGithubClaim = nextUrl.pathname.startsWith('/sign-in')
+    && (nextUrl.searchParams.has('gh_claim') || nextUrl.searchParams.has('gh_new')
+        || nextUrl.searchParams.get('notice') === 'github_install_requested')
+  if (isAuthRoute && isLoggedIn && !isGithubClaim && signInMode !== 'verify-email' && signInMode !== 'change-password') {
     return sanitizeResponse(NextResponse.redirect(new URL("/", nextUrl)))
   }
 
-  // Force password change: redirect to /sign-in?mode=change-password if flag is set
-  if (isLoggedIn && req.auth?.user?.mustChangePassword && !isChangePasswordRoute && !isApiRoute) {
+  // Force password change: redirect to /sign-in?mode=change-password if flag is set.
+  // GitHub-provisioned users also have mustChangePassword (unusable password) but
+  // are NOT forced — they can set a password later from Profile Settings.
+  if (isLoggedIn && req.auth?.user?.mustChangePassword && !req.auth?.user?.isGithubProvisioned && !isChangePasswordRoute && !isApiRoute) {
     return sanitizeResponse(NextResponse.redirect(new URL("/sign-in?mode=change-password", nextUrl)))
   }
 

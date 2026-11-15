@@ -49,7 +49,6 @@ from .cloud_exec_tool import cloud_exec
 
 from .zip_file_tool import analyze_zip_file
 from .cloud_provider_utils import determine_target_provider_from_context
-from .rag_indexer_tool import rag_index_zip, RAGIndexZipArgs
 from .web_search_tool import web_search, WebSearchArgs
 from .terminal_exec_tool import terminal_exec
 from .tailscale_ssh_tool import tailscale_ssh, is_tailscale_connected
@@ -81,14 +80,58 @@ from .splunk_tool import (
     SplunkListIndexesArgs,
     SplunkListSourcetypesArgs,
 )
+from .elastic_tool import (
+    elastic_list_indices,
+    elastic_get_fields,
+    elastic_search_logs,
+    elastic_esql,
+    elastic_get_alerts,
+    is_elastic_connected,
+    ElasticListIndicesArgs,
+    ElasticGetFieldsArgs,
+    ElasticSearchLogsArgs,
+    ElasticEsqlArgs,
+    ElasticGetAlertsArgs,
+)
+from .servicenow_tool import (
+    list_servicenow_incidents, get_servicenow_incident, is_servicenow_connected,
+    servicenow_add_work_note, servicenow_create_incident, servicenow_update_incident,
+    ListServiceNowIncidentsArgs, GetServiceNowIncidentArgs,
+    ServiceNowAddWorkNoteArgs, ServiceNowCreateIncidentArgs, ServiceNowUpdateIncidentArgs,
+)
 from .incidentio_tool import (
     list_incidentio_incidents,
+    list_incidentio_alerts,
     get_incidentio_incident,
     get_incidentio_timeline,
+    get_incidentio_alert,
     is_incidentio_connected,
     ListIncidentsArgs,
+    ListAlertsArgs,
     GetIncidentArgs,
     GetTimelineArgs,
+    GetAlertArgs,
+)
+from .rabbitmq_tool import (
+    rabbitmq_get_overview,
+    rabbitmq_list_nodes,
+    rabbitmq_list_queues,
+    rabbitmq_get_queue,
+    rabbitmq_list_exchanges,
+    rabbitmq_list_bindings,
+    rabbitmq_list_connections,
+    rabbitmq_list_consumers,
+    rabbitmq_health_checks,
+    is_rabbitmq_connected,
+    RabbitMQOverviewArgs,
+    RabbitMQNodesArgs,
+    RabbitMQListQueuesArgs,
+    RabbitMQGetQueueArgs,
+    RabbitMQListExchangesArgs,
+    RabbitMQListBindingsArgs,
+    RabbitMQListConnectionsArgs,
+    RabbitMQListConsumersArgs,
+    RabbitMQHealthArgs,
 )
 from .coroot_tool import (
     coroot_get_incidents,
@@ -185,9 +228,10 @@ from .flyio_tool import (
 # Import all context management functions from utils
 from utils.cloud.cloud_utils import (
     get_user_context, set_user_context, get_state_context, get_workflow_context,
-    set_websocket_context, get_websocket_context, get_selected_project_id, 
+    set_websocket_context, get_websocket_context, get_selected_project_id,
     set_selected_project_id, set_tool_capture, get_tool_capture,
-    get_provider_preference, set_provider_preference, _set_ctx, get_mode_from_context
+    get_provider_preference, set_provider_preference, _set_ctx, get_mode_from_context,
+    _is_background_rca,
 )
 from chat.backend.agent.access import ModeAccessController
 
@@ -972,7 +1016,6 @@ __all__ = [
 
 # Import MCP functionality from separate module
 from .mcp_tools import (
-    REAL_MCP_ENABLED,
     REAL_MCP_SERVER_PATHS,
     RealMCPServerManager,
     _mcp_manager,
@@ -985,24 +1028,41 @@ from .mcp_tools import (
     _langchain_tools_cache_expiry,
     LANGCHAIN_TOOLS_CACHE_DURATION
 )
+from connectors.mcp_connector.store import fingerprint as mcp_fingerprint
 
 
-_NON_RCA_SOURCES = frozenset(('action', 'prediscovery'))
+# Bitbucket tool actions that mutate state. Read-only sessions (PR change-
+# gating reviews, background RCA) hard-reject these at the tool FUNCTION
+# level — not just via descriptions — so a prompt-injected diff can't talk
+# the agent into merging/approving/pushing.
+_BB_WRITE_ACTIONS = frozenset({
+    "create_or_update_file", "edit_file", "delete_file",
+    "create_branch", "delete_branch",
+    "create_pr", "update_pr", "merge_pr", "approve_pr",
+    "unapprove_pr", "decline_pr", "add_pr_comment",
+    "create_issue", "update_issue", "add_issue_comment",
+    "trigger_pipeline", "stop_pipeline",
+})
 
 
-def _is_background_rca(state_context, is_background: bool) -> bool:
-    """True when the session is a background RCA investigating a real incident.
-
-    Used to gate tools like github_fix that only make sense during incident
-    investigation (where the user will see the incident card afterwards).
-    """
-    if not state_context or not is_background:
-        return False
-    incident_id = getattr(state_context, 'incident_id', None)
-    if not incident_id:
-        return False
-    rca_source = ((getattr(state_context, 'rca_context', None) or {}).get('source', '') or '').lower()
-    return bool(rca_source) and rca_source not in _NON_RCA_SOURCES
+def _bb_read_only_gate(func, tool_name, reason):
+    """Wrap a Bitbucket tool so write actions are rejected during read-only
+    sessions. ``reason`` names the session type in the error ("PR review",
+    "RCA")."""
+    def gated(*args, **kwargs):
+        _action = kwargs.get("action") or (args[0] if args else None)
+        if _action in _BB_WRITE_ACTIONS:
+            return json.dumps({
+                "error": True,
+                "message": (
+                    f"Action '{_action}' is not permitted: {reason} "
+                    "sessions are read-only on Bitbucket."
+                ),
+            })
+        return func(*args, **kwargs)
+    gated.__name__ = getattr(func, "__name__", tool_name)
+    gated.__doc__ = func.__doc__
+    return gated
 
 
 def get_cloud_tools():
@@ -1044,7 +1104,18 @@ def get_cloud_tools():
     # hpa_vpa is part of the key for the same reason postmortem is: it changes
     # which tools are returned, so sharing a cache entry across contexts would
     # leak the card tool into an ordinary chat (or withhold it from the action).
-    cache_key = f"{user_id}:{capture_tag}:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}:hpa_vpa={is_hpa_vpa_action}:is_rca_ctx={is_rca_context}:pr_review={is_pr_review}:action_id={_action_id}:incident={_incident_id}"
+    # The MCP fingerprint is in the key so connecting a server takes effect on
+    # the next turn: without it the agent ran on a stale tool list for up to
+    # LANGCHAIN_TOOLS_CACHE_DURATION after registration and insisted the tools
+    # did not exist.
+    # RabbitMQ connect/disconnect happens in the API process. The chatbot and
+    # worker keep their own tool cache, so the credential bit has to be in the key.
+    rabbitmq_connected = is_rabbitmq_connected(user_id)
+    # Role grants change which connectors are offered, independent of credentials.
+    from utils.auth.connector_access import access_for
+    access = access_for(user_id)
+
+    cache_key = f"{user_id}:{capture_tag}:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}:hpa_vpa={is_hpa_vpa_action}:is_rca_ctx={is_rca_context}:pr_review={is_pr_review}:action_id={_action_id}:incident={_incident_id}:mcp={mcp_fingerprint(user_id)}:access={access.revision()}:rabbitmq={int(rabbitmq_connected)}"
     
     current_time = time.time()
     if (
@@ -1052,20 +1123,19 @@ def get_cloud_tools():
         cache_key in _langchain_tools_cache_expiry and
         current_time < _langchain_tools_cache_expiry[cache_key]
     ):
-        logging.info(
-            f"Using fully cached LangChain tools for user {user_id} (cache key: {cache_key})"
-        )
+        # The cache key includes the MCP config, which is loaded from the secret store
+        logging.info("Using fully cached LangChain tools for user %s", user_id)
         cached_tools = _langchain_tools_cache[cache_key]
         return list(cached_tools)
     
     # Create wrapper function to capture tool results
+    # timeout is a model parameter, so it stays in the tool-call signature.
     INTERNAL_CONTEXT_KEYS = {
         "user_id",
         "session_id",
         "provider_preference",
         "event_loop",
         "websocket_sender",
-        "timeout",
         "state",
     }
 
@@ -1312,17 +1382,20 @@ def get_cloud_tools():
     tools = []
     
     # Create wrapper for cloud_exec to hide internal parameters from AI
-    def cloud_exec_wrapper(provider: str, command: str, output_file: Optional[str] = None, account_id: Optional[str] = None, **kwargs) -> str:
-        """Execute cloud CLI commands. Provider and command are required. Use output_file to save raw output to a file (useful for kubeconfig).
-        
+    def cloud_exec_wrapper(provider: str, command: str, output_file: Optional[str] = None, account_id: Optional[str] = None, timeout: Optional[int] = None, **kwargs) -> str:
+        """Execute cloud CLI commands. Provider and command are required.
+
+        Pass timeout (seconds) when a command needs longer than its default,
+        up to 600. `bq query` and `bq wait` default to 300 seconds. Use output_file to save
+        raw output to a file (useful for kubeconfig).
+
 For AWS with multiple connected accounts: the FIRST investigative call omit account_id to query all accounts.
 Once you identify which account has the issue, pass account_id (e.g. 'account') to target that specific account."""
         user_id = kwargs.get('user_id')
         session_id = kwargs.get('session_id')
         provider_preference = kwargs.get('provider_preference')
-        timeout = kwargs.get('timeout')
-        
-        return cloud_exec(provider, command, user_id=user_id, session_id=session_id, 
+
+        return cloud_exec(provider, command, user_id=user_id, session_id=session_id,
                          provider_preference=provider_preference, timeout=timeout,
                          output_file=output_file, account_id=account_id)
     
@@ -1333,6 +1406,11 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     from chat.backend.agent.tools.kubectl_onprem_tool import on_prem_kubectl, is_kubectl_onprem_connected
     from utils.auth.stateless_auth import get_connected_providers
 
+    def _open(connector_id: str) -> bool:
+        # A connector nobody has limited stays available. A limited one is
+        # offered only to roles that were granted it.
+        return access.may_use(connector_id)
+
     # List of (function, name) tuples — always-available tools
     tool_functions = [
         (terminal_exec, "terminal_exec"),
@@ -1342,7 +1420,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
 
     # Cloud provider tools (only if at least one provider is connected)
     # PR review is read-only: exclude exec/write tools.
-    if get_connected_providers(user_id) and not is_pr_review:
+    if any(_open(p) for p in get_connected_providers(user_id)) and not is_pr_review:
         tool_functions.append((run_iac_tool, "iac_tool"))
         tool_functions.append((cloud_exec_wrapper, "cloud_exec"))
 
@@ -1366,7 +1444,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             )
             return False
 
-    if _safe_connected(is_github_connected, "GitHub"):
+    if _safe_connected(is_github_connected, "GitHub") and _open("github"):
         if not is_pr_review:
             tool_functions.append((github_commit, "github_commit"))
         tool_functions.append((get_connected_repos, "get_connected_repos"))
@@ -1379,11 +1457,11 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             tool_functions.append((github_fix, "github_fix"))
         logging.info(f"Added GitHub tools for user {user_id} (github_fix={'included' if is_rca_context else 'excluded (not RCA)'})")
 
-    if _safe_connected(is_tailscale_connected, "Tailscale") and not is_pr_review:
+    if _safe_connected(is_tailscale_connected, "Tailscale") and _open("tailscale") and not is_pr_review:
         tool_functions.append((tailscale_ssh, "tailscale_ssh"))
         logging.info(f"Added Tailscale SSH tool for user {user_id}")
 
-    if _safe_connected(is_kubectl_onprem_connected, "kubectl_onprem") and not is_pr_review:
+    if _safe_connected(is_kubectl_onprem_connected, "kubectl_onprem") and _open("onprem") and not is_pr_review:
         tool_functions.append((get_connected_clusters, "get_connected_clusters"))
         tool_functions.append((on_prem_kubectl, "on_prem_kubectl"))
         logging.info(f"Added on-prem kubectl tools for user {user_id}")
@@ -1392,25 +1470,51 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     try:
         from .slack_tool import (
             list_slack_channels,
+            list_slack_users,
             get_channel_history,
             get_thread_replies,
+            get_connected_slack_channels,
+            post_slack_message,
             is_slack_connected,
         )
-        if _safe_connected(is_slack_connected, "Slack"):
+        if _safe_connected(is_slack_connected, "Slack") and _open("slack"):
             tool_functions.append((list_slack_channels, "list_slack_channels"))
+            tool_functions.append((list_slack_users, "list_slack_users"))
             tool_functions.append((get_channel_history, "get_channel_history"))
             tool_functions.append((get_thread_replies, "get_thread_replies"))
+            tool_functions.append((get_connected_slack_channels, "get_connected_slack_channels"))
+            # Write tool — filtered out of ask mode by ModeAccessController.
+            tool_functions.append((post_slack_message, "post_slack_message"))
             logging.info(f"Added Slack tools for user {user_id}")
     except Exception as e:
         logging.warning(f"Failed to add Slack tools: {e}")
 
-    if _safe_connected(is_jenkins_connected, "Jenkins"):
+    try:
+        from .teams_tool import (
+            get_teams_channel_history,
+            get_connected_teams_channels,
+            list_teams_channels,
+            get_teams_thread_replies,
+            post_teams_message,
+            is_teams_connected,
+        )
+        if _safe_connected(is_teams_connected, "Microsoft Teams") and _open("teams"):
+            tool_functions.append((get_teams_channel_history, "get_teams_channel_history"))
+            tool_functions.append((list_teams_channels, "list_teams_channels"))
+            tool_functions.append((get_teams_thread_replies, "get_teams_thread_replies"))
+            tool_functions.append((get_connected_teams_channels, "get_connected_teams_channels"))
+            tool_functions.append((post_teams_message, "post_teams_message"))
+            logging.info(f"Added Microsoft Teams tools for user {user_id}")
+    except Exception as e:
+        logging.warning(f"Failed to add Microsoft Teams tools: {e}")
+
+    if _safe_connected(is_jenkins_connected, "Jenkins") and _open("jenkins"):
         tool_functions.append((jenkins_rca, "jenkins_rca"))
         logging.info(f"Added Jenkins RCA tool for user {user_id}")
-    if _safe_connected(is_cloudbees_connected, "CloudBees"):
+    if _safe_connected(is_cloudbees_connected, "CloudBees") and _open("cloudbees"):
         tool_functions.append((cloudbees_rca, "cloudbees_rca"))
         logging.info(f"Added CloudBees RCA tool for user {user_id}")
-    if _safe_connected(is_spinnaker_connected, "Spinnaker"):
+    if _safe_connected(is_spinnaker_connected, "Spinnaker") and _open("spinnaker"):
         tool_functions.append((spinnaker_rca, "spinnaker_rca"))
         logging.info(f"Added Spinnaker RCA tool for user {user_id}")
 
@@ -1715,6 +1819,20 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                 ),
                 args_schema=ListSlackChannelsArgs,
             )
+        elif name == 'list_slack_users':
+            from .slack_tool import ListSlackUsersArgs
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "Find Slack users whose first name, display name, or full name "
+                    "starts with a prefix, and return the <@USERID> token that "
+                    "notifies them. Pass name='a' for Ada and Alex. Use this when "
+                    "the person is not already mentioned in the thread. Copy the "
+                    "mention exactly; a plain @name does not notify."
+                ),
+                args_schema=ListSlackUsersArgs,
+            )
         elif name == 'get_channel_history':
             from .slack_tool import GetChannelHistoryArgs
             tool = StructuredTool.from_function(
@@ -1738,6 +1856,82 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                 ),
                 args_schema=GetThreadRepliesArgs,
             )
+        elif name == 'get_connected_slack_channels':
+            from .slack_tool import GetConnectedSlackChannelsArgs
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,                description=(
+                    "List the Slack channels Aurora is aware of, each with a description "
+                    "of what it's for and which team/service it serves. Call this to decide "
+                    "which channel(s) are relevant when posting about an incident or "
+                    "notifying a team. Combine it with the 'Slack' memory (context/Slack), "
+                    "which holds team/channel routing preferences (e.g. 'post conclusions "
+                    "to #payments-oncall', 'stay quiet in #general')."
+                ),
+                args_schema=GetConnectedSlackChannelsArgs,
+            )
+        elif name == 'post_slack_message':
+            from .slack_tool import PostSlackMessageArgs
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "Post a message to a Slack channel. Set thread_ts to reply UNDER an "
+                    "existing message (use this for a follow-up on a recurring incident so "
+                    "it threads under the earlier conversation instead of adding a new "
+                    "top-level message and noise). Omit thread_ts to start a new message. "
+                    "Keep messages short and human. Only post to channels the routing "
+                    "policy (Slack memory + channel descriptions) says are relevant; stay "
+                    "silent otherwise."
+                ),
+                args_schema=PostSlackMessageArgs,
+            )
+        elif name == 'get_teams_channel_history':
+            from .teams_tool import GetTeamsChannelHistoryArgs
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description="Fetch recent messages from a Microsoft Teams channel.",
+                args_schema=GetTeamsChannelHistoryArgs,
+            )
+        elif name == 'list_teams_channels':
+            from .teams_tool import GetConnectedTeamsChannelsArgs
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description="Live list of Teams channels Aurora can see (names and descriptions, no LLM routing text).",
+                args_schema=GetConnectedTeamsChannelsArgs,
+            )
+        elif name == 'get_teams_thread_replies':
+            from .teams_tool import GetTeamsThreadRepliesArgs
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description="Fetch replies under a Microsoft Teams channel message.",
+                args_schema=GetTeamsThreadRepliesArgs,
+            )
+        elif name == 'get_connected_teams_channels':
+            from .teams_tool import GetConnectedTeamsChannelsArgs
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "List Microsoft Teams channels Aurora may post to, with descriptions. "
+                    "Combine with the Microsoft Teams memory (context/Microsoft Teams)."
+                ),
+                args_schema=GetConnectedTeamsChannelsArgs,
+            )
+        elif name == 'post_teams_message':
+            from .teams_tool import PostTeamsMessageArgs
+            tool = StructuredTool.from_function(
+                func=final_func,
+                name=name,
+                description=(
+                    "Post a message to a Microsoft Teams channel. Set reply_to_id to reply in "
+                    "an existing thread. Requires team_id and channel_id."
+                ),
+                args_schema=PostTeamsMessageArgs,
+            )
         else:
             tool = StructuredTool.from_function(final_func)
         tools.append(tool)
@@ -1747,18 +1941,6 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         func=analyze_zip_file,
         name="analyze_zip_file",
         description="Analyze a ZIP attachment: list, extract a file, or detect project structure",
-    ))
-
-    # Add RAG indexer for ZIPs
-    tools.append(StructuredTool.from_function(
-        func=rag_index_zip,
-        name="rag_index_zip",
-        description=(
-            "Index code/text files from an uploaded ZIP into the RAG store (Weaviate). "
-            "Arguments: attachment_index (int)=0, max_files (int)=200, max_file_bytes (int)=750000, "
-            "include_patterns (list[str]) and exclude_dirs (list[str])."
-        ),
-        args_schema=RAGIndexZipArgs,
     ))
 
     # Add load_skill tool for on-demand integration guidance
@@ -1788,56 +1970,140 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     except Exception as e:
         logging.warning(f"Failed to register load_skill tool: {e}")
 
-    # Add Knowledge Base search tool for authenticated users
+    # Add Memory tools for authenticated users
     try:
-        from chat.backend.agent.tools.knowledge_base_search_tool import (
-            knowledge_base_search,
-            KnowledgeBaseSearchArgs,
-            KNOWLEDGE_BASE_SEARCH_DESCRIPTION,
+        from chat.backend.agent.tools.memory_tool import (
+            list_memories,
+            read_memory,
+            write_memory,
+            ListMemoriesArgs,
+            ReadMemoryArgs,
+            WriteMemoryArgs,
         )
 
-        context_wrapped_kb = with_user_context(knowledge_base_search)
-        notification_wrapped_kb = with_completion_notification(context_wrapped_kb)
+        context_wrapped_lm = with_user_context(list_memories)
+        notification_wrapped_lm = with_completion_notification(context_wrapped_lm)
         if tool_capture:
-            final_kb_func = wrap_func_with_capture(notification_wrapped_kb, "knowledge_base_search")
+            final_lm_func = wrap_func_with_capture(notification_wrapped_lm, "list_memories")
         else:
-            final_kb_func = notification_wrapped_kb
+            final_lm_func = notification_wrapped_lm
 
         tools.append(StructuredTool.from_function(
-            func=final_kb_func,
-            name="knowledge_base_search",
-            description=KNOWLEDGE_BASE_SEARCH_DESCRIPTION,
-            args_schema=KnowledgeBaseSearchArgs,
+            func=final_lm_func,
+            name="list_memories",
+            description=(
+                "List org memory entries, optionally filtered by category "
+                "Use to discover available knowledge before reading specific entries."
+            ),
+            args_schema=ListMemoriesArgs,
         ))
-        logging.info(f"Added knowledge_base_search tool for user {user_id}")
-    except Exception as e:
-        logging.warning(f"Failed to add knowledge_base_search tool: {e}")
 
-    # Add get_infrastructure_context for all authenticated users
-    if user_id:
-        try:
-            from chat.backend.agent.tools.infra_context_tool import (
-                get_infrastructure_context,
-                GetInfraContextArgs,
-                GET_INFRA_CONTEXT_DESCRIPTION,
-            )
+        context_wrapped_rm = with_user_context(read_memory)
+        notification_wrapped_rm = with_completion_notification(context_wrapped_rm)
+        if tool_capture:
+            final_rm_func = wrap_func_with_capture(notification_wrapped_rm, "read_memory")
+        else:
+            final_rm_func = notification_wrapped_rm
 
-            context_wrapped_ic = with_user_context(get_infrastructure_context)
-            notification_wrapped_ic = with_completion_notification(context_wrapped_ic)
-            if tool_capture:
-                final_ic_func = wrap_func_with_capture(notification_wrapped_ic, "get_infrastructure_context")
-            else:
-                final_ic_func = notification_wrapped_ic
+        tools.append(StructuredTool.from_function(
+            func=final_rm_func,
+            name="read_memory",
+            description=(
+                "Read the full markdown content of a specific memory entry by category and title. "
+                "Use the ORG MEMORY index in your system prompt to find available entries, "
+                "then read the ones relevant to your investigation."
+            ),
+            args_schema=ReadMemoryArgs,
+        ))
 
+        context_wrapped_wm = with_user_context(write_memory)
+        notification_wrapped_wm = with_completion_notification(context_wrapped_wm)
+        if tool_capture:
+            final_wm_func = wrap_func_with_capture(notification_wrapped_wm, "write_memory")
+        else:
+            final_wm_func = notification_wrapped_wm
+
+        if not is_pr_review:
             tools.append(StructuredTool.from_function(
-                func=final_ic_func,
-                name="get_infrastructure_context",
-                description=GET_INFRA_CONTEXT_DESCRIPTION,
-                args_schema=GetInfraContextArgs,
+                func=final_wm_func,
+                name="write_memory",
+                description=(
+                    "Create or overwrite an org memory entry (full content replacement). "
+                    "Prefer append_to_memory for adding new info to existing entries, or "
+                    "edit_memory for surgical changes. Use write_memory only for new entries "
+                    "or when the entire content needs replacing."
+                ),
+                args_schema=WriteMemoryArgs,
             ))
-            logging.info(f"Added get_infrastructure_context tool for user {user_id}")
-        except Exception as e:
-            logging.warning(f"Failed to add get_infrastructure_context tool: {e}")
+
+        from chat.backend.agent.tools.memory_tool import (
+            append_to_memory,
+            edit_memory,
+            grep_memories,
+            AppendToMemoryArgs,
+            EditMemoryArgs,
+            GrepMemoriesArgs,
+        )
+
+        context_wrapped_am = with_user_context(append_to_memory)
+        notification_wrapped_am = with_completion_notification(context_wrapped_am)
+        if tool_capture:
+            final_am_func = wrap_func_with_capture(notification_wrapped_am, "append_to_memory")
+        else:
+            final_am_func = notification_wrapped_am
+
+        if not is_pr_review:
+            tools.append(StructuredTool.from_function(
+                func=final_am_func,
+                name="append_to_memory",
+                description=(
+                    "Append content to the end of an existing memory entry without rewriting it. "
+                    "Creates the entry if it doesn't exist. Use for incrementally adding findings, "
+                    "new sections, or updates to an existing document."
+                ),
+                args_schema=AppendToMemoryArgs,
+            ))
+
+        context_wrapped_em = with_user_context(edit_memory)
+        notification_wrapped_em = with_completion_notification(context_wrapped_em)
+        if tool_capture:
+            final_em_func = wrap_func_with_capture(notification_wrapped_em, "edit_memory")
+        else:
+            final_em_func = notification_wrapped_em
+
+        if not is_pr_review:
+            tools.append(StructuredTool.from_function(
+                func=final_em_func,
+                name="edit_memory",
+                description=(
+                    "Find and replace specific text within a memory entry. Like sed — make surgical "
+                    "edits without rewriting the whole entry. old_text must match exactly. "
+                    "Read the entry first to see current content before editing."
+                ),
+                args_schema=EditMemoryArgs,
+            ))
+
+        context_wrapped_gm = with_user_context(grep_memories)
+        notification_wrapped_gm = with_completion_notification(context_wrapped_gm)
+        if tool_capture:
+            final_gm_func = wrap_func_with_capture(notification_wrapped_gm, "grep_memories")
+        else:
+            final_gm_func = notification_wrapped_gm
+
+        tools.append(StructuredTool.from_function(
+            func=final_gm_func,
+            name="grep_memories",
+            description=(
+                "Search across all memory content for a keyword or phrase. Returns matching "
+                "snippets with context. Use to find information across entries without reading "
+                "each one individually."
+            ),
+            args_schema=GrepMemoriesArgs,
+        ))
+
+        logging.info(f"Added memory tools (list, read, write, append, edit, grep) for user {user_id}")
+    except Exception as e:
+        logging.warning(f"Failed to add memory tools: {e}")
 
     # Introspection tools — incident/infra/actions/metrics self-audit (always available)
     if user_id:
@@ -1860,8 +2126,10 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                 get_action, GetActionArgs,
                 graph_get_service, GraphGetServiceArgs,
                 postmortem_list, PostmortemListArgs,
-                kb_get_memory, KbGetMemoryArgs,
                 grafana_list_alerts, GrafanaListAlertsArgs,
+                search_tool_calls, SearchToolCallsArgs,
+                search_conversations, SearchConversationsArgs,
+                get_conversation, GetConversationArgs,
             )
 
             _INTROSPECTION_TOOLS = [
@@ -1995,14 +2263,6 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     PostmortemListArgs,
                 ),
                 (
-                    kb_get_memory,
-                    "kb_get_memory",
-                    "Read the org's persistent knowledge base memory — a shared context "
-                    "document that teams maintain with org-specific conventions, runbook "
-                    "references, and operational notes.",
-                    KbGetMemoryArgs,
-                ),
-                (
                     grafana_list_alerts,
                     "grafana_list_alerts",
                     "List Grafana alerts ingested via webhook. Optionally filter by state "
@@ -2010,6 +2270,54 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     GrafanaListAlertsArgs,
                 ),
             ]
+
+            # Conversation audit: every user's chats and tool calls, so only for
+            # people the org's rule allows (admins, or admins and editors). The
+            # tools check again on every call.
+            from utils.auth.stateless_auth import get_org_id_for_user
+            from utils.auth.viewer_run import may_audit_chats
+            if may_audit_chats(user_id, get_org_id_for_user(user_id)):
+                _INTROSPECTION_TOOLS += [
+                    (
+                        search_conversations,
+                        "search_conversations",
+                        "Search every chat in this org (all users and channels: web, Slack, Teams, "
+                        "Google Chat, RCAs, Actions, scheduled runs) by period, source, status, user, "
+                        "issue type and full text over questions and replies. A quoted query or one of 3+ "
+                        "words is matched as a phrase first: match_type 'exact' means one message "
+                        "contains it, 'all_words' only that the words appear. Returns title, user, "
+                        "source, status, dates, message count, issue counts, a redacted matching "
+                        "snippet and title (only in private chats) and a link. When total_is_lower_bound is true, "
+                        "say 'at least N'. Read-only.",
+                        SearchConversationsArgs,
+                    ),
+                    (
+                        search_tool_calls,
+                        "search_tool_calls",
+                        "Search the tool calls Aurora made across this org (default: failed calls in "
+                        "the last 7 days). Filters: status, period, issue type (missing_permission, "
+                        "blocked_command, not_connected, timeout, unavailable, other), tool, source, "
+                        "user and free text over the redacted command and reason. Returns each call's "
+                        "tool, redacted command, status, issue, reason, user, chat and link, plus counts "
+                        "by status and by issue. When total_is_lower_bound is true, say 'at least N'. In a "
+                        "shared channel, commands, reasons and chat titles are left out. "
+                        "Use for 'which tool calls failed last week and why' or "
+                        "'which permissions is Aurora missing'. Read-only.",
+                        SearchToolCallsArgs,
+                    ),
+                    (
+                        get_conversation,
+                        "get_conversation",
+                        "Read one chat from search_conversations: its latest messages (redacted, capped "
+                        "at 1,500 characters each) and every failed tool call with its reason. To check "
+                        "an exact sentence, pass query: it returns every message containing that text "
+                        "(within the first 20,000 characters of each of the latest 2,000 messages), with "
+                        "the redacted text around each occurrence. To read one message in full, pass "
+                        "message_index. In a shared channel it returns only metadata, issues and the link. "
+                        "Read-only.",
+                        GetConversationArgs,
+                    ),
+                ]
 
             for _fn, _name, _desc, _schema in _INTROSPECTION_TOOLS:
                 _ctx_wrapped = with_user_context(_fn)
@@ -2030,58 +2338,8 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         except Exception as e:
             logging.warning(f"Failed to add introspection tools: {e}")
 
-    # Add discovery finding tool for prediscovery mode
-    if mode_suffix == "prediscovery":
-        try:
-            from chat.backend.agent.tools.discovery_finding_tool import (
-                save_discovery_finding,
-                DiscoveryFindingArgs,
-                DISCOVERY_FINDING_DESCRIPTION,
-            )
-
-            context_wrapped_df = with_user_context(save_discovery_finding)
-            notification_wrapped_df = with_completion_notification(context_wrapped_df)
-            if tool_capture:
-                final_df_func = wrap_func_with_capture(notification_wrapped_df, "save_discovery_finding")
-            else:
-                final_df_func = notification_wrapped_df
-
-            tools.append(StructuredTool.from_function(
-                func=final_df_func,
-                name="save_discovery_finding",
-                description=DISCOVERY_FINDING_DESCRIPTION,
-                args_schema=DiscoveryFindingArgs,
-            ))
-            logging.info(f"Added save_discovery_finding tool for prediscovery mode")
-        except Exception as e:
-            logging.warning(f"Failed to add save_discovery_finding tool: {e}")
-
-        try:
-            from chat.backend.agent.tools.infra_context_tool import (
-                save_infrastructure_context,
-                SaveInfraContextArgs,
-                SAVE_INFRA_CONTEXT_DESCRIPTION,
-            )
-
-            context_wrapped_sic = with_user_context(save_infrastructure_context)
-            notification_wrapped_sic = with_completion_notification(context_wrapped_sic)
-            if tool_capture:
-                final_sic_func = wrap_func_with_capture(notification_wrapped_sic, "save_infrastructure_context")
-            else:
-                final_sic_func = notification_wrapped_sic
-
-            tools.append(StructuredTool.from_function(
-                func=final_sic_func,
-                name="save_infrastructure_context",
-                description=SAVE_INFRA_CONTEXT_DESCRIPTION,
-                args_schema=SaveInfraContextArgs,
-            ))
-            logging.info("Added save_infrastructure_context tool for prediscovery mode")
-        except Exception as e:
-            logging.warning(f"Failed to add save_infrastructure_context tool: {e}")
-
     # Add Splunk tools if connected
-    if is_splunk_connected(user_id):
+    if is_splunk_connected(user_id) and _open("splunk"):
         # search_splunk tool
         context_wrapped_splunk = with_user_context(search_splunk)
         notification_wrapped_splunk = with_completion_notification(context_wrapped_splunk)
@@ -2097,6 +2355,8 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                 "Execute SPL (Splunk Processing Language) queries to search logs in Splunk. "
                 "Use this to investigate issues by querying log data. "
                 "First use list_splunk_indexes to discover available indexes, then construct targeted queries. "
+                "When several Splunk instances are connected, omit account_id to query every instance this user "
+                "can access (results_by_account). Pass account_id='host:port' to target one. "
                 "Example: search_splunk(query='index=main error | stats count by host', earliest_time='-1h')"
             ),
             args_schema=SplunkSearchArgs,
@@ -2113,7 +2373,11 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         tools.append(StructuredTool.from_function(
             func=final_indexes_func,
             name="list_splunk_indexes",
-            description="List available Splunk indexes to discover what log data is available for searching.",
+            description=(
+                "List available Splunk indexes to discover what log data is available for searching. "
+                "Omit account_id to list indexes on every Splunk this user can access. "
+                "Pass account_id='host:port' to target one instance."
+            ),
             args_schema=SplunkListIndexesArgs,
         ))
 
@@ -2128,7 +2392,11 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         tools.append(StructuredTool.from_function(
             func=final_sourcetypes_func,
             name="list_splunk_sourcetypes",
-            description="List available Splunk sourcetypes. Optionally filter by index to see what log types exist.",
+            description=(
+                "List available Splunk sourcetypes. Optionally filter by index to see what log types exist. "
+                "Omit account_id to list sourcetypes on every Splunk this user can access. "
+                "Pass account_id='host:port' to target one instance."
+            ),
             args_schema=SplunkListSourcetypesArgs,
         ))
 
@@ -2136,8 +2404,131 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     else:
         logging.debug(f"Splunk tools not added - user {user_id} not connected to Splunk")
 
+    # Add Elastic Cloud tools if connected
+    if is_elastic_connected(user_id) and _open("elastic"):
+        _elastic_tool_specs = [
+            (
+                elastic_list_indices, "elastic_list_indices", ElasticListIndicesArgs,
+                "List Elasticsearch indices, data streams and aliases in the connected Elastic Cloud deployment "
+                "(remote service — never look on the local filesystem). Call this FIRST to discover which log "
+                "streams exist (e.g. logs-nginx.access-default, filebeat-*), then elastic_get_fields, then "
+                "elastic_search_logs / elastic_esql. Example: elastic_list_indices(pattern='logs-*')",
+            ),
+            (
+                elastic_get_fields, "elastic_get_fields", ElasticGetFieldsArgs,
+                "List field names and types for an Elasticsearch index pattern (via _field_caps). Use it before "
+                "writing a query so you filter on real ECS fields (log.level, service.name, host.name, "
+                "kubernetes.pod.name, error.message). Example: elastic_get_fields(index='logs-*', prefix='kubernetes.')",
+            ),
+            (
+                elastic_search_logs, "elastic_search_logs", ElasticSearchLogsArgs,
+                "Search log documents in Elastic Cloud with a Lucene query_string over a time window (newest first). "
+                "Use for raw log lines around an incident. Example: elastic_search_logs(query='log.level:error AND "
+                "service.name:\"checkout\"', index='logs-*', time_range='30m', limit=50). Use `fields` to keep results "
+                "compact; use elastic_esql for aggregations. If an index does not use @timestamp, pass "
+                "timestamp_field (e.g. 'timestamp') or results will be empty.",
+            ),
+            (
+                elastic_esql, "elastic_esql", ElasticEsqlArgs,
+                "Run an ES|QL query against Elastic Cloud for aggregations, top-N and timelines. A time pre-filter "
+                "on timestamp_field (default @timestamp) is added from time_range — pass time_range='all' to disable "
+                "it for indices without a date field — and `| LIMIT 100` is appended if missing. Example: "
+                "elastic_esql(query='FROM logs-* | WHERE log.level == \"error\" | STATS c = COUNT(*) BY service.name "
+                "| SORT c DESC', time_range='1h')",
+            ),
+            (
+                elastic_get_alerts, "elastic_get_alerts", ElasticGetAlertsArgs,
+                "List Kibana alerts (from the .alerts-* indices): which rules are firing, their reason text, "
+                "start/end time, value vs threshold and the affected instance (host/service). "
+                "Example: elastic_get_alerts(status='active', hours=24)",
+            ),
+        ]
+        for _fn, _name, _schema, _desc in _elastic_tool_specs:
+            _ctx = with_user_context(_fn)
+            _notified = with_completion_notification(_ctx)
+            _final = wrap_func_with_capture(_notified, _name) if tool_capture else _notified
+            tools.append(StructuredTool.from_function(
+                func=_final,
+                name=_name,
+                description=_desc,
+                args_schema=_schema,
+            ))
+        logging.info(f"Added {len(_elastic_tool_specs)} Elastic tools for user {user_id}")
+    else:
+        logging.debug(f"Elastic tools not added - user {user_id} not connected to Elastic")
+
+    # Add ServiceNow tools if connected. The whole block is guarded so a registration
+    # error cannot abort tool construction for every other connector.
+    # A team limit hides the tool the same way it hides the skill.
+    if _safe_connected(is_servicenow_connected, "ServiceNow") and _open("servicenow"):
+        try:
+            context_wrapped_sn_list = with_user_context(list_servicenow_incidents)
+            notification_wrapped_sn_list = with_completion_notification(context_wrapped_sn_list)
+            final_sn_list_func = wrap_func_with_capture(notification_wrapped_sn_list, "list_servicenow_incidents") if tool_capture else notification_wrapped_sn_list
+
+            tools.append(StructuredTool.from_function(
+                func=final_sn_list_func,
+                name="list_servicenow_incidents",
+                description=(
+                    "List ServiceNow incidents, newest first. Use this to find related or "
+                    "recurring incidents: filter by state (active/new/in_progress/on_hold/"
+                    "resolved/closed), priority (1-5), assignment group, or a free-text "
+                    "match on the description. Read-only."
+                ),
+                args_schema=ListServiceNowIncidentsArgs,
+            ))
+
+            context_wrapped_sn_get = with_user_context(get_servicenow_incident)
+            notification_wrapped_sn_get = with_completion_notification(context_wrapped_sn_get)
+            final_sn_get_func = wrap_func_with_capture(notification_wrapped_sn_get, "get_servicenow_incident") if tool_capture else notification_wrapped_sn_get
+
+            tools.append(StructuredTool.from_function(
+                func=final_sn_get_func,
+                name="get_servicenow_incident",
+                description=(
+                    "Get one ServiceNow incident by number (INC0010001) or sys_id: priority, "
+                    "impact, urgency, state, category, assignment group, configuration item, "
+                    "caller, description and close notes. Read-only."
+                ),
+                args_schema=GetServiceNowIncidentArgs,
+            ))
+
+            # Write tools are bound only with the org's opt-in, whatever the session type:
+            # the connector-page switch is the single control over ServiceNow writes.
+            from routes.servicenow.tasks import get_write_mode as _sn_write_mode
+            from routes.servicenow.tasks import work_notes_enabled as _sn_work_notes_enabled
+
+            _sn_write_tools = []
+            if _sn_work_notes_enabled(user_id):
+                _sn_write_tools.append(
+                    (servicenow_add_work_note, "servicenow_add_work_note", ServiceNowAddWorkNoteArgs,
+                     "Post a work note on a ServiceNow incident (by number or sys_id). Internal by default; "
+                     "set customer_visible=true for an additional comment the caller sees."),
+                )
+                if _sn_write_mode(user_id) == "full":
+                    _sn_write_tools.extend([
+                        (servicenow_create_incident, "servicenow_create_incident", ServiceNowCreateIncidentArgs,
+                         "Create a ServiceNow incident. Needs a short_description; priority, category, "
+                         "assignment group, caller and configuration item are optional."),
+                        (servicenow_update_incident, "servicenow_update_incident", ServiceNowUpdateIncidentArgs,
+                         "Update a ServiceNow incident: state, priority, impact, urgency, assignment, "
+                         "category, close code and notes."),
+                    ])
+            for _func, _name, _schema, _desc in _sn_write_tools:
+                _ctx = with_user_context(_func)
+                _notif = with_completion_notification(_ctx)
+                _final = wrap_func_with_capture(_notif, _name) if tool_capture else _notif
+                tools.append(StructuredTool.from_function(
+                    func=_final, name=_name, description=_desc, args_schema=_schema,
+                ))
+            logging.info(f"Added {2 + len(_sn_write_tools)} ServiceNow tools for user {user_id}")
+        except Exception as e:
+            logging.warning(f"Failed to add ServiceNow tools for user {user_id}: {e}")
+    else:
+        logging.debug(f"ServiceNow tools not added - user {user_id} not connected to ServiceNow")
+
     # Add incident.io tools if connected
-    if is_incidentio_connected(user_id):
+    if is_incidentio_connected(user_id) and _open("incidentio"):
         context_wrapped_list = with_user_context(list_incidentio_incidents)
         notification_wrapped_list = with_completion_notification(context_wrapped_list)
         final_list_func = wrap_func_with_capture(notification_wrapped_list, "list_incidentio_incidents") if tool_capture else notification_wrapped_list
@@ -2184,12 +2575,46 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             args_schema=GetTimelineArgs,
         ))
 
-        logging.info(f"Added 3 incident.io tools for user {user_id}")
+        context_wrapped_alert = with_user_context(get_incidentio_alert)
+        notification_wrapped_alert = with_completion_notification(context_wrapped_alert)
+        final_alert_func = wrap_func_with_capture(notification_wrapped_alert, "get_incidentio_alert") if tool_capture else notification_wrapped_alert
+
+        tools.append(StructuredTool.from_function(
+            func=final_alert_func,
+            name="get_incidentio_alert",
+            description=(
+                "Look up an incident.io alert by its incident.io alert id, or by the "
+                "source system's own alert id (stored as the alert's deduplication key — "
+                "Site24x7 and other alert sources use this). Returns the alert and any "
+                "incident it is attached to. get_incidentio_incident only accepts an "
+                "incident id; use this when that lookup 404s or the id came from an alert."
+            ),
+            args_schema=GetAlertArgs,
+        ))
+
+        context_wrapped_alerts = with_user_context(list_incidentio_alerts)
+        notification_wrapped_alerts = with_completion_notification(context_wrapped_alerts)
+        final_alerts_func = wrap_func_with_capture(notification_wrapped_alerts, "list_incidentio_alerts") if tool_capture else notification_wrapped_alerts
+
+        tools.append(StructuredTool.from_function(
+            func=final_alerts_func,
+            name="list_incidentio_alerts",
+            description=(
+                "List recent incident.io alerts. Use this when the question is about alerts "
+                "rather than incidents. Returns alert ids; pass one to get_incidentio_alert "
+                "for the full alert and the incident it is attached to. "
+                "Filter by status ('firing' or 'resolved'). "
+                "Supports pagination via 'after' cursor."
+            ),
+            args_schema=ListAlertsArgs,
+        ))
+
+        logging.info(f"Added 5 incident.io tools for user {user_id}")
     else:
         logging.debug(f"incident.io tools not added - user {user_id} not connected")
 
     # Add Dynatrace tool if connected
-    if is_dynatrace_connected(user_id):
+    if is_dynatrace_connected(user_id) and _open("dynatrace"):
         context_wrapped_dt = with_user_context(query_dynatrace)
         notification_wrapped_dt = with_completion_notification(context_wrapped_dt)
         final_dt_func = wrap_func_with_capture(notification_wrapped_dt, "query_dynatrace") if tool_capture else notification_wrapped_dt
@@ -2208,7 +2633,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         logging.info(f"Added Dynatrace tool for user {user_id}")
 
     # Add Datadog tool if connected
-    if is_datadog_connected(user_id):
+    if is_datadog_connected(user_id) and _open("datadog"):
         context_wrapped_dd = with_user_context(query_datadog)
         notification_wrapped_dd = with_completion_notification(context_wrapped_dd)
         final_dd_func = wrap_func_with_capture(notification_wrapped_dd, "query_datadog") if tool_capture else notification_wrapped_dd
@@ -2222,6 +2647,9 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                 "'hosts', or 'incidents'. Use 'metric_stats' for p50/p95/p99/max per series over long "
                 "windows (capacity and right-sizing questions) -- Datadog cannot compute a time-percentile "
                 "in a query, so 'metrics' plus a percentile rollup does not work. "
+                "More than one Datadog organization may be connected, with user-chosen labels; "
+                "resource_type='accounts' lists them and account=<label> picks one, so check that first "
+                "when it matters which organization the data comes from. "
                 "Examples: query_datadog(resource_type='logs', query='service:web status:error', time_from='-1h') "
                 "or query_datadog(resource_type='metrics', query='avg:system.cpu.user{*}', time_from='-2h') "
                 "or query_datadog(resource_type='metric_stats', "
@@ -2232,7 +2660,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         logging.info(f"Added Datadog tool for user {user_id}")
 
     # Add New Relic tool if connected
-    if is_newrelic_connected(user_id):
+    if is_newrelic_connected(user_id) and _open("newrelic"):
         context_wrapped_nr = with_user_context(query_newrelic)
         notification_wrapped_nr = with_completion_notification(context_wrapped_nr)
         final_nr_func = wrap_func_with_capture(notification_wrapped_nr, "query_newrelic") if tool_capture else notification_wrapped_nr
@@ -2255,7 +2683,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         logging.info(f"Added New Relic tool for user {user_id}")
 
     # Add Sentry tool if connected
-    if is_sentry_connected(user_id):
+    if is_sentry_connected(user_id) and _open("sentry"):
         context_wrapped_sentry = with_user_context(query_sentry)
         notification_wrapped_sentry = with_completion_notification(context_wrapped_sentry)
         final_sentry_func = wrap_func_with_capture(notification_wrapped_sentry, "query_sentry") if tool_capture else notification_wrapped_sentry
@@ -2277,7 +2705,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         logging.info(f"Added Sentry tool for user {user_id}")
 
     # Add GitLab tool if connected
-    if is_gitlab_connected(user_id):
+    if is_gitlab_connected(user_id) and _open("gitlab"):
         context_wrapped_gl = with_forced_context(gitlab_tool)
         context_wrapped_gl.__name__ = "gitlab"
         notification_wrapped_gl = with_completion_notification(context_wrapped_gl)
@@ -2296,7 +2724,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         logging.info(f"Added GitLab tool for user {user_id}")
 
     # --- OpsGenie / JSM Operations tool ---
-    if is_opsgenie_connected(user_id):
+    if is_opsgenie_connected(user_id) and _open("opsgenie"):
         from routes.opsgenie.opsgenie_routes import _get_stored_opsgenie_credentials
         _og_creds = _get_stored_opsgenie_credentials(user_id)
         _og_is_jsm = _og_creds.get("auth_type") == "jsm_basic" if _og_creds else False
@@ -2321,7 +2749,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     try:
         from .bitbucket import is_bitbucket_connected
 
-        if is_bitbucket_connected(user_id):
+        if is_bitbucket_connected(user_id) and _open("bitbucket"):
             from .bitbucket import (
                 bitbucket_repos, BitbucketReposArgs,
                 bitbucket_branches, BitbucketBranchesArgs,
@@ -2332,19 +2760,24 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             )
 
             _is_rca_background = _is_background_rca(state_context, is_background)
+            _bb_read_only = _is_rca_background or is_pr_review
+            _ro_reason = "PR review" if is_pr_review else "RCA"
 
-            # PR change-gating reviews are strictly read-only: the review
-            # agent must never merge/approve/decline PRs, push files, or
-            # trigger pipelines. Reuse the RCA read-only descriptor set
-            # (minus bitbucket_fix, which is RCA-card-only — see below).
-            if _is_rca_background or is_pr_review:
-                _ro_reason = "PR review" if is_pr_review else "RCA"
+            # PR change-gating reviews AND background RCA are both hard
+            # read-only for Bitbucket writes: the agent must never
+            # merge/approve/decline PRs, push files, or trigger pipelines.
+            # The shared read-only descriptor set below (minus bitbucket_fix,
+            # which is RCA-card-only — see below) is backed by the
+            # _bb_read_only_gate function-level rejection in both modes.
+            if _bb_read_only:
                 _bb_tools = [
                     (bitbucket_repos, "bitbucket_repos", BitbucketReposArgs,
                      f"Query Bitbucket repositories and files (READ-ONLY during {_ro_reason}). "
-                     "Actions: list_repos, get_repo, get_file_contents, get_directory_tree, "
-                     "search_code, list_workspaces, get_workspace. "
-                     "Do NOT use create_or_update_file or delete_file."),
+                     "Actions: list_repos, get_repo, get_file_contents, find_in_file, "
+                     "get_directory_tree, search_code, list_workspaces, get_workspace. "
+                     "Large files come back in verbatim pages — follow the start_line "
+                     "continue hint in the page header; use find_in_file to locate lines. "
+                     "Do NOT use edit_file, create_or_update_file, or delete_file."),
                     (bitbucket_branches, "bitbucket_branches", BitbucketBranchesArgs,
                      f"Query Bitbucket branches and commits (READ-ONLY during {_ro_reason}). "
                      "Actions: list_branches, list_commits, get_commit, get_diff, compare. "
@@ -2362,9 +2795,14 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                 _bb_tools = [
                     (bitbucket_repos, "bitbucket_repos", BitbucketReposArgs,
                      "Manage Bitbucket repositories, files, and code. Actions: list_repos, get_repo, "
-                     "get_file_contents, create_or_update_file, delete_file, get_directory_tree, "
-                     "search_code, list_workspaces, get_workspace. Workspace and repo auto-resolve "
-                     "from saved selection if not specified."),
+                     "get_file_contents, find_in_file, edit_file, create_or_update_file, delete_file, "
+                     "get_directory_tree, search_code, list_workspaces, get_workspace. "
+                     "Prefer edit_file (anchored old_string/new_string edits applied server-side "
+                     "against the current file) for existing files; use create_or_update_file only "
+                     "for brand-new files. Large files come back in verbatim pages — follow the "
+                     "start_line/start_char continue hint in the page header; use find_in_file to "
+                     "locate lines, then get_file_contents with start_line to read that region. "
+                     "Workspace and repo auto-resolve from saved selection if not specified."),
                     (bitbucket_branches, "bitbucket_branches", BitbucketBranchesArgs,
                      "Manage Bitbucket branches and view commits/diffs. Actions: list_branches, create_branch, "
                      "delete_branch, list_commits, get_commit, get_diff, compare."),
@@ -2379,37 +2817,12 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                      "Manage Bitbucket Pipelines CI/CD. Actions: list_pipelines, get_pipeline, "
                      "trigger_pipeline, stop_pipeline, list_pipeline_steps, get_step_log, get_pipeline_step."),
                 ]
-            # Hard gate (not just descriptions): during a PR review the tool
-            # FUNCTIONS reject Bitbucket write actions, so a prompt-injected
-            # diff can't talk the agent into merging/approving/pushing.
-            _BB_WRITE_ACTIONS = {
-                "create_or_update_file", "delete_file",
-                "create_branch", "delete_branch",
-                "create_pr", "update_pr", "merge_pr", "approve_pr",
-                "unapprove_pr", "decline_pr", "add_pr_comment",
-                "create_issue", "update_issue", "add_issue_comment",
-                "trigger_pipeline", "stop_pipeline",
-            }
-
-            def _read_only_gate(func, tool_name):
-                def gated(*args, **kwargs):
-                    _action = kwargs.get("action") or (args[0] if args else None)
-                    if _action in _BB_WRITE_ACTIONS:
-                        return json.dumps({
-                            "error": True,
-                            "message": (
-                                f"Action '{_action}' is not permitted: PR risk "
-                                "reviews are read-only on Bitbucket."
-                            ),
-                        })
-                    return func(*args, **kwargs)
-                gated.__name__ = getattr(func, "__name__", tool_name)
-                gated.__doc__ = func.__doc__
-                return gated
-
+            # Hard gate (not just descriptions): during a PR review or a
+            # background RCA the tool FUNCTIONS reject Bitbucket write
+            # actions (_bb_read_only_gate / _BB_WRITE_ACTIONS, module level).
             for _func, _name, _schema, _desc in _bb_tools:
-                if is_pr_review:
-                    _func = _read_only_gate(_func, _name)
+                if _bb_read_only:
+                    _func = _bb_read_only_gate(_func, _name, _ro_reason)
                 _ctx = with_user_context(_func)
                 _notif = with_completion_notification(_ctx)
                 _final = wrap_func_with_capture(_notif, _name) if tool_capture else _notif
@@ -2459,7 +2872,8 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     # no Confluence credentials, breaking RCAs that mention runbook URLs.
     try:
         from utils.auth.token_management import get_token_data
-        if get_token_data(user_id, "confluence"):
+        # A team limit hides the tool the same way it hides the skill.
+        if get_token_data(user_id, "confluence") and _open("confluence"):
             _confluence_tools = [
                 (confluence_search_similar, "confluence_search_similar", ConfluenceSearchSimilarArgs,
                  "Search Confluence for pages related to an incident (postmortems, RCA docs). "
@@ -2508,7 +2922,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     }
     try:
         from .notion import NOTION_TOOL_SPECS, is_notion_connected
-        if is_notion_connected(user_id):
+        if is_notion_connected(user_id) and _open("notion"):
             is_background = getattr(state_context, 'is_background', False) if state_context else False
             specs = NOTION_TOOL_SPECS
             if is_background:
@@ -2592,9 +3006,8 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     except Exception as e:
         logging.warning(f"Failed to add HPA/VPA right-sizing tools: {e}")
 
-    # Add Jira tools if enabled
+    # Add Jira tools when the user has connected Jira
     try:
-        from utils.flags.feature_flags import is_jira_enabled
         from .jira_tool import (
             jira_search_issues, jira_get_issue, jira_add_comment,
             jira_create_issue, jira_update_issue, jira_link_issues,
@@ -2602,22 +3015,27 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             JiraCreateIssueArgs, JiraUpdateIssueArgs, JiraLinkIssuesArgs,
         )
 
-        if is_jira_enabled():
-            from utils.auth.token_management import get_token_data as _get_jira_creds
-            _jira_creds = _get_jira_creds(user_id, "jira")
-            if _jira_creds:
-                from utils.auth.stateless_auth import get_user_preference
-                _jira_mode = get_user_preference(user_id, "jira_mode", default="comment_only") or "comment_only"
+        from utils.auth.token_management import get_token_data as _get_jira_creds
+        _jira_creds = _get_jira_creds(user_id, "jira")
+        # A team limit hides the tool the same way it hides the skill.
+        if _jira_creds and _open("jira"):
+            from routes.jira.jira_routes import jira_comment_back_enabled
+            from utils.auth.stateless_auth import get_user_preference
 
-                _jira_tools = [
-                    (jira_search_issues, "jira_search_issues", JiraSearchIssuesArgs,
-                     "Search Jira issues using JQL. Returns matching issues with key, summary, status, assignee, labels."),
-                    (jira_get_issue, "jira_get_issue", JiraGetIssueArgs,
-                     "Get full details of a Jira issue by key (e.g. OPS-123). Returns description, status, comments."),
+            _jira_tools = [
+                (jira_search_issues, "jira_search_issues", JiraSearchIssuesArgs,
+                 "Search Jira issues using JQL. Returns matching issues with key, summary, status, assignee, labels."),
+                (jira_get_issue, "jira_get_issue", JiraGetIssueArgs,
+                 "Get full details of a Jira issue by key (e.g. OPS-123). Returns description, status, comments."),
+            ]
+
+            # Only RCA runs need the org opt-in; elsewhere a user asked for the write
+            if not _is_background_rca(state_context, is_background) or jira_comment_back_enabled(user_id):
+                _jira_mode = get_user_preference(user_id, "jira_mode", default="comment_only") or "comment_only"
+                _jira_tools.append(
                     (jira_add_comment, "jira_add_comment", JiraAddCommentArgs,
                      "Add a comment to a Jira issue. Non-destructive operation."),
-                ]
-
+                )
                 if _jira_mode != "comment_only":
                     _jira_tools.extend([
                         (jira_create_issue, "jira_create_issue", JiraCreateIssueArgs,
@@ -2627,15 +3045,17 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                         (jira_link_issues, "jira_link_issues", JiraLinkIssuesArgs,
                          "Create a link between two Jira issues (Relates, Blocks, Clones, etc.)."),
                     ])
+            else:
+                _jira_mode = "comment_only"
 
-                for _func, _name, _schema, _desc in _jira_tools:
-                    _ctx = with_user_context(_func)
-                    _notif = with_completion_notification(_ctx)
-                    _final = wrap_func_with_capture(_notif, _name) if tool_capture else _notif
-                    tools.append(StructuredTool.from_function(
-                        func=_final, name=_name, description=_desc, args_schema=_schema,
-                    ))
-                logging.info(f"Added {len(_jira_tools)} Jira tools for user {user_id} (mode={_jira_mode})")
+            for _func, _name, _schema, _desc in _jira_tools:
+                _ctx = with_user_context(_func)
+                _notif = with_completion_notification(_ctx)
+                _final = wrap_func_with_capture(_notif, _name) if tool_capture else _notif
+                tools.append(StructuredTool.from_function(
+                    func=_final, name=_name, description=_desc, args_schema=_schema,
+                ))
+            logging.info(f"Added {len(_jira_tools)} Jira tools for user {user_id} (mode={_jira_mode})")
     except Exception as e:
         logging.warning(f"Failed to add Jira tools: {e}")
 
@@ -2644,7 +3064,8 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         from utils.flags.feature_flags import is_sharepoint_enabled
         from utils.secrets.secret_ref_utils import has_user_credentials
 
-        if is_sharepoint_enabled() and has_user_credentials(user_id, "sharepoint"):
+        # A team limit hides the tool the same way it hides the skill.
+        if is_sharepoint_enabled() and has_user_credentials(user_id, "sharepoint") and _open("sharepoint"):
             _sharepoint_tools = [
                 (sharepoint_search, "sharepoint_search", SharePointSearchArgs,
                  "Search SharePoint for pages, documents, and list items matching a query. "
@@ -2675,7 +3096,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
 
     # Add Coroot observability tools if connected
     try:
-        if is_coroot_connected(user_id):
+        if is_coroot_connected(user_id) and _open("coroot"):
             _coroot_tools = [
                 (coroot_get_incidents, "coroot_get_incidents", CorootGetIncidentsArgs,
                  "List recent incidents from Coroot (eBPF-powered observability) with RCA summaries, severity, "
@@ -2739,9 +3160,51 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     except Exception as e:
         logging.warning(f"Failed to add Coroot observability tools (treating as not connected): {e}")
 
+    # Same read as the cache key, so a later failure cannot store an empty list under rabbitmq=1.
+    try:
+        if rabbitmq_connected and _open("rabbitmq"):
+            _rabbitmq_tools = [
+                (rabbitmq_get_overview, "rabbitmq_get_overview", RabbitMQOverviewArgs,
+                 ("Read RabbitMQ cluster overview: version, queue totals, message rates, and listeners. "
+                  "Start here when a broker or consumer outage is suspected.")),
+                (rabbitmq_list_nodes, "rabbitmq_list_nodes", RabbitMQNodesArgs,
+                 "List RabbitMQ nodes with memory and disk alarms. A memory or disk alarm blocks publishers."),
+                (rabbitmq_list_queues, "rabbitmq_list_queues", RabbitMQListQueuesArgs,
+                 ("List RabbitMQ queues sorted by depth. Shows ready, unacked, consumers, and rates. "
+                  "Zero consumers with a growing ready count means nothing is subscribed to that queue. Check the worker connection and which queue it consumes.")),
+                (rabbitmq_get_queue, "rabbitmq_get_queue", RabbitMQGetQueueArgs,
+                 "Get one RabbitMQ queue, including dead-letter arguments and publish/deliver rates."),
+                (rabbitmq_list_exchanges, "rabbitmq_list_exchanges", RabbitMQListExchangesArgs,
+                 "List RabbitMQ exchanges and their publish rates."),
+                (rabbitmq_list_bindings, "rabbitmq_list_bindings", RabbitMQListBindingsArgs,
+                 "List bindings into a RabbitMQ queue. An empty list does not prove the queue is unused: the default exchange routes by queue name with no binding row."),
+                (rabbitmq_list_connections, "rabbitmq_list_connections", RabbitMQListConnectionsArgs,
+                 "List open RabbitMQ connections: user, peer, channel count, and client library."),
+                (rabbitmq_list_consumers, "rabbitmq_list_consumers", RabbitMQListConsumersArgs,
+                 "List RabbitMQ consumers and whether they are active."),
+                (rabbitmq_health_checks, "rabbitmq_health_checks", RabbitMQHealthArgs,
+                 ("Run RabbitMQ health checks: alarms, vhosts, mirror sync, and AMQP listeners. "
+                  "A failed AMQP port check is normal when the broker only listens on the other port.")),
+            ]
+            for _func, _name, _schema, _desc in _rabbitmq_tools:
+                _ctx = with_user_context(_func)
+                _notif = with_completion_notification(_ctx)
+                _final = wrap_func_with_capture(_notif, _name) if tool_capture else _notif
+                tools.append(StructuredTool.from_function(
+                    func=_final,
+                    name=_name,
+                    description=_desc,
+                    args_schema=_schema,
+                ))
+            logging.info(f"Added {len(_rabbitmq_tools)} RabbitMQ tools for user {user_id}")
+        else:
+            logging.debug(f"RabbitMQ tools not added - user {user_id} not connected to RabbitMQ")
+    except Exception as e:
+        logging.warning(f"Failed to add RabbitMQ tools (treating as not connected): {e}")
+
     # Add ThousandEyes network intelligence tools if connected
     try:
-        if is_thousandeyes_connected(user_id):
+        if is_thousandeyes_connected(user_id) and _open("thousandeyes"):
             _te_tools = [
                 (thousandeyes_list_tests, "thousandeyes_list_tests", ThousandEyesListTestsArgs,
                  "List all configured ThousandEyes tests (network, HTTP, DNS, BGP, page load, etc.). "
@@ -2797,16 +3260,20 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
 
     # Add Cloudflare tools if connected
     try:
-        if is_cloudflare_connected(user_id):
+        if is_cloudflare_connected(user_id) and _open("cloudflare"):
             _cf_tools = [
                 (query_cloudflare, "query_cloudflare", CloudflareQueryArgs,
                  "Query Cloudflare for diagnostic data. Set resource_type to one of: "
                  "'dns_records' (DNS records for a zone), "
                  "'analytics' (traffic, threats, status codes, bandwidth, content types, HTTP versions, "
                  "SSL protocols, IP classification for a zone — supports time-series via limit and custom windows via since/until), "
-                 "'firewall_events' (recent WAF/security events), 'firewall_rules' (active rules), "
+                 "'firewall_events' (recent WAF/security events), "
+                 "'firewall_rules' (WAF custom rules, zone plus account-level), "
                  "'rate_limits' (rate limiting rules — check if traffic is being throttled), "
-                 "'workers' (list Workers scripts), 'load_balancers' (LBs for a zone), "
+                 "'managed_rules' (WAF managed rulesets deployed and their overrides), "
+                 "'redirect_rules', 'cache_rules', 'config_rules', 'origin_rules', 'transform_rules' "
+                 "(the Rules that replaced Page Rules), "
+                 "'workers' (Workers scripts across all accounts), 'load_balancers' (LBs for a zone), "
                  "'ssl' (TLS mode and cert status), 'healthchecks' (configured health monitors), "
                  "'zone_settings' (all zone settings: security level, caching, dev mode, WAF, TLS version), "
                  "'page_rules' (URL-based redirects, forwarding, cache overrides). "
@@ -2842,7 +3309,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
 
     # Add Fly.io metrics tool if connected
     try:
-        if is_flyio_connected(user_id):
+        if is_flyio_connected(user_id) and _open("flyio"):
             _ctx = with_user_context(query_flyio_metrics)
             _notif = with_completion_notification(_ctx)
             _final = wrap_func_with_capture(_notif, "query_flyio_metrics") if tool_capture else _notif
@@ -2930,7 +3397,30 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         import traceback
         logging.error(f"Traceback: {traceback.format_exc()}")
         # Continue with native tools even if MCP fails
-    
+
+    # Add customer-registered MCP servers (DEV-1604). Two dispatcher tools
+    # (mcp_list_tools / mcp_call_tool) regardless of how many servers or tools
+    # are registered — N tools in the prompt did not survive multiple servers
+    # with hundreds of tools each. Reads cached schemas from Vault; writes are
+    # withheld in background/PR-review where no human can approve them.
+    try:
+        from .custom_mcp_tools import get_custom_mcp_tools
+
+        tools.extend(get_custom_mcp_tools(
+            user_id,
+            is_background=is_background,
+            is_pr_review=is_pr_review,
+            mode=mode,
+            tool_capture=tool_capture,
+            send_tool_start=send_tool_start,
+            send_tool_completion=send_tool_completion,
+            send_tool_error=send_tool_error,
+            run_async_in_thread=run_async_in_thread,
+            wrap_func_with_capture=wrap_func_with_capture,
+        ))
+    except Exception as e:
+        logging.warning(f"Failed to add custom MCP tools (treating as not connected): {e}")
+
     # Add web_search tool with explicit args_schema so LLM sees full parameter schema
     # Apply context and notification wrappers similar to other tools
     context_wrapped_ws = with_user_context(web_search)
@@ -2976,8 +3466,11 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     # Cache the fully processed LangChain tools
     _langchain_tools_cache[cache_key] = tools
     _langchain_tools_cache_expiry[cache_key] = time.time() + LANGCHAIN_TOOLS_CACHE_DURATION
+    # Same as the cache-hit log: the key is derived from the MCP secret
     logging.info(
-        f"Cached {len(tools)} fully processed LangChain tools for user {user_id} (key: {cache_key})"
+        "Cached %s fully processed LangChain tools for user %s",
+        len(tools),
+        user_id,
     )
     
     return tools 

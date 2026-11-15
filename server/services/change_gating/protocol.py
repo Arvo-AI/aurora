@@ -27,8 +27,8 @@ Normalization contract (what the core expects back)
   requirement).
 - Reviews are GitHub-shaped dicts: ``id``, ``state`` (``APPROVED`` /
   ``COMMENTED`` / ``DISMISSED``), ``body``, ``user``. Providers without
-  first-class reviews (Bitbucket) synthesize them from marker comments +
-  approval state inside the adapter.
+  first-class reviews (Bitbucket) synthesize them from marker comments
+  inside the adapter.
 """
 
 from __future__ import annotations
@@ -86,16 +86,24 @@ class PRAdapter(Protocol):
         pr_number: int,
         *,
         commit_id: str,
-        event: str,
         body: str,
         comments: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
-        """Post the review. ``event`` is ``APPROVE`` or ``COMMENT``;
-        ``comments`` are inline findings (may be ignored by providers
-        without inline support)."""
+        """Post the verdict as a COMMENT review — adapters must never
+        approve a PR (an approval would count toward required-approval
+        merge checks). ``comments`` are inline findings (may be ignored
+        by providers without inline support)."""
 
     def dismiss_review(self, pr_number: int, review_id: Any, message: str) -> Any:
-        """Retract a prior APPROVE (GitHub: dismissal; Bitbucket: unapprove)."""
+        """Mark a prior Aurora review stale. ``review_id`` MUST come from
+        :meth:`find_aurora_reviews` — the underlying provider APIs can act
+        on any review, so caller discipline is what keeps human reviews
+        untouched. GitHub: dismiss the review by id (retracts a legacy
+        APPROVE posted before Aurora stopped approving). Bitbucket: note
+        on the marker comment only — approvals are never touched
+        (unapprove is account-level and could strip a human's own
+        approval), so this is currently never invoked (Bitbucket reviews
+        never surface as APPROVED)."""
 
     def supersede_review(
         self, pr_number: int, prior_review: Dict[str, Any], message: str

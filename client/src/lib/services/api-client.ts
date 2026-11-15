@@ -29,6 +29,34 @@ export function createApiError(
   return error;
 }
 
+/**
+ * Pull the backend's own error text off a thrown error so callers can show the
+ * actual reason instead of a generic message.
+ *
+ * `apiRequest` copies the response's `data.error` into `Error.message`, so a
+ * backend 4xx with a JSON body already carries something worth displaying (e.g.
+ * "channel_ids must all be non-empty strings"). But it also throws for
+ * cases with no useful text — a transport failure, or a non-JSON error body
+ * where the message degrades to "Request failed: <statusText>". Those aren't
+ * actionable, so prefer the caller's copy for them.
+ */
+export function apiErrorMessage(error: unknown, fallback: string): string {
+  if (!(error instanceof Error)) return fallback;
+
+  const message = error.message.trim();
+
+  // No message at all — nothing to surface.
+  if (!message) return fallback;
+
+  // Placeholder built by createApiError when the body had no `error` field.
+  if (message.startsWith('Request failed:')) return fallback;
+
+  // Network-level failure, not something the backend told us.
+  if (message === 'Failed to fetch' || message === 'Load failed') return fallback;
+
+  return message;
+}
+
 export async function apiRequest<T>(
   url: string,
   options: ApiRequestOptions = {},

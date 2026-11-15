@@ -15,11 +15,12 @@ The secret value lives in the active secrets backend (Vault / AWS SM);
 from __future__ import annotations
 
 import logging
-import os
 import secrets as _secrets
+
 from typing import Optional
 
 from utils.db.connection_pool import db_pool
+from utils.web.public_url import external_backend_url
 
 logger = logging.getLogger(__name__)
 
@@ -34,9 +35,7 @@ def webhook_base_url() -> str:
     request fallback only applies when there IS a request context — in a
     worker it returns "" rather than raising, and callers skip URL scoping.
     """
-    ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")
-    backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "").rstrip("/")
-    base_url = ngrok_url if ngrok_url and backend_url.startswith("http://localhost") else backend_url
+    base_url = external_backend_url()
     if not base_url:
         try:
             from flask import has_request_context, request

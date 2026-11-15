@@ -408,7 +408,7 @@ export default function UsageTab({ period }: { period: Period }) {
           </>
         ) : summary ? (
           <>
-            <StatCard label="Total Cost" value={formatCost(summary.total_cost)} icon={DollarSign} sub={`${period} period`} />
+            <StatCard label="Estimated cost" value={formatCost(summary.total_cost)} icon={DollarSign} sub={`${period} period`} />
             {isDev && (
               <StatCard label="Total Tokens" value={formatCompact(summary.total_tokens)} icon={Hash} sub={`${formatCompact(summary.total_input_tokens)} in / ${formatCompact(summary.total_output_tokens)} out`} />
             )}
@@ -419,7 +419,7 @@ export default function UsageTab({ period }: { period: Period }) {
       </div>
 
       {/* Cost over time -- lines, not stacked areas */}
-      <ChartPanel title="Cost Over Time" subtitle={`${granularity === 'hour' ? 'Hourly' : granularity === 'week' ? 'Weekly' : 'Daily'} spend by model`} loading={costLoading}>
+      <ChartPanel title="Estimated cost" subtitle={`${granularity === 'hour' ? 'Hourly' : granularity === 'week' ? 'Weekly' : 'Daily'} spend by model`} loading={costLoading}>
         {costLoading ? (
           <ChartSkeleton />
         ) : !costChartData.length ? (
@@ -461,7 +461,7 @@ export default function UsageTab({ period }: { period: Period }) {
                   <th className="text-left px-4 py-2.5 text-zinc-500 text-xs uppercase tracking-wider font-medium">Model</th>
                   <th className="text-right px-4 py-2.5 text-zinc-500 text-xs uppercase tracking-wider font-medium">Requests</th>
                   {isDev && <th className="text-right px-4 py-2.5 text-zinc-500 text-xs uppercase tracking-wider font-medium">Tokens</th>}
-                  <th className="text-right px-4 py-2.5 text-zinc-500 text-xs uppercase tracking-wider font-medium">Cost</th>
+                  <th className="text-right px-4 py-2.5 text-zinc-500 text-xs uppercase tracking-wider font-medium">Estimated</th>
                   <th className="text-right px-4 py-2.5 text-zinc-500 text-xs uppercase tracking-wider font-medium">Share</th>
                 </tr>
               </thead>

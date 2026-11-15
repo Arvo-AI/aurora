@@ -1,0 +1,588 @@
+"""
+Memory API Routes
+
+REST endpoints for the org memory system. Memory entries live in the artifacts
+table with category in (context, runbook, infrastructure, learned, postmortem).
+Supports markdown and PDF upload (PDF → text extraction → markdown).
+"""
+
+import logging
+import io
+from functools import wraps
+
+import psycopg2
+from flask import Blueprint, jsonify, request
+from pypdf import PdfReader
+
+from utils.db.connection_pool import db_pool
+from utils.auth.rbac_decorators import require_permission
+from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context, get_user_display_name
+from services.memory import (
+    MEMORY_CATEGORIES,
+    USER_WRITABLE_CATEGORIES,
+    SYSTEM_CATEGORY,
+    PROTECTED_ENTRIES,
+    JIRA_MEMORY_CATEGORY,
+    JIRA_MEMORY_TITLE,
+    SERVICENOW_MEMORY_CATEGORY,
+    SERVICENOW_MEMORY_TITLE,
+)
+from services.memory.queries import fetch_entry_by_id, fetch_entry_by_title
+from services.memory.platform_memory import get_spec, seed_platform_memory
+from services.memory.jira_memory import seed_jira_memory
+from services.memory.servicenow_memory import seed_servicenow_memory
+from services.artifacts.store import create_version
+from utils.validation import strip_nul
+
+logger = logging.getLogger(__name__)
+
+memory_bp = Blueprint("memory", __name__)
+
+
+def _require_memory_edit(fn):
+    """Editors and admins may always modify memory. Viewers may when the org allows it."""
+    # Viewers hold memory read. The write permission would lock them out of the switch.
+    @require_permission("memory", "read")
+    @wraps(fn)
+    def wrapper(user_id, *args, **kwargs):
+        from utils.auth.viewer_run import viewer_may_edit_memory
+
+        org_id = get_org_id_from_request()
+        if not org_id or not viewer_may_edit_memory(user_id, org_id):
+            return jsonify({"error": "Forbidden"}), 403
+        return fn(user_id, *args, **kwargs)
+    return wrapper
+
+
+ALLOWED_EXTENSIONS = {"md", "txt", "pdf"}
+MAX_CONTENT_LENGTH = 500_000  # 500KB per manually-created entry
+MAX_UPLOAD_CONTENT_LENGTH = 50_000_000  # 50MB max extracted text per uploaded file
+MAX_RAW_UPLOAD_BYTES = 100_000_000  # 100MB max raw file body to prevent OOM
+
+
+def _extract_pdf_text(content: bytes) -> str:
+    """Extract text from PDF bytes using pypdf."""
+    pdf_reader = PdfReader(io.BytesIO(content))
+    text_parts = []
+    for page_num, page in enumerate(pdf_reader.pages):
+        page_text = page.extract_text()
+        if page_text and page_text.strip():
+            text_parts.append(f"[Page {page_num + 1}]\n{page_text}")
+    return "\n\n".join(text_parts)
+
+
+@memory_bp.route("/entries", methods=["GET"])
+@require_permission("memory", "read")
+def list_entries(user_id):
+    """List all memory entries for the org, optionally filtered by category."""
+    org_id = get_org_id_from_request()
+    category = request.args.get("category")
+
+    if category and category not in MEMORY_CATEGORIES:
+        return jsonify({"error": f"Invalid category. Must be one of: {', '.join(MEMORY_CATEGORIES)}"}), 400
+
+    try:
+        with db_pool.get_user_connection() as conn:
+            cursor = conn.cursor()
+            set_rls_context(cursor, conn, user_id, org_id=org_id, log_prefix="[Memory]")
+
+            if category:
+                cursor.execute(
+                    """SELECT id, title, category, description, last_edited_by, last_edited_by_name, updated_at
+                       FROM artifacts WHERE org_id = %s AND category = %s
+                       ORDER BY updated_at DESC""",
+                    (org_id, category),
+                )
+            else:
+                cursor.execute(
+                    """SELECT id, title, category, description, last_edited_by, last_edited_by_name, updated_at
+                       FROM artifacts WHERE org_id = %s AND category = ANY(%s)
+                       ORDER BY category, updated_at DESC""",
+                    (org_id, list(MEMORY_CATEGORIES)),
+                )
+            rows = cursor.fetchall()
+
+        entries = [
+            {
+                "id": str(row[0]),
+                "title": row[1],
+                "category": row[2],
+                "description": row[3],
+                "last_edited_by": row[4],
+                "last_edited_by_name": row[5],
+                "updated_at": row[6].isoformat() if row[6] else None,
+                "is_protected": (row[2], row[1]) in PROTECTED_ENTRIES,
+            }
+            for row in rows
+        ]
+        return jsonify({"entries": entries}), 200
+
+    except Exception as e:
+        logger.exception(f"[Memory] Error listing entries: {e}")
+        return jsonify({"error": "Failed to list memory entries"}), 500
+
+
+@memory_bp.route("/entries", methods=["POST"])
+@_require_memory_edit
+def create_entry(user_id):
+    """Create a new memory entry (JSON body with category, title, content)."""
+    org_id = get_org_id_from_request()
+    data = request.get_json(force=True, silent=True) or {}
+
+    category = data.get("category", "").strip()
+    title = data.get("title", "").strip()
+    content = data.get("content", "").strip()
+    description = data.get("description", "").strip()
+    # When true, an existing entry with the same (category, title) is replaced.
+    # When false/absent, a collision returns 409 so the UI can prompt the user.
+    overwrite = bool(data.get("overwrite", False))
+
+    # Users may only create into writable categories — "artifact" is
+    # system-maintained (e.g. the Incident Index).
+    if not category or category not in USER_WRITABLE_CATEGORIES:
+        return jsonify({"error": f"category must be one of: {', '.join(USER_WRITABLE_CATEGORIES)}"}), 400
+    if not title:
+        return jsonify({"error": "title is required"}), 400
+    if not content:
+        return jsonify({"error": "content is required"}), 400
+    content = strip_nul(content)
+    if len(content) > MAX_CONTENT_LENGTH:
+        return jsonify({"error": "Content exceeds 500KB limit"}), 400
+
+    # Resolve the actual person so the entry can show "added by <name>" instead
+    # of a generic "user"; None falls back to the generic label in the UI.
+    editor_name = get_user_display_name(user_id)
+
+    try:
+        with db_pool.get_user_connection() as conn:
+            cursor = conn.cursor()
+            set_rls_context(cursor, conn, user_id, org_id=org_id, log_prefix="[Memory]")
+
+            # Detect an existing entry with the same (category, title). Without an
+            # explicit overwrite, surface a 409 so the UI can ask the user whether
+            # to overwrite or keep both — never silently clobber existing content.
+            if not overwrite:
+                cursor.execute(
+                    """SELECT id FROM artifacts
+                       WHERE org_id = %s AND category = %s AND title = %s""",
+                    (org_id, category, title),
+                )
+                if cursor.fetchone():
+                    return jsonify({
+                        "error": "A memory entry with this title already exists in that category",
+                        "code": "conflict",
+                    }), 409
+
+            # Upsert: insert new, or (when overwrite=true) replace the existing entry.
+            cursor.execute(
+                """INSERT INTO artifacts
+                       (org_id, user_id, title, content, category, description,
+                        last_edited_by, last_edited_by_name, updated_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, 'user', %s, CURRENT_TIMESTAMP)
+                   ON CONFLICT (org_id, category, title)
+                   DO UPDATE SET content = EXCLUDED.content,
+                                 description = EXCLUDED.description,
+                                 user_id = EXCLUDED.user_id,
+                                 last_edited_by = 'user',
+                                 last_edited_by_name = EXCLUDED.last_edited_by_name,
+                                 updated_at = CURRENT_TIMESTAMP
+                   RETURNING id""",
+                (org_id, user_id, title, content, category, description or None, editor_name),
+            )
+            row = cursor.fetchone()
+            artifact_id = str(row[0])
+
+            version = create_version(
+                cursor, artifact_id, org_id, user_id, content,
+                source="manual", set_current=True,
+            )
+            conn.commit()
+
+        return jsonify({"id": artifact_id, "version": version}), 201
+
+    except Exception as e:
+        logger.exception(f"[Memory] Error creating entry: {e}")
+        return jsonify({"error": "Failed to create memory entry"}), 500
+
+
+@memory_bp.route("/entries/<entry_id>", methods=["GET"])
+@require_permission("memory", "read")
+def get_entry(user_id, entry_id):
+    """Get a single memory entry by ID."""
+    org_id = get_org_id_from_request()
+
+    try:
+        with db_pool.get_user_connection() as conn:
+            cursor = conn.cursor()
+            set_rls_context(cursor, conn, user_id, org_id=org_id, log_prefix="[Memory]")
+
+            entry = fetch_entry_by_id(cursor, org_id, entry_id)
+
+        if not entry:
+            return jsonify({"error": "Memory entry not found"}), 404
+
+        return jsonify(entry), 200
+
+    except Exception as e:
+        logger.exception(f"[Memory] Error getting entry: {e}")
+        return jsonify({"error": "Failed to get memory entry"}), 500
+
+
+@memory_bp.route("/entries/<entry_id>", methods=["DELETE"])
+@_require_memory_edit
+def delete_entry(user_id, entry_id):
+    """Delete a memory entry."""
+    org_id = get_org_id_from_request()
+
+    try:
+        with db_pool.get_user_connection() as conn:
+            cursor = conn.cursor()
+            set_rls_context(cursor, conn, user_id, org_id=org_id, log_prefix="[Memory]")
+
+            # Look up the category + title first so we can distinguish "not found"
+            # from a reserved/protected entry and return an accurate status/message.
+            cursor.execute(
+                "SELECT category, title FROM artifacts WHERE id = %s AND org_id = %s AND category = ANY(%s)",
+                (entry_id, org_id, list(MEMORY_CATEGORIES)),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                return jsonify({"error": "Memory entry not found"}), 404
+
+            # System-maintained entries (e.g. the Incident Index) are read-only.
+            if row[0] == SYSTEM_CATEGORY:
+                return jsonify({"error": "This entry is system-managed and cannot be deleted."}), 403
+
+            # Protected well-known entries can't be deleted — the feature that owns
+            # them (e.g. Slack) would silently lose its policy. Clearing the content
+            # is the supported way to neutralize one.
+            if (row[0], row[1]) in PROTECTED_ENTRIES:
+                return jsonify({
+                    "error": (
+                        f'"{row[1]}" is a built-in memory entry and can\'t be deleted. '
+                        "Edit its content instead."
+                    ),
+                    "code": "protected_entry",
+                }), 403
+
+            cursor.execute(
+                "DELETE FROM artifacts WHERE id = %s AND org_id = %s AND category = ANY(%s)",
+                (entry_id, org_id, list(USER_WRITABLE_CATEGORIES)),
+            )
+            if cursor.rowcount == 0:
+                return jsonify({"error": "Memory entry not found"}), 404
+            conn.commit()
+
+        return jsonify({"success": True}), 200
+
+    except Exception as e:
+        logger.exception(f"[Memory] Error deleting entry: {e}")
+        return jsonify({"error": "Failed to delete memory entry"}), 500
+
+
+@memory_bp.route("/entries/<entry_id>", methods=["PUT"])
+@_require_memory_edit
+def update_entry(user_id, entry_id):
+    """Update a memory entry's editable fields (category, title, description, content).
+
+    Any subset of fields may be provided. When content changes, a new version is
+    recorded via create_version so edit history stays intact.
+    """
+    org_id = get_org_id_from_request()
+    data = request.get_json(silent=True) or {}
+
+    # Only build updates for fields the caller actually sent — everything is optional.
+    has_category = "category" in data
+    has_title = "title" in data
+    has_description = "description" in data
+    has_content = "content" in data
+
+    if not any([has_category, has_title, has_description, has_content]):
+        return jsonify({"error": "No updatable fields provided"}), 400
+
+    category = data.get("category", "").strip() if has_category else None
+    title = data.get("title", "").strip() if has_title else None
+    description = data.get("description", "").strip() if has_description else None
+    content = data.get("content", "") if has_content else None
+
+    # When supplied, the target category must be user-writable — users can't move
+    # entries into the system-maintained "artifact" category (e.g. Incident Index).
+    if has_category and (not category or category not in USER_WRITABLE_CATEGORIES):
+        return jsonify({"error": f"Invalid category. Must be one of: {', '.join(USER_WRITABLE_CATEGORIES)}"}), 400
+
+    # Title cannot be blanked out.
+    if has_title and not title:
+        return jsonify({"error": "title cannot be empty"}), 400
+
+    # Content, when edited, must be non-empty and within the manual-entry size cap.
+    if has_content:
+        content = strip_nul(content).strip()
+        if not content:
+            return jsonify({"error": "content cannot be empty"}), 400
+        if len(content) > MAX_CONTENT_LENGTH:
+            return jsonify({"error": "Content exceeds 500KB limit"}), 400
+
+    try:
+        with db_pool.get_user_connection() as conn:
+            cursor = conn.cursor()
+            set_rls_context(cursor, conn, user_id, org_id=org_id, log_prefix="[Memory]")
+
+            # Look up the current category + title first so we can block editing a
+            # system-managed entry (e.g. the Incident Index), which is read-only
+            # for users and whose id-keyed lookups in services/memory must stay intact.
+            cursor.execute(
+                "SELECT category, title FROM artifacts WHERE id = %s AND org_id = %s AND category = ANY(%s)",
+                (entry_id, org_id, list(MEMORY_CATEGORIES)),
+            )
+            existing = cursor.fetchone()
+            if existing is None:
+                return jsonify({"error": "Memory entry not found"}), 404
+
+            # System-maintained entries are read-only for users.
+            if existing[0] == SYSTEM_CATEGORY:
+                return jsonify({"error": "This entry is system-managed and cannot be modified."}), 403
+
+            # Protected well-known entries (e.g. the Slack policy): content and
+            # description stay freely editable, but renaming/recategorizing would
+            # detach the entry from the (category, title) lookups that seeders and
+            # the prompt injector pin to — silently disabling it.
+            if (existing[0], existing[1]) in PROTECTED_ENTRIES:
+                renaming = has_title and title != existing[1]
+                recategorizing = has_category and category != existing[0]
+                if renaming or recategorizing:
+                    return jsonify({
+                        "error": (
+                            f'"{existing[1]}" is a built-in memory entry. You can edit its '
+                            "content, but its title and category can't be changed."
+                        ),
+                        "code": "protected_entry",
+                    }), 403
+
+            # Stamp the actual editor's name (None → generic label in the UI).
+            editor_name = get_user_display_name(user_id)
+
+            # Assemble the SET clause dynamically from the provided fields.
+            set_clauses = [
+                "last_edited_by = 'user'",
+                "last_edited_by_name = %s",
+                "updated_at = CURRENT_TIMESTAMP",
+            ]
+            values = [editor_name]
+            if has_category:
+                set_clauses.append("category = %s")
+                values.append(category)
+            if has_title:
+                set_clauses.append("title = %s")
+                values.append(title)
+            if has_description:
+                set_clauses.append("description = %s")
+                values.append(description or None)
+            if has_content:
+                set_clauses.append("content = %s")
+                values.append(content)
+
+            # Restrict the update to user-writable categories so a user-writable
+            # entry can never be turned into (or overwrite) a system entry.
+            values.extend([entry_id, org_id, list(USER_WRITABLE_CATEGORIES)])
+
+            cursor.execute(
+                f"""UPDATE artifacts
+                    SET {', '.join(set_clauses)}
+                    WHERE id = %s AND org_id = %s AND category = ANY(%s)
+                    RETURNING id""",
+                tuple(values),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                return jsonify({"error": "Memory entry not found"}), 404
+
+            # Record a new version whenever the content itself was edited.
+            version = None
+            if has_content:
+                version = create_version(
+                    cursor, str(row[0]), org_id, user_id, content,
+                    source="manual", set_current=True,
+                )
+
+            conn.commit()
+
+        result = {"success": True}
+        if version is not None:
+            result["version"] = version
+        return jsonify(result), 200
+
+    except psycopg2.errors.UniqueViolation:
+        # Renaming/recategorizing collided with an existing (category, title) entry.
+        return jsonify({"error": "A memory entry with this title already exists in that category"}), 409
+    except Exception as e:
+        logger.exception(f"[Memory] Error updating entry: {e}")
+        return jsonify({"error": "Failed to update memory entry"}), 500
+
+
+def _read_or_seed_policy(user_id, org_id, category, title, seed) -> dict | None:
+    """The entry if it exists or seeding created it. None when seeding failed."""
+    with db_pool.get_user_connection() as conn:
+        cursor = conn.cursor()
+        # Pin RLS to the same org the WHERE clause filters on (and that RBAC
+        # authorized) — if they disagree, RLS hides the row and this 500s.
+        set_rls_context(cursor, conn, user_id, org_id=org_id, log_prefix="[Memory]")
+        entry = fetch_entry_by_title(cursor, org_id, category, title)
+    # Already there — connect-time seeding did its job
+    if entry is not None:
+        return entry
+    # Missing — covers orgs that connected before seeding shipped, or whose
+    # connect-time seed failed (it's best-effort there).
+    seed(user_id, org_id=org_id)
+    with db_pool.get_user_connection() as conn:
+        cursor = conn.cursor()
+        set_rls_context(cursor, conn, user_id, org_id=org_id, log_prefix="[Memory]")
+        return fetch_entry_by_title(cursor, org_id, category, title)
+
+
+@memory_bp.route("/platform/<platform>", methods=["GET"])
+@require_permission("memory", "read")
+def get_platform_memory(user_id, platform):
+    """A chat platform's policy memory, seeded if absent, for its manage page."""
+    spec = get_spec(platform)
+    # Not a registered chat platform
+    if spec is None:
+        return jsonify({"error": "Unknown platform"}), 404
+    org_id = get_org_id_from_request()
+    try:
+        entry = _read_or_seed_policy(
+            user_id, org_id, spec.category, spec.title,
+            lambda uid, org_id=None: seed_platform_memory(uid, spec.platform, org_id=org_id),
+        )
+        # Still missing means seeding failed (it logs its own reason)
+        if entry is None:
+            return jsonify({"error": f"Failed to load the {spec.title} memory entry"}), 500
+        return jsonify({"entry": entry}), 200
+    except Exception:
+        # No request-derived values in the message; the traceback is enough
+        logger.exception("[Memory] Error getting platform memory")
+        return jsonify({"error": f"Failed to get the {spec.title} memory entry"}), 500
+
+
+@memory_bp.route("/jira", methods=["GET"])
+@require_permission("memory", "read")
+def get_jira_memory(user_id):
+    """The "Jira RCA" entry Auto mode's judge follows, editable on the Jira page."""
+    org_id = get_org_id_from_request()
+    try:
+        entry = _read_or_seed_policy(
+            user_id, org_id, JIRA_MEMORY_CATEGORY, JIRA_MEMORY_TITLE, seed_jira_memory,
+        )
+        if entry is None:
+            return jsonify({"error": "Failed to load the Jira memory entry"}), 500
+        return jsonify({"entry": entry}), 200
+    except Exception:
+        logger.exception("[Memory] Error getting Jira memory")
+        return jsonify({"error": "Failed to get the Jira memory entry"}), 500
+
+
+@memory_bp.route("/servicenow", methods=["GET"])
+@require_permission("memory", "read")
+def get_servicenow_memory(user_id):
+    """The "ServiceNow RCA" entry Auto mode's judge follows, editable on the ServiceNow page."""
+    org_id = get_org_id_from_request()
+    try:
+        entry = _read_or_seed_policy(
+            user_id, org_id, SERVICENOW_MEMORY_CATEGORY, SERVICENOW_MEMORY_TITLE, seed_servicenow_memory,
+        )
+        if entry is None:
+            return jsonify({"error": "Failed to load the ServiceNow memory entry"}), 500
+        return jsonify({"entry": entry}), 200
+    except Exception:
+        logger.exception("[Memory] Error getting ServiceNow memory")
+        return jsonify({"error": "Failed to get the ServiceNow memory entry"}), 500
+
+
+@memory_bp.route("/upload", methods=["POST"])
+@_require_memory_edit
+def upload_file(user_id):
+    """Upload a .md, .txt, or .pdf file as a memory entry."""
+    org_id = get_org_id_from_request()
+
+    if "file" not in request.files:
+        return jsonify({"error": "No file provided"}), 400
+
+    file = request.files["file"]
+    if not file.filename:
+        return jsonify({"error": "No file selected"}), 400
+
+    ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+    if ext not in ALLOWED_EXTENSIONS:
+        return jsonify({"error": f"File type not allowed. Supported: {', '.join(ALLOWED_EXTENSIONS)}"}), 400
+
+    category = request.form.get("category", "runbook").strip()
+    if category not in USER_WRITABLE_CATEGORIES:
+        return jsonify({"error": f"category must be one of: {', '.join(USER_WRITABLE_CATEGORIES)}"}), 400
+
+    try:
+        # Check Content-Length header to reject oversized uploads before reading
+        content_length = request.content_length
+        if content_length and content_length > MAX_RAW_UPLOAD_BYTES:
+            return jsonify({"error": "File too large. Maximum raw upload size is 100MB."}), 400
+
+        raw_bytes = file.read(MAX_RAW_UPLOAD_BYTES + 1)
+        if len(raw_bytes) > MAX_RAW_UPLOAD_BYTES:
+            return jsonify({"error": "File too large. Maximum raw upload size is 100MB."}), 400
+
+        # Extract text based on file type
+        if ext == "pdf":
+            content = _extract_pdf_text(raw_bytes)
+        else:
+            content = raw_bytes.decode("utf-8", errors="replace")
+
+        # Strip NUL bytes that Postgres text columns reject
+        content = strip_nul(content)
+
+        if not content.strip():
+            return jsonify({"error": "No text content could be extracted from file"}), 400
+
+        if len(content) > MAX_UPLOAD_CONTENT_LENGTH:
+            return jsonify({"error": "Extracted text exceeds 50MB limit."}), 400
+
+        # Use explicit title if provided, otherwise derive from filename
+        base_title = request.form.get("title", "").strip()
+        if not base_title:
+            base_title = file.filename.rsplit(".", 1)[0] if "." in file.filename else file.filename
+        description = request.form.get("description", "").strip()
+
+        # Stamp the uploader's actual name (None → generic label in the UI).
+        editor_name = get_user_display_name(user_id)
+
+        with db_pool.get_user_connection() as conn:
+            cursor = conn.cursor()
+            set_rls_context(cursor, conn, user_id, org_id=org_id, log_prefix="[Memory]")
+
+            cursor.execute(
+                """INSERT INTO artifacts
+                       (org_id, user_id, title, content, category, description,
+                        last_edited_by, last_edited_by_name, updated_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, 'user', %s, CURRENT_TIMESTAMP)
+                   ON CONFLICT (org_id, category, title)
+                   DO UPDATE SET content = EXCLUDED.content,
+                                 description = EXCLUDED.description,
+                                 user_id = EXCLUDED.user_id,
+                                 last_edited_by = 'user',
+                                 last_edited_by_name = EXCLUDED.last_edited_by_name,
+                                 updated_at = CURRENT_TIMESTAMP
+                   RETURNING id""",
+                (org_id, user_id, base_title, content, category, description or None, editor_name),
+            )
+            row = cursor.fetchone()
+            artifact_id = str(row[0])
+
+            create_version(
+                cursor, artifact_id, org_id, user_id, content,
+                source="manual", set_current=True,
+            )
+            conn.commit()
+
+        logger.info("[Memory] Uploaded file (%d chars)", len(content))
+        return jsonify({"entries": [{"id": artifact_id, "title": base_title}], "parts": 1}), 201
+
+    except Exception as e:
+        logger.exception("[Memory] Error uploading file")
+        return jsonify({"error": "Failed to upload file"}), 500

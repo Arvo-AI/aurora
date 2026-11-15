@@ -28,6 +28,8 @@ EXEMPT_FILES: Set[str] = {
     "slack_events_helpers.py",
     "google_chat_events.py",
     "google_chat_events_helpers.py",
+    "teams_events.py",
+    "teams_events_helpers.py",
     "tasks.py",
     "config.py",
     "helpers.py",
@@ -55,8 +57,25 @@ EXEMPT_FUNCTIONS: Set[str] = {
     "oauth_callback",
     "github_callback",
     "github_app_install_callback",
+    # One-click signup (hosted only) — start redirects to GitHub with a signed
+    # state; callback validates that state + GitHub-verified installation.
+    "github_app_signup_start",
+    "github_app_signup_callback",
+    # Second hop of the same flow: a signed, single-use token from the callback.
+    "github_app_signup_complete",
+    # Card's Connect, first half: swaps the install cookie for a short ticket.
+    "github_app_link_pending_confirm",
+    # Website "Add to Slack" — start redirects to Slack with a signed state;
+    # the signup branch of slack_callback validates it.
+    "slack_signup_start",
+    # "Sign in with Slack" — start redirects to Slack's OpenID page with a
+    # signed state + nonce; available only reports whether it is configured.
+    "slack_signin_start",
+    "slack_signin_available",
     "bitbucket_callback",
     "slack_callback",
+    "teams_callback",
+    "teams_messages",
     "google_chat_callback",
     # Webhooks (external service push — HMAC/secret validates sender)
     "webhook",

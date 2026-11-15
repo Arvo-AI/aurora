@@ -16,12 +16,12 @@ Auto-unseal eliminates manual Vault unsealing after pod restarts by delegating k
 
 ## Supported Providers
 
-| | AWS KMS | GCP Cloud KMS |
-|---|---------|---------------|
-| **Cost** | ~$1/mo | ~$0.06/mo |
-| **Setup Time** | 15-20 min | 25-35 min |
-| **Best For** | EKS, EC2 | GKE, Compute Engine |
-| **Auth Method** | IRSA / Node Role | Workload Identity / SA Key |
+| | AWS KMS | GCP Cloud KMS | Azure Key Vault |
+|---|---------|---------------|-----------------|
+| **Cost** | ~$1/mo | ~$0.06/mo | ~$0.03 per 10k operations |
+| **Setup Time** | 15-20 min | 25-35 min | 15-20 min |
+| **Best For** | EKS, EC2 | GKE, Compute Engine | AKS |
+| **Auth Method** | IRSA / Node Role | Workload Identity / SA Key | AKS Workload Identity |
 
 ## How It Works
 
@@ -320,13 +320,110 @@ kubectl exec -n aurora-oss statefulset/aurora-oss-vault -- vault status
 
 ---
 
+## Azure Key Vault Setup
+
+Requires Vault 1.15.6 or later (the chart's `hashicorp/vault:1.15` tag), and an AKS cluster with the OIDC issuer and Workload Identity enabled.
+
+### 1. Create the Key Vault and Key
+
+```bash
+RG=my-resource-group
+KV=my-aurora-keyvault          # globally unique
+LOCATION=northeurope
+
+az keyvault create -g $RG -n $KV -l $LOCATION \
+  --enable-rbac-authorization true \
+  --enable-purge-protection true      # soft-delete is on by default
+# RBAC mode: whoever creates the key needs a data-plane role on the vault.
+# Signed in as a service principal? Replace the --assignee lookup with
+#   "$(az ad sp show --id <app id> --query id -o tsv)"
+az role assignment create --assignee "$(az ad signed-in-user show --query id -o tsv)" \
+  --role "Key Vault Crypto Officer" --scope "$(az keyvault show -n $KV --query id -o tsv)"
+# role assignments can take a minute to apply; retry the next command on a 403
+az keyvault key create --vault-name $KV -n vault-unseal-key --kty RSA --size 2048
+```
+
+:::danger
+If this key is deleted or purged, Vault data is permanently unrecoverable. Keep purge protection on.
+:::
+
+### 2. Create the Identity and Federate It
+
+```bash
+CLUSTER=my-aks-cluster
+NAMESPACE=aurora-oss
+SA=aurora-oss-vault            # <release fullname>-vault
+
+az aks update -g $RG -n $CLUSTER --enable-oidc-issuer --enable-workload-identity
+ISSUER=$(az aks show -g $RG -n $CLUSTER --query oidcIssuerProfile.issuerUrl -o tsv)
+
+az identity create -g $RG -n aurora-vault-unseal
+CLIENT_ID=$(az identity show -g $RG -n aurora-vault-unseal --query clientId -o tsv)
+PRINCIPAL_ID=$(az identity show -g $RG -n aurora-vault-unseal --query principalId -o tsv)
+
+az role assignment create --assignee-object-id $PRINCIPAL_ID --assignee-principal-type ServicePrincipal \
+  --role "Key Vault Crypto User" \
+  --scope "$(az keyvault show -n $KV --query id -o tsv)/keys/vault-unseal-key"
+
+az identity federated-credential create -g $RG --identity-name aurora-vault-unseal \
+  --name aurora-vault --issuer $ISSUER \
+  --subject system:serviceaccount:$NAMESPACE:$SA --audiences api://AzureADTokenExchange
+```
+
+Scoping the role to the whole Key Vault (drop `/keys/vault-unseal-key`) also works.
+
+### 3. Configure Helm Values
+
+```yaml
+serviceAccount:
+  vault:
+    annotations:
+      azure.workload.identity/client-id: "<CLIENT_ID>"
+
+vault:
+  seal:
+    type: "azurekeyvault"
+    azurekeyvault:
+      tenant_id: "<tenant id>"           # az account show --query tenantId -o tsv
+      vault_name: "my-aurora-keyvault"   # name, not URL
+      key_name: "vault-unseal-key"
+```
+
+The chart adds the `azure.workload.identity/use: "true"` label to the Vault pod. Set `workloadIdentity: false` under `azurekeyvault` to authenticate another way (for example a node managed identity).
+
+### 4. Initialize or Migrate
+
+- **New install:** deploy, then `vault operator init`. With auto-unseal, init prints **recovery keys** instead of unseal keys. Store them; Vault unseals itself.
+- **Existing Vault with manual unseal:** keep the data and migrate the seal, as described in [Migrating from Manual to Auto-Unseal](#migrating-from-manual-to-auto-unseal).
+
+### 5. Verify
+
+```bash
+kubectl -n aurora-oss exec statefulset/aurora-oss-vault -- vault status
+# Seal Type: azurekeyvault | Sealed: false
+kubectl -n aurora-oss delete pod aurora-oss-vault-0   # comes back unsealed on its own
+```
+
+### Azure Key Vault Troubleshooting
+
+| Symptom | Fix |
+|---------|-----|
+| `DefaultAzureCredential: failed to acquire a token` | Pod is missing `AZURE_FEDERATED_TOKEN_FILE`. Check Workload Identity is enabled on the cluster and the pod has the `azure.workload.identity/use` label. |
+| `AADSTS70021: No matching federated identity record` | The federated credential subject must be `system:serviceaccount:<namespace>:<release>-vault`. |
+| `403 Forbidden` from Key Vault | The identity needs **Key Vault Crypto User** on the key or vault (RBAC mode), or wrapKey/unwrapKey/get access-policy permissions. |
+
+---
+
 ## Migrating from Manual to Auto-Unseal
 
-If Vault is already running with manual (Shamir) seals:
+If Vault is already running with manual (Shamir) seals, migrate it in place. Secrets are kept.
 
-1. Back up Vault data
-2. Update Helm values with the seal configuration
-3. Restart Vault with `-migrate` flag
-4. Provide existing unseal keys when prompted
+1. Back up Vault data (the `vault-data` PVC, or a snapshot of its disk).
+2. Set up the KMS (steps 1-3 for your provider) and run `helm upgrade` with the new seal values. The Vault pod restarts sealed.
+3. Unseal with the existing Shamir keys, adding `-migrate` to every call. Run it once per distinct key share until the existing threshold is reached (Aurora's default install uses a single share, so once):
+   ```bash
+   kubectl -n aurora-oss exec -it statefulset/aurora-oss-vault -- vault operator unseal -migrate
+   ```
+4. `vault status` shows the new seal type. From then on the old unseal key acts as a recovery key, and restarts unseal automatically.
 
 See [HashiCorp Seal Migration docs](https://developer.hashicorp.com/vault/docs/concepts/seal#seal-migration) for details.

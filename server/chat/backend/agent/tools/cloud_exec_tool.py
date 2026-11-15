@@ -3,13 +3,15 @@ import logging
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import tempfile
+import contextvars
 from utils.terminal.terminal_run import terminal_run
 import time
 import requests
 from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker
-from typing import Dict, Any, Optional, Tuple
+from typing import Optional, Tuple
 from langchain_core.tools import StructuredTool
 from pathlib import Path
 
@@ -23,13 +25,42 @@ _ISOLATED_HOME = "/home/appuser" if _POD_ISOLATION else str(Path.home())
 
 from utils.auth.cloud_auth import generate_contextual_access_token
 from utils.auth.cloud_auth import generate_azure_access_token
+from utils.cloud import azure_login_cache
 from utils.secrets.secret_ref_utils import get_user_token_data, get_token_owner_id
+from .bq_exec import bq_command_timeout, bq_query_location, bq_query_project, explain_bq_timeout, prepare_bq_exec
 from .output_sanitizer import sanitize_command_output, filter_error_messages, truncate_json_fields
 from .cloud_provider_utils import determine_target_provider_from_context
 from chat.backend.agent.prompt.prompt_builder import CLOUD_EXEC_PROVIDERS
 from chat.backend.agent.access import ModeAccessController
 from utils.cloud.cloud_utils import get_mode_from_context
+# Ask-mode read-only gate. Re-exported here because callers (and tests) have
+# always imported it from this module.
+from utils.security.read_only_classifier import (  # noqa: F401
+    describe_rejection,
+    is_read_only_command,
+)
+from utils.auth.command_policy import ask_mode_permits
 from utils.log_sanitizer import hash_for_log
+
+
+def connector_call_denied(user_id: str, provider: str, account_id: Optional[str], command: str) -> Optional[str]:
+    """JSON refusal when this caller cannot use the connector, else None.
+
+    Runs after the command guardrail and before any cloud login.
+    """
+    from utils.auth.connector_access import denial_text, may_use
+
+    # A blank account asks about the connector as a whole.
+    if may_use(user_id, provider, str(account_id or "")):
+        return None
+    logger.info("cloud_exec connector denied provider=%s", provider)
+    return json.dumps({
+        "success": False,
+        "error": denial_text(user_id, provider),
+        "code": "CONNECTOR_DENIED",
+        "final_command": command,
+        "provider": provider,
+    })
 
 
 def _normalize_cloud_exec_provider(raw: Optional[str]) -> str:
@@ -122,6 +153,34 @@ def check_cli_availability(cli_tool: str) -> bool:
 # OLD GLOBAL AZURE FUNCTION REMOVED - Use setup_azure_environment_isolated() instead
 
 
+def _credential_setup_error(fallback: str) -> str:
+    """Name the secrets backend when it, rather than the provider, is the problem.
+
+    Every provider's credentials are read through the same backend, so an outage
+    there fails them all at once. Thin wrapper kept so the provider setup paths
+    below don't each import from utils.secrets.
+    """
+    from utils.secrets import credential_error_message
+
+    return credential_error_message(fallback)
+
+
+def _credential_setup_failure(fallback: str, command: str, requires_connection: bool = False) -> str:
+    """Build the JSON error payload for a provider whose credential setup failed.
+
+    `requires_connection` drives a "connect your account" prompt in the UI, which
+    is actively misleading during a secrets-backend outage: the connector is fine
+    and reconnecting cannot help, so the flag is dropped in that case.
+    """
+    message = _credential_setup_error(fallback)
+    payload = {"error": message, "final_command": command}
+    # Message unchanged means the backend is healthy, so this really is a
+    # missing/invalid credential and the reconnect prompt is correct.
+    if requires_connection and message == fallback:
+        payload["requires_connection"] = True
+    return json.dumps(payload)
+
+
 def setup_azure_environment_isolated(user_id: str, subscription_id: str | None = None):
     """Set up Azure environment with isolated credentials - NO global state modification."""
     try:
@@ -139,6 +198,12 @@ def setup_azure_environment_isolated(user_id: str, subscription_id: str | None =
             raise ValueError("Incomplete Azure credentials for CLI authentication")
         
         # BUILD ISOLATED ENVIRONMENT - NO global os.environ modification!
+        # Always hand back a private, empty AZURE_CONFIG_DIR: `az login` writes auth
+        # state to disk and this function has callers (discovery) that delete the
+        # directory they are given. The caller owns the tempdir and must remove it.
+        # cloud_exec may swap it for a shared cached login via azure_login_cache.attach,
+        # which removes this private one; nothing here knows about the cache.
+        config_dir = tempfile.mkdtemp(prefix="aurora-az-")
         isolated_env = {
             "PATH": os.environ.get("PATH", ""),
             "HOME": _ISOLATED_HOME,
@@ -146,15 +211,28 @@ def setup_azure_environment_isolated(user_id: str, subscription_id: str | None =
             "AZURE_CLIENT_ID": str(client_id),
             "AZURE_CLIENT_SECRET": str(client_secret),
             "AZURE_TENANT_ID": str(tenant_id),
-            "AZURE_CONFIG_DIR": f"{_ISOLATED_HOME}/.azure",
+            "AZURE_CONFIG_DIR": config_dir,
+            # kubelogin reads these when converting an Entra AKS kubeconfig to
+            # service-principal auth; without them it falls back to devicecode,
+            # which is interactive and cannot work headless.
+            "AAD_SERVICE_PRINCIPAL_CLIENT_ID": str(client_id),
+            "AAD_SERVICE_PRINCIPAL_CLIENT_SECRET": str(client_secret),
         }
         
-        # Store auth command for chaining with user commands (NEVER log the secret!)
-        auth_command = f"az login --service-principal --username {client_id} --password {client_secret} --tenant {tenant_id} --output none"
+        # argv, not a string: the secret must never be re-lexed. Interpolating it into
+        # a command string and calling shlex.split() on it later silently truncates a
+        # secret containing a space and raises on one containing a quote.
+        auth_argv = [
+            "az", "login", "--service-principal",
+            "--username", str(client_id),
+            "--password", str(client_secret),
+            "--tenant", str(tenant_id),
+            "--output", "none",
+        ]
 
-        logger.info(f"Azure isolated environment configured for subscription: {subscription_id} (auth_command built with --password [REDACTED])")
+        logger.info(f"Azure isolated environment configured for subscription: {subscription_id} (auth argv built with --password [REDACTED])")
         
-        return True, subscription_id, "service_principal", isolated_env, auth_command
+        return True, subscription_id, "service_principal", isolated_env, auth_argv
         
     except Exception as e:
         logger.error(f"Failed to setup Azure environment: {e}")
@@ -190,7 +268,7 @@ def setup_aws_environment_isolated(user_id: str, selected_region: str | None = N
         try:
             # Single source of truth: read from user_connections
             from utils.db.connection_utils import get_user_aws_connection
-            from utils.workspace.workspace_utils import get_or_create_workspace
+            from utils.workspace.workspace_utils import resolve_connection_external_id
             from utils.aws.aws_sts_client import assume_workspace_role
             from utils.aws.aws_session_policies import get_read_only_session_policy
 
@@ -214,42 +292,39 @@ def setup_aws_environment_isolated(user_id: str, selected_region: str | None = N
             if conn_region and not selected_region:
                 selected_region = conn_region
 
-            # Get external_id from workspace (needed for STS AssumeRole)
-            ws = get_or_create_workspace(user_id, "default")
-            external_id = ws.get("aws_external_id")
+            # ExternalId must come from the workspace that owns this connection,
+            # not the caller's -- org-shared connectors make those differ.
+            external_id = resolve_connection_external_id(aws_conn, user_id)
             if not external_id:
-                logger.error("Workspace %s for user %s missing aws_external_id", hash_for_log(str(ws["id"])), hash_for_log(user_id))
+                logger.error(
+                    "Could not resolve AWS ExternalId for account %s (user %s)",
+                    hash_for_log(str(aws_conn.get("account_id"))), hash_for_log(user_id),
+                )
                 return False, None, None, None
 
-            current_mode = get_mode_from_context()
-            role_arn = aws_conn.get("role_arn")
+            workspace_id = aws_conn["workspace_id"]
 
-            # Apply session policy for read-only mode
-            session_policy = None
-            if ModeAccessController.is_read_only_mode(current_mode):
-                # First check if user has a dedicated read-only role configured
-                read_only_role = aws_conn.get("read_only_role_arn")
-                if read_only_role:
-                    # Use dedicated read-only role if available
-                    role_arn = read_only_role
-                    logger.info("Using AWS read-only role for user %s", hash_for_log(user_id))
-                else:
-                    # Apply restrictive session policy to make the role read-only
-                    # NOTE: Session policies work as an intersection with base role permissions.
-                    # If the base role lacks read permissions, this may fail at runtime.
-                    # For reliable read-only mode, users should provide a dedicated read-only role.
-                    session_policy = get_read_only_session_policy()
-                    logger.warning(
-                        "Read-only mode enabled for user %s but no read_only_role_arn provided. "
-                        "Using session policy fallback. This may fail if the base role lacks read permissions. "
-                        "Consider providing a dedicated read-only role for better reliability.",
-                        hash_for_log(user_id)
-                    )
+            current_mode = get_mode_from_context()
+            from utils.auth.connector_access import credentials_for_user, select_aws_role
+            ask_mode = ModeAccessController.is_read_only_mode(current_mode)
+            role_arn, use_session_policy = select_aws_role(
+                aws_conn,
+                credentials_for_user(user_id, "aws", str(aws_conn.get("account_id") or "")),
+                ask_mode,
+            )
+            # No grant for this account: the role cannot use it.
+            if not role_arn:
+                logger.info(
+                    "AWS account %s is not granted to this role",
+                    hash_for_log(str(aws_conn.get("account_id"))),
+                )
+                return False, None, None, None
+            session_policy = get_read_only_session_policy() if use_session_policy else None
 
             sts_creds = assume_workspace_role(
                 role_arn=role_arn,
                 external_id=external_id,
-                workspace_id=ws["id"],
+                workspace_id=workspace_id,
                 region=selected_region or "us-east-1",
                 session_policy=session_policy,
                 user_id=user_id,
@@ -265,7 +340,7 @@ def setup_aws_environment_isolated(user_id: str, selected_region: str | None = N
 
             logger.info(
                 "Assumed workspace role for %s in region %s",
-                hash_for_log(str(ws["id"])),
+                hash_for_log(str(workspace_id)),
                 selected_region or "us-east-1",
             )
 
@@ -385,15 +460,9 @@ def setup_aws_environments_all_accounts(user_id: str):
     accounts that were successfully assumed.
     """
     from utils.db.connection_utils import get_all_user_aws_connections
-    from utils.workspace.workspace_utils import get_or_create_workspace
+    from utils.workspace.workspace_utils import resolve_connection_external_id
     from utils.aws.aws_sts_client import assume_workspace_role
     from utils.aws.aws_session_policies import get_read_only_session_policy
-
-    ws = get_or_create_workspace(user_id, "default")
-    external_id = ws.get("aws_external_id")
-    if not external_id:
-        logger.error("Workspace %s for user %s missing aws_external_id", hash_for_log(str(ws["id"])), hash_for_log(user_id))
-        return []
 
     connections = get_all_user_aws_connections(user_id)
     if not connections:
@@ -401,32 +470,34 @@ def setup_aws_environments_all_accounts(user_id: str):
         return []
 
     current_mode = get_mode_from_context()
-    default_session_policy = None
-    if ModeAccessController.is_read_only_mode(current_mode):
-        default_session_policy = get_read_only_session_policy()
+    ask_mode = ModeAccessController.is_read_only_mode(current_mode)
+    from utils.auth.connector_access import access_for, select_aws_role
+    access = access_for(user_id)
 
     account_envs = []
     for conn in connections:
-        role_arn = conn.get("role_arn")
         account_id = conn.get("account_id")
         region = conn.get("region") or "us-east-1"
-        session_policy = default_session_policy
+        role_arn, use_session_policy = select_aws_role(
+            conn, access.credentials("aws", str(account_id or "")), ask_mode,
+        )
+        session_policy = get_read_only_session_policy() if use_session_policy else None
 
         if not role_arn:
-            logger.warning("Skipping account %s – no role_arn", account_id)
+            logger.warning("Skipping account %s – not granted to this role", account_id)
             continue
 
-        if ModeAccessController.is_read_only_mode(current_mode):
-            ro_arn = conn.get("read_only_role_arn")
-            if ro_arn:
-                role_arn = ro_arn
-                session_policy = None
+        # Each account's ExternalId belongs to the workspace that registered it
+        external_id = resolve_connection_external_id(conn, user_id)
+        if not external_id:
+            logger.warning("Skipping account %s – could not resolve ExternalId", account_id)
+            continue
 
         try:
             creds = assume_workspace_role(
                 role_arn=role_arn,
                 external_id=external_id,
-                workspace_id=ws["id"],
+                workspace_id=conn["workspace_id"],
                 region=region,
                 session_policy=session_policy,
                 user_id=user_id,
@@ -533,7 +604,12 @@ def setup_gcp_environment_isolated(user_id: str, selected_project_id: str | None
             account_identity = sa_email if sa_email else "aurora-discovery@local"
             fd = os.open(properties_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             with os.fdopen(fd, "w") as _pf:
-                _pf.write(f"[core]\naccount = {account_identity}\n")
+                # project lets `bq` pick up a default via `gcloud config list`
+                # when the command itself has no --project_id.
+                lines = ["[core]", f"account = {account_identity}"]
+                if project_id:
+                    lines.append(f"project = {project_id}")
+                _pf.write("\n".join(lines) + "\n")
         except OSError as mkdir_err:
             logger.warning(
                 "GCP isolated env: could not write CLOUDSDK_CONFIG properties (error_type=%s)",
@@ -1134,40 +1210,27 @@ def setup_flyio_environment_isolated(user_id: str, selected_org: str | None = No
         return False, None, None, None
 
 
-def is_read_only_command(command: str) -> bool:
-    """Check if a cloud command is read-only (list, describe, get, etc.)."""
-    read_only_verbs = ['list', 'describe', 'get', 'show', 'config', 'version', 'info', 'status', 'read', 'view', 'help', 'logs', 'top']
-
-    # Check if any read-only verb is in the command
-    for verb in read_only_verbs:
-        if verb in command.lower():
-            return True
-
-    # Additional check for common read-only patterns
-    read_only_patterns = [
-        '--filter', '--output=json', '--query',
-        'status:running', '--dry-run', 'explain', 'diff',
-        'logging read', 'logging list', 'logs read', 'logs list',
-        # Tailscale-specific read operations
-        'dns nameservers', 'dns searchpaths', 'dns preferences',
-        'routes', 'settings', 'acl get', 'acl show', 'devices', 'keys'
-    ]
-    if any(pattern in command.lower() for pattern in read_only_patterns):
-        return True
-
-    # Additional heuristics/patterns – mostly for legacy support.
-    lowered = command.lower()
-    if any(p in lowered for p in ["--filter", "status:running"]):
-        return True
-
-    # Default to **not** read-only to err on the side of caution.
-    return False
+# The chat workflow and the RCA task both die at INVESTIGATION_TIMEOUT_SECONDS
+# (default 3600). A command that runs until then is killed before a timed-out
+# BigQuery job can be cancelled.
+_COMMAND_TIMEOUT_CEILING = 600
 
 
 def get_command_timeout(command: str, user_timeout: int = None) -> int:
-    """Determine timeout for a command. Use user_timeout if provided, else adapt based on command type."""
+    """Use a positive caller timeout. Otherwise pick one from the command."""
     if user_timeout is not None:
-        return user_timeout
+        try:
+            requested = int(user_timeout)
+        except (TypeError, ValueError):
+            requested = 0
+        # Zero or negative is not a wait, so the command default still applies
+        if requested > 0:
+            return min(requested, _COMMAND_TIMEOUT_CEILING)
+
+    # Match the bq verb, not the SQL, so "created_at" does not change the limit
+    bq_timeout = bq_command_timeout(command)
+    if bq_timeout is not None:
+        return bq_timeout
 
     # Very long-running operations (20 minutes) - based on typical cloud provider timings:
     # - Kubernetes clusters (GKE: 3-6min create/delete, EKS: 10-20min, AKS: 10-18min)
@@ -1204,6 +1267,7 @@ def _cloud_exec_aws_multi_account(
     timeout: Optional[int] = None,
     output_file: Optional[str] = None,
     fn_start: float = 0,
+    gated_command: Optional[str] = None,
 ) -> str:
     """Execute an AWS CLI command across all connected accounts and merge results.
 
@@ -1216,8 +1280,9 @@ def _cloud_exec_aws_multi_account(
     current_mode = get_mode_from_context()
     allowed, read_only_message = ModeAccessController.ensure_cloud_command_allowed(
         current_mode,
-        is_read_only_command(command),
+        ask_mode_permits(user_id, command),
         command,
+        describe_rejection(command),
     )
     if not allowed:
         logger.warning(read_only_message)
@@ -1231,6 +1296,7 @@ def _cloud_exec_aws_multi_account(
         })
 
     def _run_on_account(conn: dict) -> dict:
+        """Run the command against one account with its own isolated credential env."""
         account_id = conn.get("account_id", "unknown")
         region = conn.get("region") or "us-east-1"
         try:
@@ -1239,7 +1305,11 @@ def _cloud_exec_aws_multi_account(
             )
             if not success:
                 return {"account_id": account_id, "region": region, "success": False,
-                        "error": "Failed to assume role"}
+                        "error": (
+                            "Failed to assume role — check the server log for the "
+                            "underlying STS error (ExternalId mismatch and a missing "
+                            "trust-policy principal both surface as AccessDenied)"
+                        )}
 
             cmd = command.strip()
             if not cmd.startswith("aws"):
@@ -1253,10 +1323,19 @@ def _cloud_exec_aws_multi_account(
 
             effective_timeout = get_command_timeout(cmd, timeout)
             cmd_args = shlex.split(cmd)
-            result = terminal_run(
-                cmd_args, capture_output=True, text=True,
-                timeout=effective_timeout, env=isolated_env,
-            )
+            # The gate judged the command once, before the fan-out. The region and
+            # output flags added here change its hash, so without the carry every
+            # account judges it again. This worker runs in its own copy of the
+            # context, so the approval moves for this account only.
+            from utils.auth.command_gate import carry_guardrails_approval, release_guardrails_approval
+            carried = carry_guardrails_approval(gated_command, cmd_args) if gated_command else None
+            try:
+                result = terminal_run(
+                    cmd_args, capture_output=True, text=True,
+                    timeout=effective_timeout, env=isolated_env,
+                )
+            finally:
+                release_guardrails_approval(carried)
             return {
                 "account_id": account_id,
                 "region": region,
@@ -1271,7 +1350,12 @@ def _cloud_exec_aws_multi_account(
 
     account_results = {}
     with ThreadPoolExecutor(max_workers=min(len(connections), 10)) as pool:
-        futures = {pool.submit(_run_on_account, c): c["account_id"] for c in connections}
+        # Same context-copy requirement as the Azure fan-out below: without it the
+        # guardrail judge sees no user context and fails closed with exit 126.
+        futures = {
+            pool.submit(contextvars.copy_context().run, _run_on_account, c): c["account_id"]
+            for c in connections
+        }
         for future in as_completed(futures):
             res = future.result()
             acct = res.pop("account_id")
@@ -1289,6 +1373,521 @@ def _cloud_exec_aws_multi_account(
         "command": command,
         "provider": "aws",
         "results_by_account": account_results,
+    })
+
+
+def _is_azure_cli_command(command: str) -> bool:
+    """True when the command targets the `az` CLI (not kubectl/helm/terraform)."""
+    try:
+        first = shlex.split(command)[0].lower() if command.strip() else ''
+    except ValueError:
+        return False
+    return first not in ('kubectl', 'helm', 'terraform')
+
+
+# Default CLI plus every other binary this tool invokes without prefixing.
+# The policy gate and the exec path both read this so they judge the same string.
+_PROVIDER_CLIS = {
+    "gcp": ("gcloud", ("gcloud", "kubectl", "gsutil", "bq", "helm", "terraform")),
+    "gcloud": ("gcloud", ("gcloud", "kubectl", "gsutil", "bq", "helm", "terraform")),
+    "aws": ("aws", ("aws", "kubectl", "eksctl", "sam", "cdk", "helm", "terraform")),
+    "amazon": ("aws", ("aws", "kubectl", "eksctl", "sam", "cdk", "helm", "terraform")),
+    "azure": ("az", ("az", "kubectl", "helm", "terraform")),
+    "az": ("az", ("az", "kubectl", "helm", "terraform")),
+    "ovh": ("ovhcloud", ("ovhcloud", "kubectl", "helm", "terraform")),
+    "scaleway": ("scw", ("scw", "kubectl", "helm", "terraform")),
+    "flyio": ("fly", ("fly", "flyctl")),
+    "tailscale": ("tailscale", ("tailscale",)),
+}
+
+
+def _first_command_token(command: str) -> str:
+    try:
+        return shlex.split(command)[0].lower() if command.strip() else ""
+    except ValueError:
+        return ""
+
+
+def _command_for_policy(provider: str, command: str) -> str:
+    """String the allowlist and the exec path both use.
+
+    `vm list` becomes `az vm list`. Sibling CLIs exec runs bare
+    (`kubectl`, `gsutil`, `eksctl`) stay bare so `^kubectl` can match.
+    """
+    spec = _PROVIDER_CLIS.get((provider or "").lower())
+    if spec is None:
+        return command
+    default_cli, supported = spec
+    first = _first_command_token(command)
+    # First token is already a CLI this provider runs as-is. A substring
+    # check would treat `azcopy` as `az` and skip the prefix exec still adds.
+    if first in supported:
+        return command
+    return f"{default_cli} {command}"
+
+
+def _azure_can_fan_out(command: str) -> bool:
+    """True when a command is safe to run across every subscription at once.
+
+    `aks get-credentials` writes the shared kubeconfig, so running it in parallel
+    would race and leave a context from an arbitrary subscription. It must target
+    one subscription explicitly. Commands that change the CLI's own state
+    (`az login`, `az account clear`, ...) would have every worker rewriting the
+    one config dir the fan-out shares, so they take the single-subscription path.
+    """
+    return (
+        _is_azure_cli_command(command)
+        and "get-credentials" not in command
+        and not azure_login_cache.uses_local_cli_state(command)
+    )
+
+
+def _apply_azure_subscription(command: str, subscription_id: str) -> str:
+    """Pin an `az` command to one subscription.
+
+    `az graph query` takes --subscriptions (plural) and is scoped by the caller,
+    so it is left alone. The tenant-level `az account` subcommands (`list`,
+    `tenant`, `management-group`) reject `--subscription` with "unrecognized
+    arguments" (checked against az 2.90.0) and answer the same for every
+    subscription, so they are left alone too. Everything else is pinned: `show`
+    and `get-access-token` take the flag, and `az account lock` rejects it but
+    reads the *active* subscription, so an unpinned copy would report the default
+    subscription's locks N times. Pinned, az refuses it loudly instead.
+    """
+    cmd = command if command.startswith("az ") else f"az {command}"
+    words = cmd.split()
+    unpinnable_account = (
+        len(words) >= 3 and words[1] == "account"
+        and words[2] in {"list", "tenant", "management-group"}
+    )
+    # Already pinned by the caller, or a command that doesn't take --subscription.
+    if "--subscription" in cmd or cmd.startswith("az graph") or unpinnable_account:
+        return cmd
+    return f"{cmd} --subscription {shlex.quote(subscription_id)}"
+
+
+def _run_azure_on_subscription(conn: dict, command: str, isolated_env: dict, timeout: Optional[int],
+                               gated_command: Optional[str] = None) -> dict:
+    """Run one subscription-pinned command against the shared, already-authenticated config dir.
+
+    The command is pinned to the subscription, so concurrent workers never contend
+    on the CLI's active-subscription state.
+    """
+    sub_id = conn.get("account_id", "unknown")
+    try:
+        cmd = _apply_azure_subscription(command.strip(), sub_id)
+        try:
+            cmd_args = shlex.split(cmd)
+        except ValueError as e:
+            return {"subscription_id": sub_id, "success": False,
+                    "error": f"Command parsing failed: {e}"}
+        # The gate judged the command once, before the fan-out. --subscription
+        # changes its hash, so without the carry every subscription judges it
+        # again. This worker runs in its own copy of the context, so the approval
+        # moves for this subscription only.
+        from utils.auth.command_gate import carry_guardrails_approval, release_guardrails_approval
+        carried = carry_guardrails_approval(gated_command, cmd_args) if gated_command else None
+        try:
+            result = terminal_run(
+                cmd_args,
+                capture_output=True, text=True,
+                timeout=get_command_timeout(cmd, timeout), env=isolated_env,
+            )
+        finally:
+            release_guardrails_approval(carried)
+        return {
+            "subscription_id": sub_id,
+            "success": result.returncode == 0,
+            "output": result.stdout.strip() if result.returncode == 0 else result.stderr.strip(),
+            "return_code": result.returncode,
+        }
+    except Exception as e:
+        logger.exception("Multi-subscription exec failed for %s: %s", sub_id, e)
+        return {"subscription_id": sub_id, "success": False, "error": str(e)[:300]}
+
+
+def _fan_out_azure(conns: list, run_one) -> dict:
+    """Run run_one(conn) for every connection on a thread pool, keyed by subscription id."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    out = {}
+    with ThreadPoolExecutor(max_workers=min(len(conns), 10)) as pool:
+        # Worker threads start with an empty context, so user_id/session_id/state/
+        # mode are all invisible inside them. That makes the safety guardrail fail
+        # closed ("missing user context", exit 126) and makes get_mode_from_context()
+        # fall back to "agent". Copy the context per task: a single Context object
+        # cannot be entered by two threads at once.
+        futures = [pool.submit(contextvars.copy_context().run, run_one, c) for c in conns]
+        for future in as_completed(futures):
+            res = future.result()
+            out[res.pop("subscription_id")] = res
+    return out
+
+
+def _subscriptions_needing_relogin(azure_login, connections: list, results: dict) -> list:
+    """Connections whose failure means the cached login itself was unusable."""
+    stale = []
+    for conn in connections:
+        res = results.get(conn.get("account_id", "unknown"), {})
+        if not res.get("success") and azure_login.should_relogin(res.get("output", "")):
+            stale.append(conn)
+    return stale
+
+
+def _azure_login_ok(azure_login, run_login) -> bool:
+    """Log in, or reuse the cached login. An exception counts as a failed login."""
+    try:
+        if azure_login:
+            return azure_login.ensure(run_login)[0]
+        return run_login().returncode == 0
+    except Exception as e:
+        logger.error("Azure authentication error: %s", e)
+        return False
+
+
+def _retry_stale_subscriptions(azure_login, connections: list, results: dict,
+                               run_login, run_one, started_at: float) -> None:
+    """Log in again once and re-run only the subscriptions a dead cached login failed.
+
+    A relogin that fails or raises leaves the first pass's results as they are.
+    """
+    stale = _subscriptions_needing_relogin(azure_login, connections, results)
+    if not stale:
+        return
+    try:
+        relogin_ok = azure_login.relogin(run_login, started_at)[0]
+    except Exception as e:
+        logger.error("Azure relogin error: %s", e)
+        return
+    if relogin_ok:
+        logger.info("Cached Azure login was unusable; logged in again, retrying %d subscription(s)", len(stale))
+        results.update(_fan_out_azure(stale, run_one))
+
+
+def _granted_azure_connections(user_id: str, connections: list) -> list:
+    """Subscriptions this caller may use. An unlimited connector keeps every row."""
+    from utils.auth.connector_access import access_for
+
+    access = access_for(user_id)
+    return [
+        row for row in connections
+        if access.may_use("azure", str(row.get("account_id") or ""))
+    ]
+
+
+def _refuse_resolved_azure(user_id: str, subscription_id, command: str, isolated_env) -> Optional[str]:
+    """Deny a subscription login resolved on its own, and drop its temp config."""
+    if not user_id or not subscription_id:
+        return None
+    from utils.auth.connector_access import may_use
+
+    if may_use(user_id, "azure", str(subscription_id)):
+        return None
+    config_dir = (isolated_env or {}).get("AZURE_CONFIG_DIR")
+    if config_dir:
+        shutil.rmtree(config_dir, ignore_errors=True)
+    return connector_call_denied(user_id, "azure", subscription_id, command)
+
+
+_AZURE_SUB_PATH = re.compile(r"/subscriptions/([^/\"'\s]+)", re.IGNORECASE)
+_AZURE_SUB_FLAGS = {"--subscription", "--subscriptions", "-s"}
+
+
+def _explicit_azure_subscriptions(command: str) -> Optional[list]:
+    """Subscription names or ids the command names. None when it can't be parsed."""
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return None
+    found: list = []
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        name = token.lower().split("=", 1)[0]
+        if name in _AZURE_SUB_FLAGS:
+            multi = name == "--subscriptions"
+            if "=" in token:
+                values = [token.split("=", 1)[1]]
+                i += 1
+            else:
+                values = []
+                i += 1
+                while i < len(tokens) and not tokens[i].startswith("-"):
+                    values.append(tokens[i])
+                    i += 1
+                    if not multi:
+                        break
+            if not values:
+                found.append("")
+            for value in values:
+                found.extend(part for part in value.split(",") if part)
+            continue
+        found.extend(_AZURE_SUB_PATH.findall(token))
+        i += 1
+    return found
+
+
+_GCP_PROJECT_FLAGS = {"--project", "--project_id"}
+
+
+def _explicit_gcp_projects(command: str) -> Optional[list]:
+    """Project ids the command names. None when the command can't be parsed."""
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return None
+    found: list = []
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        name = token.lower().split("=", 1)[0]
+        if name not in _GCP_PROJECT_FLAGS:
+            i += 1
+            continue
+        if "=" in token:
+            value = token.split("=", 1)[1]
+            i += 1
+        elif i + 1 < len(tokens) and not tokens[i + 1].startswith("-"):
+            value = tokens[i + 1]
+            i += 2
+        else:
+            # A flag with no value can still hide the project the login would use.
+            found.append("")
+            i += 1
+            continue
+        found.append(value)
+    return found
+
+
+def _gcp_granted_scopes(access) -> Optional[list]:
+    """Scope ids this role holds, or None when GCP is not limited."""
+    if access.credentials("gcp") is None:
+        return None
+    override = [
+        g for g in access.team_rules
+        if g.connector == "gcp" and g.team_id in access.team_ids
+    ]
+    rows = override or [g for g in access.grants if g.connector == "gcp"]
+    roles = set(access.roles)
+    return [g.scope_id for g in rows if g.role in roles]
+
+
+def _gcp_denied(
+    user_id: str, project: Optional[str], command: str, granted: Optional[list] = None,
+) -> str:
+    """Refusal for a GCP project. A blank scope still matches any grant, so say no here."""
+    denied = connector_call_denied(user_id, "gcp", project or None, command)
+    if denied:
+        return denied
+    # Several grants and no --project. Name them so the next try can pick one.
+    if granted:
+        listed = ", ".join(str(item) for item in granted)
+        return json.dumps({
+            "success": False,
+            "error": (
+                "This command needs one project. Retry with --project set to one of "
+                f"these granted projects: {listed}."
+            ),
+            "code": "CONNECTOR_DENIED",
+            "final_command": command,
+            "provider": "gcp",
+        })
+    from utils.auth.connector_access import denial_text
+    return json.dumps({
+        "success": False,
+        "error": denial_text(user_id, "gcp"),
+        "code": "CONNECTOR_DENIED",
+        "final_command": command,
+        "provider": "gcp",
+    })
+
+
+def gcp_login_project(user_id: str, command: str, context_project: Optional[str] = None):
+    """Project for the token, and a denial when the command is out of scope.
+
+    A limited role never logs in with an empty scope: that merges every grant
+    and mints a token for the root project.
+    """
+    from utils.auth.connector_access import access_for
+
+    access = access_for(user_id)
+    scopes = _gcp_granted_scopes(access)
+    named = _explicit_gcp_projects(command)
+    # Not limited: keep the previous login, but still honor a project the command names.
+    if scopes is None:
+        if named:
+            return (named[-1] or context_project), None
+        return context_project or None, None
+    # An unparseable command could hide a project flag.
+    if named is None:
+        return None, _gcp_denied(user_id, None, command)
+    for project in named:
+        if not project or not access.may_use("gcp", project):
+            return None, _gcp_denied(user_id, project or None, command)
+    # gcloud keeps the last --project, so the token has to be for that one.
+    if named:
+        return named[-1], None
+    # A blank scope covers every project, so the root token stays valid.
+    if any(scope == "" for scope in scopes):
+        return context_project or None, None
+    if context_project:
+        if access.may_use("gcp", context_project):
+            return context_project, None
+        return None, _gcp_denied(user_id, context_project, command)
+    concrete = [scope for scope in scopes if scope]
+    # One granted project is the only place a command with no flag can run.
+    if len(concrete) == 1:
+        return concrete[0], None
+    # More than one grant. An empty scope would mint a token for the root project.
+    if len(concrete) > 1:
+        return None, _gcp_denied(user_id, None, command, granted=concrete)
+    return None, _gcp_denied(user_id, None, command)
+
+
+def _is_unscoped_azure_graph(command: str) -> bool:
+    """True for `az graph`, which is tenant-wide unless a subscription is named."""
+    cmd = command.strip()
+    if not cmd.startswith("az "):
+        cmd = f"az {cmd}"
+    return cmd.split()[1:2] == ["graph"]
+
+
+def _refuse_named_azure(user_id: str, command: str, connections: list) -> Optional[str]:
+    """Deny a command that names a subscription this role was not granted.
+
+    Grants are stored by subscription id. A name that doesn't match a connected
+    id is refused while the connector is limited, because the login can reach
+    any subscription the service principal can see.
+    """
+    named = _explicit_azure_subscriptions(command)
+    from utils.auth.connector_access import access_for
+
+    access = access_for(user_id)
+    # Not limited: the command keeps the previous behavior.
+    if access.credentials("azure") is None:
+        return None
+    # An unparseable command could hide a subscription flag.
+    if named is None:
+        return connector_call_denied(user_id, "azure", None, command)
+    # `az graph` with no subscription is tenant-wide, and the pin step leaves it alone.
+    if not named and _is_unscoped_azure_graph(command):
+        return connector_call_denied(user_id, "azure", None, command)
+    by_id = {
+        str(row.get("account_id") or "").lower(): str(row.get("account_id") or "")
+        for row in connections
+        if row.get("account_id")
+    }
+    for raw in named:
+        canonical = by_id.get(str(raw).lower())
+        if not canonical or not access.may_use("azure", canonical):
+            return connector_call_denied(user_id, "azure", raw or None, command)
+    return None
+
+
+def _cloud_exec_azure_multi_subscription(
+    user_id: str,
+    connections: list,
+    command: str,
+    provider_preference: Optional[str] = None,
+    timeout: Optional[int] = None,
+    output_file: Optional[str] = None,
+    fn_start: float = 0,
+    gated_command: Optional[str] = None,
+) -> str:
+    """Execute an Azure CLI command across all connected subscriptions and merge results.
+
+    Every connected subscription belongs to the same service principal (same
+    client_id/client_secret/tenant), so one `az login` authenticates all of them
+    and the CLI can then be scoped per command with `--subscription`. We therefore
+    authenticate ONCE into a single shared AZURE_CONFIG_DIR and fan the (read-only,
+    subscription-pinned) commands out across it, instead of paying a full
+    `az login` subprocess plus a private temp dir per subscription. That turns the
+    cost from 2N subprocesses / N temp dirs into N+1 subprocesses / 1 temp dir.
+
+    Sharing the config dir across threads relies on login happening up front and
+    every fanned-out command carrying its own `--subscription` flag rather than
+    mutating the CLI's active-subscription setting. When a login for these
+    credentials is already cached (utils.cloud.azure_login_cache) the fan-out
+    reuses it and spawns no login at all. Results are keyed by subscription id.
+    """
+    import shutil as _shutil
+
+    current_mode = get_mode_from_context()
+    allowed, read_only_message = ModeAccessController.ensure_cloud_command_allowed(
+        current_mode, ask_mode_permits(user_id, command), command, describe_rejection(command),
+    )
+    if not allowed:
+        return json.dumps({
+            "error": read_only_message,
+            "multi_subscription": True,
+            "command": command,
+            "provider": "azure",
+        })
+
+    # Authenticate ONCE for the whole fan-out. subscription_id is left unset: the
+    # SP login is tenant-scoped, so the shared session can reach every subscription;
+    # each command below pins its own scope with --subscription.
+    setup_ok, _sub, _auth, isolated_env, auth_argv = setup_azure_environment_isolated(user_id, None)
+    if not setup_ok:
+        return json.dumps({
+            "success": False,
+            "error": _credential_setup_error("Failed to authenticate with Azure"),
+            "multi_subscription": True,
+            "command": command,
+            "provider": "azure",
+        })
+    # Reuse a cached `az login` for these credentials when there is one, so a warm
+    # fan-out spawns no login at all. None means the fan-out keeps its own private
+    # directory and logs in once, as before.
+    azure_login = azure_login_cache.attach(isolated_env, command)
+    config_dir = isolated_env.get("AZURE_CONFIG_DIR")
+
+    def _run_azure_login():
+        # Auth and command run as separate argv invocations, never through a shell:
+        # the secret would otherwise be exposed to shell metacharacter parsing.
+        # auth_argv is already a list, so the secret is never re-lexed.
+        return terminal_run(
+            auth_argv,
+            capture_output=True, text=True, timeout=30,
+            env=isolated_env, trusted=True,
+        )
+
+    try:
+        if not _azure_login_ok(azure_login, _run_azure_login):
+            return json.dumps({
+                "success": False,
+                "error": "Azure authentication failed",
+                "multi_subscription": True,
+                "command": command,
+                "provider": "azure",
+            })
+
+        def _run_one(conn: dict) -> dict:
+            return _run_azure_on_subscription(conn, command, isolated_env, timeout, gated_command)
+
+        fan_out_started_at = time.time()
+        results = _fan_out_azure(connections, _run_one)
+
+        # A cached login can be gone (swept, expired) or predate a newly connected
+        # subscription. Log in again once and re-run only the subscriptions it failed.
+        if azure_login:
+            _retry_stale_subscriptions(azure_login, connections, results,
+                                       _run_azure_login, _run_one, fan_out_started_at)
+    finally:
+        # A private tempdir is removed once every worker is done. A cached login
+        # directory is shared and outlives the fan-out; the login cache expires it.
+        if config_dir and not azure_login_cache.is_cached_dir(config_dir):
+            _shutil.rmtree(config_dir, ignore_errors=True)
+
+    elapsed = time.perf_counter() - fn_start if fn_start else 0
+    logger.info("TIME: cloud_exec Azure multi-subscription (%d subs, %s login) completed in %.2fs",
+                len(connections), "cached" if azure_login else "single", elapsed)
+    return json.dumps({
+        "success": all(r.get("success") for r in results.values()),
+        "multi_subscription": True,
+        "command": command,
+        "provider": "azure",
+        "results_by_subscription": results,
     })
 
 
@@ -1347,6 +1946,9 @@ Security & Compliance
     # but we need original args to match with LangChain's tool call signature
     original_provider = provider
     original_command = command
+    # Bound before the try so the cleanup in finally can always read it, including
+    # on paths that return before the provider setup block below.
+    isolated_env = None
     
     try:
         fn_start = time.perf_counter()  # Start timing for entire execution
@@ -1392,13 +1994,9 @@ Security & Compliance
         provider = normalized_provider
 
         # Unified gate: signature + org policy + LLM judge + HITL (foreground).
-        # Prepend CLI prefix so patterns like ^aws\s+ match (cloud_exec receives
-        # the subcommand without the provider prefix, e.g. "ecs list-clusters").
-        _CLI_PREFIX = {"aws": "aws", "gcp": "gcloud", "azure": "az",
-                       "scaleway": "scw", "ovh": "ovhcloud", "tailscale": "tailscale",
-                       "flyio": "fly"}
-        prefix = _CLI_PREFIX.get(provider.lower(), "")
-        gated_cmd = f"{prefix} {command}" if prefix and not command.strip().startswith(prefix) else command
+        # Provider subcommands arrive without their CLI (`ecs list-clusters`);
+        # kubectl/helm/bq already include it and must not be prefixed.
+        gated_cmd = _command_for_policy(provider, command)
         from utils.auth.command_gate import gate_command
         gate = gate_command(user_id=user_id, tool_name="cloud_exec", command=gated_cmd)
         if not gate.allowed:
@@ -1406,8 +2004,9 @@ Security & Compliance
                            user_id, gate.code, gate.block_reason[:200])
             error_msg = gate.block_reason
             if gate.code == "POLICY_DENIED" and "No matching allow rule" in error_msg:
+                cli = gated_cmd.strip().split(None, 1)[0] if gated_cmd.strip() else provider
                 error_msg += (
-                    f". To allow {prefix or provider} commands, go to Settings > Security > "
+                    f". To allow {cli} commands, go to Settings > Security > "
                     "Command Policies and re-apply a template or manually add an allow rule."
                 )
             return json.dumps({
@@ -1418,15 +2017,81 @@ Security & Compliance
                 "provider": provider.lower(),
             })
 
+        # Guardrail passed. Still refuse before login when this role or team cannot use the connector.
+        denied = connector_call_denied(user_id, normalized_provider, account_id, command)
+        if denied:
+            return denied
+
         # Set up ISOLATED environment based on provider - NO GLOBAL STATE!
         isolated_env = None
-        auth_command = None
+        auth_argv = None
+        azure_login = None
         if normalized_provider == 'azure':
-            # Azure isolated setup
-            success, subscription_id, auth_method, isolated_env, auth_command = setup_azure_environment_isolated(user_id, selected_project_id)
+            # Azure multi-subscription: fan out only for `az` commands when no
+            # specific subscription was requested. kubectl/helm inherit their
+            # context from `aks get-credentials` and must not fan out.
+            target_subscription = account_id or selected_project_id
+            named = _explicit_azure_subscriptions(original_command) if user_id else []
+            raw_subs = []
+            if user_id:
+                from utils.db.connection_utils import get_all_user_connections
+                raw_subs = get_all_user_connections(user_id, "azure")
+                # --subscription on the command bypasses the account_id check.
+                refused_named = _refuse_named_azure(user_id, original_command, raw_subs)
+                if refused_named:
+                    return refused_named
+                # Already scoped, so don't also run it on every other subscription.
+                if named and not target_subscription:
+                    wanted = str(named[0]).lower()
+                    match = next(
+                        (row.get("account_id") for row in raw_subs
+                         if str(row.get("account_id") or "").lower() == wanted),
+                        None,
+                    )
+                    target_subscription = str(match or "") or None
+            if not target_subscription and _azure_can_fan_out(original_command):
+                # A grant on one subscription must not log in to the others.
+                all_subs = _granted_azure_connections(user_id, raw_subs) if user_id else raw_subs
+                if raw_subs and not all_subs:
+                    from utils.auth.connector_access import denial_text
+                    denied = connector_call_denied(user_id, "azure", None, command)
+                    # A whole-connector grant still matches an empty scope, so say no here.
+                    return denied or json.dumps({
+                        "success": False,
+                        "error": denial_text(user_id, "azure"),
+                        "code": "CONNECTOR_DENIED",
+                        "final_command": command,
+                        "provider": "azure",
+                    })
+                if len(all_subs) > 1:
+                    return _cloud_exec_azure_multi_subscription(
+                        user_id=user_id,
+                        connections=all_subs,
+                        command=original_command,
+                        provider_preference=provider_preference,
+                        timeout=timeout,
+                        output_file=output_file,
+                        fn_start=fn_start,
+                        gated_command=gated_cmd,
+                    )
+                if len(all_subs) == 1:
+                    target_subscription = str(all_subs[0].get("account_id") or "") or None
+            if target_subscription and user_id:
+                from utils.auth.connector_access import may_use
+                if not may_use(user_id, "azure", str(target_subscription)):
+                    return connector_call_denied(user_id, "azure", target_subscription, command)
+            success, subscription_id, auth_method, isolated_env, auth_argv = setup_azure_environment_isolated(user_id, target_subscription)
             if not success:
-                return json.dumps({"error": f"Failed to setup Azure environment with {provider_preference} authentication", "final_command": command})
+                return _credential_setup_failure(f"Failed to setup Azure environment with {provider_preference} authentication", command)
+            # The caller named no subscription, so login picked a default. That
+            # default still has to be one this role was granted.
+            refused = _refuse_resolved_azure(user_id, subscription_id, command, isolated_env)
+            if refused:
+                return refused
             resource_id = subscription_id
+            # Reuse an existing `az login` for these credentials when one is cached.
+            # None means this command keeps its private directory and logs in itself.
+            azure_login = azure_login_cache.attach(isolated_env, original_command)
         elif normalized_provider == 'aws':
             # AWS multi-account: fan out only if no specific account_id given
             if not account_id:
@@ -1441,6 +2106,7 @@ Security & Compliance
                         timeout=timeout,
                         output_file=output_file,
                         fn_start=fn_start,
+                        gated_command=gated_cmd,
                     )
             # Single account path -- either account_id was given or only 1 connection
             success, region, auth_method, isolated_env = setup_aws_environment_isolated(
@@ -1449,31 +2115,37 @@ Security & Compliance
                 target_account_id=account_id,
             )
             if not success:
-                return json.dumps({"error": f"Failed to setup AWS environment with {provider_preference} authentication", "final_command": command})
+                return json.dumps({
+                    "error": (
+                        f"Failed to setup AWS environment with {provider_preference} "
+                        "authentication"
+                    ),
+                    "final_command": command,
+                })
             resource_id = region
         elif normalized_provider == 'ovh':
             # OVH isolated setup
             success, project_id, auth_method, isolated_env = setup_ovh_environment_isolated(user_id, selected_project_id)
             if not success:
-                return json.dumps({"error": f"Failed to setup OVH environment with {provider_preference} authentication. Please connect your OVH account first.", "final_command": command, "requires_connection": True})
+                return _credential_setup_failure(f"Failed to setup OVH environment with {provider_preference} authentication. Please connect your OVH account first.", command, requires_connection=True)
             resource_id = project_id
         elif normalized_provider == 'scaleway':
             # Scaleway isolated setup
             success, project_id, auth_method, isolated_env = setup_scaleway_environment_isolated(user_id, selected_project_id)
             if not success:
-                return json.dumps({"error": f"Failed to setup Scaleway environment with {provider_preference} authentication. Please connect your Scaleway account first.", "final_command": command, "requires_connection": True})
+                return _credential_setup_failure(f"Failed to setup Scaleway environment with {provider_preference} authentication. Please connect your Scaleway account first.", command, requires_connection=True)
             resource_id = project_id
         elif normalized_provider == 'tailscale':
             # Tailscale isolated setup - uses REST API, not CLI
             success, tailnet, auth_method, isolated_env = setup_tailscale_environment_isolated(user_id, selected_project_id)
             if not success:
-                return json.dumps({"error": f"Failed to setup Tailscale environment. Please connect your Tailscale account first.", "final_command": command, "requires_connection": True})
+                return _credential_setup_failure("Failed to setup Tailscale environment. Please connect your Tailscale account first.", command, requires_connection=True)
             resource_id = tailnet
         elif normalized_provider == 'flyio':
             # Fly.io isolated setup - uses FLY_API_TOKEN env var
             success, org_slug, auth_method, isolated_env = setup_flyio_environment_isolated(user_id, selected_project_id)
             if not success:
-                return json.dumps({"error": "Failed to setup Fly.io environment. Please connect your Fly.io account first.", "final_command": command, "requires_connection": True})
+                return _credential_setup_failure("Failed to setup Fly.io environment. Please connect your Fly.io account first.", command, requires_connection=True)
             resource_id = org_slug
         elif normalized_provider not in CLOUD_EXEC_PROVIDERS:
             return json.dumps({
@@ -1484,10 +2156,19 @@ Security & Compliance
                 "provider": normalized_provider,
             })
         else:
-            # GCP isolated setup (default)
-            success, project_id, auth_method, isolated_env = setup_gcp_environment_isolated(user_id, selected_project_id, provider_preference)
+            # GCP isolated setup (default). A grant on project A must not mint
+            # a root-project token that can also reach project B.
+            from utils.cloud.cloud_utils import get_selected_project_id
+            project_for_token, refused_gcp = gcp_login_project(
+                user_id, original_command, get_selected_project_id(),
+            ) if user_id else (None, None)
+            if refused_gcp:
+                return refused_gcp
+            success, project_id, auth_method, isolated_env = setup_gcp_environment_isolated(
+                user_id, project_for_token, provider_preference,
+            )
             if not success:
-                return json.dumps({"error": f"Failed to setup GCP environment with {provider_preference} authentication", "final_command": command})
+                return _credential_setup_failure(f"Failed to setup GCP environment with {provider_preference} authentication", command)
             resource_id = project_id
 
         logger.info(f"Using {auth_method} authentication for resource {resource_id}")
@@ -1623,11 +2304,12 @@ Security & Compliance
 
             # Check read-only mode
             current_mode = get_mode_from_context()
-            if not is_read_only_command(command):
+            if not ask_mode_permits(user_id, command):
                 allowed, read_only_message = ModeAccessController.ensure_cloud_command_allowed(
                     current_mode,
-                    is_read_only_command(command),
+                    False,
                     command,
+                    describe_rejection(command),
                 )
                 if not allowed:
                     logger.warning(read_only_message)
@@ -1678,47 +2360,23 @@ Security & Compliance
         except ValueError:
             _first_token = ''  # fall back gracefully if parsing fails here – will be handled later
 
-        # Define supported CLI tools for each provider
-        if provider.lower() in ['gcp', 'gcloud']:
-            supported_cli_tools = ['gcloud', 'kubectl', 'gsutil', 'bq', 'helm', 'terraform']
-            default_cli = 'gcloud'
-        elif provider.lower() in ['aws', 'amazon']:
-            supported_cli_tools = ['aws', 'kubectl', 'eksctl', 'sam', 'cdk', 'helm', 'terraform']
-            default_cli = 'aws'
-        elif provider.lower() in ['azure', 'az']:
-            supported_cli_tools = ['az', 'kubectl', 'helm', 'terraform']
-            default_cli = 'az'
-        elif provider.lower() == 'ovh':
-            supported_cli_tools = ['ovhcloud', 'kubectl', 'helm', 'terraform']
-            default_cli = 'ovhcloud'
-        elif provider.lower() == 'scaleway':
-            supported_cli_tools = ['scw', 'kubectl', 'helm', 'terraform']
-            default_cli = 'scw'
-        elif provider.lower() == 'flyio':
-            supported_cli_tools = ['fly', 'flyctl']
-            default_cli = 'fly'
+        # Same table the policy gate uses, so a sibling CLI is not prefixed
+        # on one path and left bare on the other.
+        spec = _PROVIDER_CLIS.get(provider.lower())
+        if spec is None:
+            default_cli, supported_cli_tools = "", ()
         else:
-            supported_cli_tools = []
-            default_cli = ''
+            default_cli, supported_cli_tools = spec
 
         cli_tool = _first_token if _first_token in supported_cli_tools else default_cli
 
         # Terraform should run without provider-specific prefixing
         terraform_invocation = cli_tool == 'terraform'
 
-        # If the command does not start with a recognised CLI tool, default to provider CLI
-        if provider.lower() in ['gcp', 'gcloud'] and cli_tool == 'gcloud' and not terraform_invocation and not command.strip().startswith('gcloud'):
-            command = f"gcloud {command}"
-        elif provider.lower() in ['aws', 'amazon'] and cli_tool == 'aws' and not terraform_invocation and not command.strip().startswith('aws'):
-            command = f"aws {command}"
-        elif provider.lower() in ['azure', 'az'] and cli_tool == 'az' and not terraform_invocation and not command.strip().startswith('az'):
-            command = f"az {command}"
-        elif provider.lower() == 'ovh' and cli_tool == 'ovhcloud' and not terraform_invocation and not command.strip().startswith('ovhcloud'):
-            command = f"ovhcloud {command}"
-        elif provider.lower() == 'scaleway' and cli_tool == 'scw' and not terraform_invocation and not command.strip().startswith('scw'):
-            command = f"scw {command}"
-        elif provider.lower() == 'flyio' and cli_tool == 'fly' and not command.strip().startswith(('fly ', 'flyctl ')):
-            command = f"fly {command}"
+        # Match the string already checked by the allowlist. First-token, not
+        # startswith, so `azcopy` is not mistaken for `az`.
+        if spec is not None and not terraform_invocation:
+            command = _command_for_policy(provider, command)
 
         # Apply provider-specific convenience flags
         if provider.lower() in ['gcp', 'gcloud'] and cli_tool == 'gcloud':
@@ -1762,7 +2420,10 @@ Security & Compliance
 
                 
         elif provider.lower() in ['azure', 'az'] and cli_tool == 'az':
-            # Azure: do not auto-append --subscription; rely on default set via 'az account set' or user-provided flags
+            # Pin to the resolved subscription so multi-subscription tenants never
+            # rely on whichever subscription the service principal defaults to.
+            if region_or_project:
+                command = _apply_azure_subscription(command, region_or_project)
             if '--output' not in command and '-o' not in command and ('list' in command or 'show' in command):
                 command += " --output=json"
 
@@ -1815,8 +2476,9 @@ Security & Compliance
         current_mode = get_mode_from_context()
         allowed, read_only_message = ModeAccessController.ensure_cloud_command_allowed(
             current_mode,
-            is_read_only_command(command),
+            ask_mode_permits(user_id, command),
             command,
+            describe_rejection(command),
         )
         if not allowed:
             logger.warning(read_only_message)
@@ -1868,22 +2530,30 @@ Security & Compliance
         
         # For Azure, we need to handle authentication differently
         # Execute auth and user command sequentially to preserve argument quoting
-        if provider.lower() in ['azure', 'az'] and auth_command:
-            # First, execute the authentication command
-            try:
-                auth_result = terminal_run(
-                    shlex.split(auth_command),
+        if provider.lower() in ['azure', 'az'] and auth_argv:
+            def _run_azure_login():
+                return terminal_run(
+                    auth_argv,
                     capture_output=True,
                     text=True,
                     timeout=30,
                     env=isolated_env,
                     trusted=True
                 )
-                if auth_result.returncode != 0:
-                    logger.error(f"Azure authentication failed: {auth_result.stderr}")
+
+            # First, execute the authentication command. With a cached login this
+            # only spawns `az login` when the directory is cold.
+            try:
+                if azure_login:
+                    auth_ok, auth_stderr = azure_login.ensure(_run_azure_login)
+                else:
+                    auth_result = _run_azure_login()
+                    auth_ok, auth_stderr = auth_result.returncode == 0, auth_result.stderr
+                if not auth_ok:
+                    logger.error(f"Azure authentication failed: {auth_stderr}")
                     return json.dumps({
                         "success": False,
-                        "error": f"Azure authentication failed: {auth_result.stderr}",
+                        "error": f"Azure authentication failed: {auth_stderr}",
                         "command": command,
                         "final_command": command
                     })
@@ -1902,18 +2572,91 @@ Security & Compliance
         else:
             # Use direct command for GCP and AWS
             exec_command = command_args
-        
+
+        bq_token = None
+        bq_job_id = None
+        bq_location = None
+        bq_project = None
+        if cli_tool == "bq":
+            bq_project = region_or_project
+            if isinstance(isolated_env, dict):
+                bq_token = (
+                    isolated_env.get("CLOUDSDK_AUTH_ACCESS_TOKEN")
+                    or isolated_env.get("GOOGLE_OAUTH_ACCESS_TOKEN")
+                )
+                bq_project = isolated_env.get("GOOGLE_CLOUD_PROJECT") or bq_project
+            # Project only. The token is applied inside terminal_run, after the hash.
+            prepared = prepare_bq_exec(command, None, bq_project)
+            exec_command = prepared.argv
+            bq_job_id = prepared.job_id
+            bq_location = bq_query_location(prepared.argv)
+            # The command's --project_id can differ from the connected project
+            bq_project = bq_query_project(prepared.argv, bq_project)
+
+        # The gate judged gated_cmd; the flags added since then changed the
+        # string, so without this terminal_run judges the command again.
+        from utils.auth.command_gate import carry_guardrails_approval, release_guardrails_approval
+        carried_approval = carry_guardrails_approval(gated_cmd, exec_command)
+
         # Execute the command
         exec_start = time.perf_counter()
+        exec_started_at = time.time()
         try:
             result = terminal_run(
                 exec_command,  # Use chained command for Azure, direct for others
                 capture_output=True,
                 text=True,
                 timeout=effective_timeout,
-                env=isolated_env  # Use ISOLATED environment - NO global state!
+                env=isolated_env,  # Use ISOLATED environment - NO global state!
+                # The gate already judged the user command. The token is added
+                # after that hash, and a second judge treats it as theft.
+                trusted=(cli_tool == "bq"),
+                oauth_access_token=bq_token,
             )
+            # A cached login can be gone (swept, expired) or predate a newly
+            # connected subscription. Log in again and retry exactly once.
+            if azure_login and result.returncode != 0 and azure_login.should_relogin(result.stderr):
+                logger.info("Cached Azure login was unusable; logging in again and retrying once")
+                relogin_ok, _ = azure_login.relogin(_run_azure_login, exec_started_at)
+                if relogin_ok:
+                    result = terminal_run(
+                        exec_command,
+                        capture_output=True,
+                        text=True,
+                        timeout=effective_timeout,
+                        env=isolated_env,
+                        trusted=(cli_tool == "bq"),
+                        oauth_access_token=bq_token,
+                    )
             logger.info(f"TIME: cloud command execution took {time.perf_counter() - exec_start:.2f}s")
+            if cli_tool == "bq":
+                explain_bq_timeout(
+                    result,
+                    job_id=bq_job_id,
+                    project_id=bq_project,
+                    location=bq_location,
+                    access_token=bq_token,
+                    env=isolated_env,
+                    timeout_s=effective_timeout,
+                )
+            # Entra-integrated AKS writes a kubeconfig whose exec plugin defaults to
+            # devicecode, which is interactive. Convert it to service-principal auth
+            # so subsequent kubectl calls work headless. Non-Entra clusters get a
+            # token-based kubeconfig that kubelogin leaves alone, so this is a no-op.
+            if (provider.lower() in ('azure', 'az') and result.returncode == 0
+                    and 'get-credentials' in command):
+                try:
+                    conv = terminal_run(
+                        ["kubelogin", "convert-kubeconfig", "-l", "azurecli"],
+                        capture_output=True, text=True, timeout=30,
+                        env=isolated_env, trusted=True,
+                    )
+                    if conv.returncode != 0:
+                        logger.warning("kubelogin convert-kubeconfig failed (rc=%s); kubectl may prompt for devicecode", conv.returncode)
+                except FileNotFoundError:
+                    logger.warning("kubelogin not found; kubectl against Entra-integrated AKS will fail")
+                except Exception as conv_error:
+                    logger.warning("kubelogin convert-kubeconfig error: %s", type(conv_error).__name__)
         except FileNotFoundError as e:
             logger.error(f"CLI tool '{cli_tool}' not found: {e}")
             return json.dumps({
@@ -1941,6 +2684,9 @@ Security & Compliance
                 "resource_name": resource_id,
                 "auth_method": auth_method
             })
+        finally:
+            # Live through the Azure relogin retry above, gone once the command has run.
+            release_guardrails_approval(carried_approval)
         
         # Add debug logging for specific commands and failed Scaleway commands
         if any(keyword in command for keyword in ["compute instances", "ec2 describe-instances", "ecs list-clusters"]):
@@ -2438,5 +3184,15 @@ Security & Compliance
             tool_capture.capture_tool_end(current_tool_call_id, exception_result, is_error=True)
         
         return exception_result
+    finally:
+        # setup_azure_environment_isolated mkdtemps an AZURE_CONFIG_DIR per call. The
+        # fan-out path cleans up after itself, but the single-subscription path
+        # returns from ~20 places, so clean up here where every path converges.
+        # Without this the dirs accumulate in /tmp for the life of the worker.
+        # A cached login directory is shared and outlives the command; the login
+        # cache expires those itself.
+        if (isinstance(isolated_env, dict) and isolated_env.get("AZURE_CONFIG_DIR")
+                and not azure_login_cache.is_cached_dir(isolated_env["AZURE_CONFIG_DIR"])):
+            shutil.rmtree(isolated_env["AZURE_CONFIG_DIR"], ignore_errors=True)
 
 cloud_exec_tool = StructuredTool.from_function(cloud_exec) 

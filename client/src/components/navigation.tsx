@@ -104,12 +104,12 @@ export default function Navigation({
   };
 
   return (
-    <div className="h-full flex-shrink-0 relative">
+    <div className={cn(
+      "h-full shrink-0 relative overflow-hidden transition-[width] duration-300 ease-in-out",
+      isExpanded ? "w-56 min-w-56" : "w-16 min-w-16 max-w-16"
+    )}>
       {/* Navigation sidebar */}
-      <nav className={cn(
-        "bg-muted dark:bg-[#111111] h-full border-r border-border transition-[width] duration-300 overflow-hidden flex flex-col",
-        isExpanded ? "w-56" : "w-0"
-      )}>
+      <nav className="bg-muted dark:bg-[#111111] h-full w-56 border-r border-border flex flex-col">
         <div className="p-3 flex items-center justify-between border-b border-border/30">
           <div className="flex items-center gap-2">
             <img 

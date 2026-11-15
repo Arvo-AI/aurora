@@ -90,7 +90,7 @@ grep -v '^AURORA_SERVICE_ACCOUNT_JSON$' "$USED_VARS_FILE" > "${USED_VARS_FILE}.t
 grep -v -E '^(AURORA_AGENT_TOKEN|AGENT_VERSION)$' "$USED_VARS_FILE" > "${USED_VARS_FILE}.tmp" && mv "${USED_VARS_FILE}.tmp" "$USED_VARS_FILE"
 
 # Docker Compose static variables (hardcoded in docker-compose.yml, not user-configurable)
-grep -v -E '^(CHATBOT_HOST|CHATBOT_PORT|WEAVIATE_PORT)$' "$USED_VARS_FILE" > "${USED_VARS_FILE}.tmp" && mv "${USED_VARS_FILE}.tmp" "$USED_VARS_FILE"
+grep -v -E '^(CHATBOT_HOST|CHATBOT_PORT)$' "$USED_VARS_FILE" > "${USED_VARS_FILE}.tmp" && mv "${USED_VARS_FILE}.tmp" "$USED_VARS_FILE"
 
 # Derived variables (set in docker-compose from NEXT_PUBLIC_* counterparts, not user-configurable)
 grep -v -E '^(PUBLIC_API_URL|PUBLIC_WS_URL)$' "$USED_VARS_FILE" > "${USED_VARS_FILE}.tmp" && mv "${USED_VARS_FILE}.tmp" "$USED_VARS_FILE"

@@ -282,7 +282,7 @@ def ovh_oauth2_callback():
             token_storage["projectId"] = project_id
 
         # Store tokens
-        store_tokens_in_db(user_id, token_storage, 'ovh')
+        store_tokens_in_db(user_id, token_storage, 'ovh', schedule_prediscovery=True)
         logger.info(f"OAuth2 authorization code flow completed successfully for user {user_id}")
 
         # Save connection metadata for user_connections tracking

@@ -13,6 +13,21 @@ logger = logging.getLogger(__name__)
 SLACK_API_BASE = "https://slack.com/api"
 
 
+class SlackAPIError(ValueError):
+    """Slack answered ok=false; `error` is the API error code (e.g. not_in_channel).
+    Transport failures stay plain ValueError so callers can tell "Slack rejected
+    it" (safe to retry differently) from "the request may have gone through"."""
+
+    def __init__(self, error: str):
+        # args holds the bare code so cls(*args) (pickle, copy, Celery's
+        # exception reconstruction) rebuilds the same instance.
+        super().__init__(error)
+        self.error = error
+
+    def __str__(self) -> str:
+        return f"Slack API error: {self.error}"
+
+
 class SlackClient:
     """
     Slack API client for Aurora integration.
@@ -44,9 +59,14 @@ class SlackClient:
         if result.get('ok', False):
             return result
         error = result.get('error', 'unknown_error')
-        if not (error == 'name_taken' and endpoint == 'conversations.create'):
+        # Answers the caller expects and handles itself: not an ERROR line.
+        expected = (
+            (error == 'name_taken' and endpoint == 'conversations.create')
+            or (error == 'thread_not_found' and endpoint == 'conversations.replies')
+        )
+        if not expected:
             logger.error("Slack API error on %s: %s", endpoint, error)
-        raise ValueError(f"Slack API error: {error}")
+        raise SlackAPIError(error)
 
     def _make_request(self, method: str, endpoint: str, data: Optional[Dict] = None, timeout: int = 30, max_retries: int = 3) -> Dict[str, Any]:
         """Make a request to Slack API with retry on 429 rate limits."""
@@ -90,20 +110,57 @@ class SlackClient:
         result = self._make_request("POST", "chat.postMessage", data)
         return result
     
-    def update_message(self, channel: str, ts: str, text: str, blocks: Optional[List[Dict]] = None) -> Dict[str, Any]:
-        """Update an existing message in a Slack channel."""
+    def update_message(self, channel: str, ts: str, text: str, blocks: Optional[List[Dict]] = None,
+                       timeout: int = 30, max_retries: int = 3) -> Dict[str, Any]:
+        """Update an existing message in a Slack channel. Pass blocks=[] to
+        replace a Block Kit message with plain text (omitting blocks keeps the
+        old ones). Best-effort callers can shrink timeout/max_retries."""
         data = {"channel": channel, "ts": ts, "text": text}
-        if blocks:
+        if blocks is not None:
             data["blocks"] = blocks
-        return self._make_request("POST", "chat.update", data)
+        return self._make_request("POST", "chat.update", data, timeout=timeout, max_retries=max_retries)
 
     def delete_message(self, channel: str, ts: str) -> None:
-        """Delete a message from a Slack channel. Raises ValueError on failure."""
-        self._make_request("POST", "chat.delete", {"channel": channel, "ts": ts})
+        """Delete a message from a Slack channel. Raises ValueError on failure.
+        Best-effort housekeeping for callers, so it gets a short budget."""
+        self._make_request("POST", "chat.delete", {"channel": channel, "ts": ts}, timeout=10, max_retries=1)
+
+    def get_message(self, channel: str, ts: str) -> Optional[Dict[str, Any]]:
+        """The message `ts` in `channel` (via conversations.replies, so a thread
+        parent carries `reply_count`), or None when Slack no longer has it —
+        including the tombstone Slack leaves at the same ts for a deleted
+        parent that had replies. Other failures raise ValueError. Short budget: callers treat a failed
+        lookup as "still present" and move on."""
+        try:
+            result = self._make_request(
+                "GET", "conversations.replies", {"channel": channel, "ts": ts, "limit": 1},
+                timeout=10, max_retries=1,
+            )
+        except SlackAPIError as e:
+            if e.error == "thread_not_found":
+                return None
+            raise
+        messages = result.get('messages') or []
+        message = messages[0] if messages and messages[0].get('ts') == ts else None
+        if message is None or message.get('subtype') == 'tombstone':
+            return None
+        return message
     
     def set_channel_topic(self, channel: str, topic: str) -> Dict[str, Any]:
         """Set channel topic/description."""
         return self._make_request("POST", "conversations.setTopic", {"channel": channel, "topic": topic})
+
+    def get_channel_info(self, channel: str) -> Optional[Dict[str, Any]]:
+        """Fetch a channel's metadata (name, topic, purpose, membership) via
+        conversations.info. Returns None on failure so callers can degrade."""
+        try:
+            result = self._make_request(
+                "GET", "conversations.info", {"channel": channel}, timeout=15, max_retries=1
+            )
+            return result.get("channel")
+        except Exception:
+            logger.warning("Could not fetch channel info", exc_info=True)
+            return None
     
     def list_bot_channels(self, types: str = "public_channel,private_channel") -> List[Dict[str, Any]]:
         """List channels the bot is a member of (much smaller set than all visible channels)."""
@@ -119,6 +176,38 @@ class SlackClient:
             channels = result.get('channels', [])
             all_channels.extend(channels)
             
+            cursor = result.get('response_metadata', {}).get('next_cursor')
+            if not cursor:
+                break
+        return all_channels
+
+    def list_all_channels(
+        self,
+        types: str = "public_channel,private_channel",
+        max_channels: int = 2000,
+    ) -> List[Dict[str, Any]]:
+        """List every channel visible in the workspace via conversations.list.
+
+        Unlike list_bot_channels (bot-membership only), this enumerates all
+        channels so Aurora can be aware of the whole workspace. Paginated with a
+        hard cap so a huge workspace can't run unbounded.
+        """
+        all_channels: List[Dict[str, Any]] = []
+        cursor = None
+
+        while True:
+            data = {"types": types, "exclude_archived": True, "limit": 200}
+            if cursor:
+                data["cursor"] = cursor
+
+            result = self._make_request("GET", "conversations.list", data)
+            channels = result.get('channels', [])
+            all_channels.extend(channels)
+
+            if len(all_channels) >= max_channels:
+                logger.warning("list_all_channels hit safety cap of %d channels", max_channels)
+                return all_channels[:max_channels]
+
             cursor = result.get('response_metadata', {}).get('next_cursor')
             if not cursor:
                 break
@@ -147,6 +236,37 @@ class SlackClient:
         except Exception:
             logger.warning("Could not join channel via conversations.join", exc_info=True)
             return None
+
+    def leave_channel(self, channel: str) -> bool:
+        """Leave a channel by ID. Returns True if Aurora is no longer in the
+        channel afterward, False if the leave genuinely failed.
+
+        Used when a user deactivates a channel: membership is Aurora's source of
+        truth for "active", so deactivating must actually remove the bot from the
+        channel in Slack (not just flip a local flag).
+
+        A True result means "Aurora is out" — either the leave succeeded, or
+        Slack reported a state that already means it's not a member
+        (``channel_not_found``/``not_in_channel``/archived), which is safe to
+        treat as left so the caller can prune its row. A False result means the
+        bot is likely still in the channel (e.g. ``cant_leave_general`` for
+        #general, or a transport error), so the caller must NOT prune — otherwise
+        the next reconcile re-adds the row and the UI flaps."""
+        try:
+            self._make_request("POST", "conversations.leave", {"channel": channel})
+            return True
+        except SlackAPIError as e:
+            # These all mean "Aurora isn't a member anymore" — treat as left.
+            if e.error in ("channel_not_found", "not_in_channel", "is_archived", "already_left"):
+                return True
+            # Anything else (notably cant_leave_general) means we're still in it.
+            logger.warning("Could not leave channel via conversations.leave: %s", e.error)
+            return False
+        except Exception:
+            # Transport error — the request may or may not have landed, so assume
+            # the bot is still a member and let the caller keep the row.
+            logger.warning("Could not leave channel via conversations.leave", exc_info=True)
+            return False
     
 
 

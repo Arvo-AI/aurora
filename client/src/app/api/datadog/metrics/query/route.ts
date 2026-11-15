@@ -14,7 +14,13 @@ export async function POST(request: NextRequest) {
     const { headers: authHeaders } = authResult;
     const payload = await request.json();
 
-    const response = await fetch(`${API_BASE_URL}/datadog/metrics/query`, {
+    // Forward ?account=<label> so a specific Datadog org can be targeted.
+    const account = new URL(request.url).searchParams.get('account');
+    const url = account
+      ? `${API_BASE_URL}/datadog/metrics/query?account=${encodeURIComponent(account)}`
+      : `${API_BASE_URL}/datadog/metrics/query`;
+
+    const response = await fetch(url, {
       method: 'POST',
       headers: {
         ...authHeaders,

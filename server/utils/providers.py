@@ -30,30 +30,34 @@ CONNECTOR_DIRS: frozenset = frozenset({
     "jenkins",
     "jira",
     "kubeconfig",
+    "mcp",
     "netdata",
     "newrelic",
     "notion",
     "opsgenie",
     "ovh",
     "pagerduty",
+    "rabbitmq",
     "scaleway",
     "sentry",
+    "servicenow",
     "sharepoint",
     "slack",
+    "teams",
     "spinnaker",
     "splunk",
+    "elastic",
     "tailscale",
     "terraform",
     "thousandeyes",
 })
 
 # Auxiliary provider keys not backed by a routes/ directory but that do appear
-# in the ``provider`` column (workspace selection, short-lived tokens, MCP).
+# in the ``provider`` column (workspace selection, short-lived tokens).
 _AUXILIARY_PROVIDERS: frozenset = frozenset({
     "bitbucket_workspace_selection",
     "jsm_ops",
     "kubectl",
-    "mcp",
 })
 
 KNOWN_PROVIDERS: frozenset = CONNECTOR_DIRS | _AUXILIARY_PROVIDERS

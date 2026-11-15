@@ -36,6 +36,7 @@ Benefits:
   - Top-level orchestration:
     - `build_system_invariant()`
     - `build_prompt_segments()`
+    - `assemble_system_prompt_parts()` (static prefix / dynamic suffix)
     - `assemble_system_prompt()`
 - `provider_rules.py`
   - Provider/mode/rule segments and validation helpers:
@@ -101,7 +102,10 @@ Benefits:
    - DB context (`context_fetchers.py`)
    - skill index (`SkillRegistry.build_index`)
    - core prompt markdown (`skills/core/*.md`)
-3. `assemble_system_prompt(...)` concatenates segments in stable order.
+3. `assemble_system_prompt_parts(...)` splits segments into a static prefix (invariant,
+   provider constraints, regional rules) and a dynamic suffix (everything per user, per
+   incident or time-dependent). The provider cache breakpoint goes between them, so a new
+   segment that varies per session belongs in the dynamic part.
 4. `cache_registration.py` registers cache boundaries for stable segments.
 5. Model can call `load_skill(...)` tool to fetch full integration guidance only when needed.
 

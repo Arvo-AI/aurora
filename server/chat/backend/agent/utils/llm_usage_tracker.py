@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import time
 from typing import Dict, Optional, Any
 from dataclasses import dataclass
@@ -9,6 +10,8 @@ from utils.db.connection_pool import db_pool
 from utils.auth.stateless_auth import set_rls_context
 from .openrouter_pricing_service import get_pricing_service
 from .provider_pricing_service import get_provider_pricing_service
+from .cache_control import claude_family
+from .usage_normalizer import normalize_usage
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +32,9 @@ class LLMUsage:
     org_id: Optional[str] = None
     error_message: Optional[str] = None
     request_metadata: Optional[Dict[str, Any]] = None
+    # Subsets of input_tokens served from / written to the provider prompt cache
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
 
 
 class LLMUsageTracker:
@@ -37,6 +43,10 @@ class LLMUsageTracker:
     MODEL_PRICING = {
         # OpenAI (direct API pricing per 1K tokens)
         # cached_input = automatic prompt caching discount
+        "openai/gpt-6-astra": {"input": 0.010, "output": 0.050, "cached_input": 0.001},
+        "openai/gpt-5.6-sol": {"input": 0.004, "output": 0.020, "cached_input": 0.0004},
+        "openai/gpt-5.6-terra": {"input": 0.002, "output": 0.012, "cached_input": 0.0002},
+        "openai/gpt-5.6-luna": {"input": 0.0002, "output": 0.0012, "cached_input": 0.00002},
         "openai/gpt-5.5": {"input": 0.005, "output": 0.030, "cached_input": 0.00125},
         "openai/gpt-5.4": {"input": 0.0025, "output": 0.015, "cached_input": 0.000625},
         "openai/gpt-5.2": {"input": 0.00175, "output": 0.014, "cached_input": 0.0004375},
@@ -48,6 +58,15 @@ class LLMUsageTracker:
         "openai/gpt-4o": {"input": 0.0025, "output": 0.01, "cached_input": 0.00125},
         "openai/gpt-4o-mini": {"input": 0.00015, "output": 0.0006, "cached_input": 0.000075},
         # Anthropic (cached input = 90% discount)
+        "anthropic/claude-opus-5.5": {"input": 0.004, "output": 0.020, "cached_input": 0.0002},
+        "anthropic/claude-opus-5-5": {"input": 0.004, "output": 0.020, "cached_input": 0.0002},
+        "anthropic/claude-sonnet-5": {"input": 0.002, "output": 0.010, "cached_input": 0.0002},
+        # Haiku 5.5 base tier (prompts up to 100K tokens). Above that Anthropic bills 5x.
+        "anthropic/claude-haiku-5.5": {"input": 0.0001, "output": 0.0005, "cached_input": 0.00001},
+        "anthropic/claude-haiku-5-5": {"input": 0.0001, "output": 0.0005, "cached_input": 0.00001},
+        "anthropic/claude-fable-5.1": {"input": 0.010, "output": 0.050, "cached_input": 0.00025},
+        "anthropic/claude-fable-5-1": {"input": 0.010, "output": 0.050, "cached_input": 0.00025},
+        "anthropic/claude-fable-5": {"input": 0.010, "output": 0.050, "cached_input": 0.001},
         "anthropic/claude-opus-4.7": {"input": 0.005, "output": 0.025, "cached_input": 0.0005},
         "anthropic/claude-opus-4-7": {"input": 0.005, "output": 0.025, "cached_input": 0.0005},
         "anthropic/claude-opus-4.6": {"input": 0.005, "output": 0.025, "cached_input": 0.0005},
@@ -62,7 +81,10 @@ class LLMUsageTracker:
         "anthropic/claude-haiku-4-5": {"input": 0.001, "output": 0.005, "cached_input": 0.0001},
         "anthropic/claude-3.5-sonnet": {"input": 0.003, "output": 0.015, "cached_input": 0.0003},
         "anthropic/claude-3-haiku": {"input": 0.00025, "output": 0.00125, "cached_input": 0.000025},
-        # Google AI / Vertex AI (cached input = 75% discount)
+        # Google AI / Vertex AI (cached input = 75% discount, except Argon at 95%)
+        # Argon intro rates through 2026-11-30; $4/$20 per 1M after that.
+        "google/gemini-4-argon": {"input": 0.002, "output": 0.010, "cached_input": 0.0001},
+        "google/gemini-3.8-flash": {"input": 0.00075, "output": 0.00375, "cached_input": 0.000075},
         "google/gemini-3.6-flash": {"input": 0.00075, "output": 0.00375, "cached_input": 0.000075},
         "google/gemini-3.5-flash-lite": {"input": 0.0003, "output": 0.0025, "cached_input": 0.00003},
         "google/gemini-3.5-flash": {"input": 0.0015, "output": 0.009, "cached_input": 0.00015},
@@ -72,6 +94,8 @@ class LLMUsageTracker:
         "google/gemini-2.5-pro": {"input": 0.00125, "output": 0.01, "cached_input": 0.0003125},
         "google/gemini-2.5-flash": {"input": 0.0003, "output": 0.0025, "cached_input": 0.000075},
         "google/gemini-2.5-flash-lite": {"input": 0.0001, "output": 0.0004, "cached_input": 0.000025},
+        "vertex/gemini-4-argon": {"input": 0.002, "output": 0.010, "cached_input": 0.0001},
+        "vertex/gemini-3.8-flash": {"input": 0.00075, "output": 0.00375, "cached_input": 0.000075},
         "vertex/gemini-3.6-flash": {"input": 0.00075, "output": 0.00375, "cached_input": 0.000075},
         "vertex/gemini-3.5-flash-lite": {"input": 0.0003, "output": 0.0025, "cached_input": 0.00003},
         "vertex/gemini-3.5-flash": {"input": 0.0015, "output": 0.009, "cached_input": 0.00015},
@@ -152,6 +176,60 @@ class LLMUsageTracker:
             logger.warning(f"Error counting tokens from messages: {e}")
             return cls.count_tokens(str(messages), model_name)
 
+    # Cross-region premium charged by Bedrock geo CRIS profiles and Vertex non-global
+    # endpoints, relative to the global/direct list price. AWS + Google both publish ~10%.
+    _REGIONAL_PREMIUM_MULTIPLIER = 1.10
+
+    @classmethod
+    def _resolve_regional_premium(cls, provider_mode: Optional[str], model_name: str) -> float:
+        """Return the price multiplier for the deployment's endpoint (1.0 = no premium).
+
+        Only regional endpoints carry a premium; global endpoints bill at the direct rate.
+        """
+        mode = (provider_mode or "").lower()
+
+        # Bedrock: Aurora routes through geo CRIS (us./eu./apac.) which is +10% over global.
+        # Region falls back the same way the Bedrock provider resolves it. An explicit
+        # global profile (region "global") bills at the direct rate, so no premium there.
+        if mode == "bedrock":
+            region = (
+                os.getenv("BEDROCK_REGION")
+                or os.getenv("AWS_REGION")
+                or os.getenv("AWS_DEFAULT_REGION")
+                or ""
+            ).lower()
+            if region == "global":
+                return 1.0
+            return cls._REGIONAL_PREMIUM_MULTIPLIER
+
+        # Vertex: non-global (regional/EU) endpoints are +10%. The provider defaults to
+        # the global endpoint (VERTEX_AI_LOCATION=global), which bills at the direct rate.
+        if mode == "vertex" and "vertex" in model_name.lower():
+            location = os.getenv("VERTEX_AI_LOCATION", "global").lower()
+            if location and location != "global":
+                return cls._REGIONAL_PREMIUM_MULTIPLIER
+            return 1.0
+
+        # Direct / OpenRouter / everything else: no cloud-reseller premium.
+        return 1.0
+
+    @classmethod
+    def _claude_pricing(cls, model_name: str) -> Optional[Dict[str, float]]:
+        """Static row for any spelling of a Claude id, keyed as ``anthropic/<family>``."""
+        family = claude_family(model_name)
+        if not family.startswith("claude"):
+            return None
+        # Table keys use both spellings: claude-sonnet-4-5 and claude-sonnet-4.5
+        dotted = re.sub(r"-(\d)-(\d)$", r"-\1.\2", family)
+        return cls.MODEL_PRICING.get(f"anthropic/{family}") or cls.MODEL_PRICING.get(
+            f"anthropic/{dotted}"
+        )
+
+    @staticmethod
+    def _cache_write_multiplier(model_name: str) -> float:
+        # Claude bills a 25% premium to write the prompt cache; OpenAI/Gemini don't
+        return 1.25 if "claude" in (model_name or "").lower() else 1.0
+
     @classmethod
     def calculate_cost(
         cls,
@@ -161,6 +239,7 @@ class LLMUsageTracker:
         use_dynamic_pricing: bool = True,
         provider_mode: Optional[str] = None,
         cached_input_tokens: int = 0,
+        cache_write_tokens: int = 0,
     ) -> float:
         """Calculate estimated cost based on token usage and model pricing.
 
@@ -172,12 +251,25 @@ class LLMUsageTracker:
 
         When cached_input_tokens > 0, those tokens are charged at the
         discounted cached_input rate instead of the full input rate.
+        cache_write_tokens (subset of input_tokens) are charged at the cache-write
+        rate: 1.25x input for Claude, plain input for providers with free writes.
+
+        Platform surcharge: Bedrock and Vertex resell Anthropic/Google models at
+        the same rate as direct ONLY on their global endpoints. Aurora's Bedrock
+        provider routes through *regional* cross-region inference profiles
+        (us./eu./apac.), and Vertex non-global endpoints are billed at a ~10%
+        premium over the global/direct list price. When the deployment is on such
+        a regional endpoint we scale the static rate up by that premium so billing
+        matches the customer's actual cloud invoice.
         """
         if provider_mode is None:
             provider_mode = os.getenv("LLM_PROVIDER_MODE")
 
         try:
             pricing = None
+            # The regional premium is baked into the static list price only; dynamic
+            # OpenRouter / GCP-billing rates already reflect the real per-endpoint price.
+            using_static_pricing = False
 
             if use_dynamic_pricing:
                 if provider_mode == "openrouter":
@@ -202,7 +294,13 @@ class LLMUsageTracker:
                         )
 
             if not pricing:
+                using_static_pricing = True
                 pricing = cls.MODEL_PRICING.get(model_name)
+
+                # Explicit Bedrock ids (bedrock/eu.anthropic.claude-...-v1:0) share the
+                # Anthropic list price; without this they fell to the default row
+                if not pricing:
+                    pricing = cls._claude_pricing(model_name)
 
                 if not pricing:
                     base_model = model_name.split(".")[0].split("-v")[0]
@@ -216,12 +314,43 @@ class LLMUsageTracker:
                 else:
                     logger.debug(f"Using static pricing for {model_name}: {pricing}")
 
-            non_cached_input = max(input_tokens - cached_input_tokens, 0)
+            # Regional cloud endpoints (Bedrock geo CRIS, Vertex non-global) bill ~10%
+            # above the global/direct list price baked into the static table. Only adjust
+            # the static path: the OpenRouter/GCP-billing dynamic paths already return the
+            # real per-endpoint rate. A global endpoint (BEDROCK_REGION=global) resolves to
+            # 1.0, so the `> 1.0` guard skips it without an exact float equality check.
+            premium = cls._resolve_regional_premium(provider_mode, model_name)
+            if using_static_pricing and premium > 1.0:
+                pricing = {k: v * premium for k, v in pricing.items()}
+                logger.debug(
+                    f"Applied {premium:.2f}x regional endpoint premium for {model_name} ({provider_mode})"
+                )
+
+            # Haiku 5.5 bills 5x past 100K prompt tokens: input, output, reads, and writes
+            if (
+                using_static_pricing
+                and input_tokens > 100_000
+                and claude_family(model_name) == "claude-haiku-5-5"
+            ):
+                pricing = {k: v * 5 for k, v in pricing.items()}
+
+            # Writes are a subset of input_tokens, so cap them at what reads left over
+            cache_write_tokens = min(
+                max(cache_write_tokens, 0), max(input_tokens - cached_input_tokens, 0)
+            )
+            non_cached_input = max(
+                input_tokens - cached_input_tokens - cache_write_tokens, 0
+            )
             input_cost = (non_cached_input / 1000) * pricing["input"]
             if cached_input_tokens > 0 and "cached_input" in pricing:
                 input_cost += (cached_input_tokens / 1000) * pricing["cached_input"]
             elif cached_input_tokens > 0:
                 input_cost += (cached_input_tokens / 1000) * pricing["input"]
+            if cache_write_tokens > 0:
+                write_rate = pricing.get("cache_write")
+                if write_rate is None:
+                    write_rate = pricing["input"] * cls._cache_write_multiplier(model_name)
+                input_cost += (cache_write_tokens / 1000) * write_rate
             output_cost = (output_tokens / 1000) * pricing["output"]
 
             return round(input_cost + output_cost, 6)
@@ -234,21 +363,21 @@ class LLMUsageTracker:
     def extract_usage_from_response(cls, response: Any) -> Dict[str, int]:
         """Extract token usage from API response when available"""
         try:
-            usage = {"input_tokens": 0, "output_tokens": 0, "cached_input_tokens": 0}
+            usage = {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cached_input_tokens": 0,
+                "cache_write_tokens": 0,
+            }
 
             # Try to extract from various response formats
             # 1 Newer OpenRouter / OpenAI style: usage_metadata dict
             if hasattr(response, "usage_metadata") and response.usage_metadata:
-                usage_data = response.usage_metadata
-                usage["input_tokens"] = usage_data.get(
-                    "prompt_tokens", usage_data.get("input_tokens", 0)
-                )
-                usage["output_tokens"] = usage_data.get(
-                    "completion_tokens", usage_data.get("output_tokens", 0)
-                )
-                input_details = usage_data.get("input_token_details", {})
-                if isinstance(input_details, dict):
-                    usage["cached_input_tokens"] = input_details.get("cache_read", 0)
+                norm = normalize_usage(response.usage_metadata)
+                usage["input_tokens"] = norm.input_tokens
+                usage["output_tokens"] = norm.output_tokens
+                usage["cached_input_tokens"] = norm.cache_read_tokens
+                usage["cache_write_tokens"] = norm.cache_write_tokens
 
             # 2 Traditional attribute-based usage object
             elif hasattr(response, "usage"):
@@ -265,16 +394,11 @@ class LLMUsageTracker:
             elif isinstance(response, dict):
                 # Prefer nested usage_metadata first
                 if "usage_metadata" in response and response["usage_metadata"]:
-                    usage_data = response["usage_metadata"]
-                    usage["input_tokens"] = usage_data.get(
-                        "prompt_tokens", usage_data.get("input_tokens", 0)
-                    )
-                    usage["output_tokens"] = usage_data.get(
-                        "completion_tokens", usage_data.get("output_tokens", 0)
-                    )
-                    input_details = usage_data.get("input_token_details", {})
-                    if isinstance(input_details, dict):
-                        usage["cached_input_tokens"] = input_details.get("cache_read", 0)
+                    norm = normalize_usage(response["usage_metadata"])
+                    usage["input_tokens"] = norm.input_tokens
+                    usage["output_tokens"] = norm.output_tokens
+                    usage["cached_input_tokens"] = norm.cache_read_tokens
+                    usage["cache_write_tokens"] = norm.cache_write_tokens
                 elif "usage" in response:
                     usage_data = response["usage"]
                     usage["input_tokens"] = usage_data.get("prompt_tokens", 0)
@@ -284,7 +408,12 @@ class LLMUsageTracker:
 
         except Exception as e:
             logger.warning(f"Error extracting usage from response: {e}")
-            return {"input_tokens": 0, "output_tokens": 0, "cached_input_tokens": 0}
+            return {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cached_input_tokens": 0,
+                "cache_write_tokens": 0,
+            }
 
     @classmethod
     def store_usage(cls, usage: LLMUsage) -> bool:
@@ -305,8 +434,9 @@ class LLMUsageTracker:
                     INSERT INTO llm_usage_tracking (
                         user_id, org_id, session_id, model_name, api_provider, request_type,
                         input_tokens, output_tokens, estimated_cost, response_time_ms,
-                        error_message, request_metadata
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        error_message, request_metadata,
+                        cache_read_tokens, cache_write_tokens
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                     (
                         usage.user_id,
@@ -323,11 +453,16 @@ class LLMUsageTracker:
                         json.dumps(usage.request_metadata)
                         if usage.request_metadata
                         else None,
+                        usage.cache_read_tokens,
+                        usage.cache_write_tokens,
                     ),
                 )
 
                 conn.commit()
-                logger.info(f"Stored LLM usage: {usage.model_name} - {usage.input_tokens}+{usage.output_tokens} tokens - ${usage.estimated_cost:.6f}")
+                logger.info(
+                    f"Stored LLM usage: {usage.model_name} - {usage.input_tokens}+{usage.output_tokens} tokens "
+                    f"(cache read={usage.cache_read_tokens}, write={usage.cache_write_tokens}) - ${usage.estimated_cost:.6f}"
+                )
                 
                 # Clear API cost cache for this user to force refresh on next cost check
                 try:
@@ -392,12 +527,14 @@ class LLMUsageTracker:
             # Count output tokens
             output_tokens = 0
             cached_input_tokens = 0
+            cache_write_tokens = 0
             if response:
                 # Try to extract from API response first
                 usage_data = cls.extract_usage_from_response(response)
                 if usage_data["input_tokens"] > 0:
                     input_tokens = usage_data["input_tokens"]
                 cached_input_tokens = usage_data.get("cached_input_tokens", 0)
+                cache_write_tokens = usage_data.get("cache_write_tokens", 0)
                 if usage_data["output_tokens"] > 0:
                     output_tokens = usage_data["output_tokens"]
                 else:
@@ -417,6 +554,7 @@ class LLMUsageTracker:
             estimated_cost = cls.calculate_cost(
                 input_tokens, output_tokens, model_name,
                 cached_input_tokens=cached_input_tokens,
+                cache_write_tokens=cache_write_tokens,
                 provider_mode=provider_mode,
             )
 
@@ -442,6 +580,8 @@ class LLMUsageTracker:
                     "has_images": cls._has_image_content(prompt),
                     "message_count": len(prompt) if isinstance(prompt, list) else 1,
                 },
+                cache_read_tokens=cached_input_tokens,
+                cache_write_tokens=cache_write_tokens,
             )
 
             # Store in database

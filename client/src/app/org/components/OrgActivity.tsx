@@ -32,6 +32,7 @@ const PROVIDER_ICONS: Record<string, string> = {
   grafana: "/grafana.svg",
   netdata: "/netdata.svg",
   splunk: "/splunk.svg",
+  elastic: "/elastic.svg",
   pagerduty: "/pagerduty.svg",
   github: "/github-mark.svg",
   slack: "/slack.png",
@@ -41,6 +42,7 @@ const PROVIDER_ICONS: Record<string, string> = {
   kubectl: "/kubernetes-svgrepo-com.svg",
   dynatrace: "/dynatrace.svg",
   coroot: "/coroot.svg",
+  rabbitmq: "/rabbitmq.svg",
   thousandeyes: "/thousandeyes.svg",
   bigpanda: "/bigpanda.svg",
   confluence: "/confluence.svg",
@@ -50,6 +52,7 @@ const PROVIDER_ICONS: Record<string, string> = {
   scaleway: "/scaleway.svg",
   ovh: "/ovh.svg",
   newrelic: "/newrelic.svg",
+  servicenow: "/servicenow.svg",
 };
 
 const PROVIDER_NAMES: Record<string, string> = {
@@ -60,6 +63,7 @@ const PROVIDER_NAMES: Record<string, string> = {
   grafana: "Grafana",
   netdata: "Netdata",
   splunk: "Splunk",
+  elastic: "Elastic Cloud",
   pagerduty: "PagerDuty",
   github: "GitHub",
   slack: "Slack",
@@ -68,6 +72,7 @@ const PROVIDER_NAMES: Record<string, string> = {
   kubectl: "Kubernetes",
   dynatrace: "Dynatrace",
   coroot: "Coroot",
+  rabbitmq: "RabbitMQ",
   thousandeyes: "ThousandEyes",
   bigpanda: "BigPanda",
   confluence: "Confluence",
@@ -77,6 +82,7 @@ const PROVIDER_NAMES: Record<string, string> = {
   scaleway: "Scaleway",
   ovh: "OVH Cloud",
   newrelic: "New Relic",
+  servicenow: "ServiceNow",
 };
 
 const SEVERITY_STYLES: Record<string, string> = {

@@ -5,6 +5,7 @@ Wraps the Bitbucket 2.0 REST API with authentication and pagination support.
 import base64
 import logging
 import re
+import time
 from urllib.parse import quote, unquote, urlsplit
 
 import requests
@@ -112,11 +113,36 @@ class BitbucketAPIClient:
     def _get(self, url, params=None):
         """Single-resource GET. Returns response JSON or error dict."""
         _validate_bitbucket_url(url)
-        response = requests.get(url, headers=self._get_headers(), params=params, timeout=self.REQUEST_TIMEOUT)
+        delay = 1
+        response = None
+        for attempt in range(6):
+            response = requests.get(
+                url, headers=self._get_headers(), params=params, timeout=self.REQUEST_TIMEOUT
+            )
+            if response.status_code != 429 or attempt == 5:
+                break
+            time.sleep(delay)
+            delay = min(delay * 2, 16)
         if response.status_code != 200:
-            logger.error(f"Bitbucket GET {_sanitize_url(url)} failed: {response.status_code}")
+            if response.status_code != 404:
+                logger.error(f"Bitbucket GET {_sanitize_url(url)} failed: {response.status_code}")
             return self._handle_error(response)
         return response.json()
+
+    @staticmethod
+    def _default_to_utf8(response):
+        """Default an undeclared response charset to UTF-8.
+
+        Bitbucket serves file/diff bytes as ``text/plain`` with NO charset;
+        ``requests`` then falls back to ISO-8859-1 (the HTTP default), which
+        mojibakes UTF-8 content — and a subsequent write would re-encode the
+        mojibake, corrupting every non-ASCII character. Repo files are
+        conventionally UTF-8, so decode them as such unless the response
+        explicitly declares a charset.
+        """
+        content_type = response.headers.get("Content-Type", "")
+        if "charset" not in content_type.lower():
+            response.encoding = "utf-8"
 
     def _get_raw(self, url, params=None):
         """GET that returns raw text (for diffs, logs). Returns string or error dict."""
@@ -127,6 +153,7 @@ class BitbucketAPIClient:
         if response.status_code != 200:
             logger.error(f"Bitbucket GET (raw) {_sanitize_url(url)} failed: {response.status_code}")
             return self._handle_error(response)
+        self._default_to_utf8(response)
         return response.text
 
     def _post(self, url, json_data=None, data=None, files=None):
@@ -190,9 +217,19 @@ class BitbucketAPIClient:
                     "status": None,
                     "message": "Pagination halted: next URL failed validation",
                 }
-            response = requests.get(url, headers=headers, params=params, timeout=self.REQUEST_TIMEOUT)
+            delay = 1
+            response = None
+            for attempt in range(6):
+                response = requests.get(
+                    url, headers=headers, params=params, timeout=self.REQUEST_TIMEOUT
+                )
+                if response.status_code != 429 or attempt == 5:
+                    break
+                time.sleep(delay)
+                delay = min(delay * 2, 16)
             if response.status_code != 200:
-                logger.error(f"Bitbucket API error {response.status_code} at {_sanitize_url(url)}")
+                if response.status_code != 404:
+                    logger.error(f"Bitbucket API error {response.status_code} at {_sanitize_url(url)}")
                 if not all_values:
                     return self._handle_error(response)
                 logger.warning("Returning partial results due to mid-pagination error")
@@ -253,7 +290,8 @@ class BitbucketAPIClient:
     def get_repositories(self, workspace):
         """List repositories in a workspace."""
         return self._paginated_get(
-            f"{BITBUCKET_API_BASE}/repositories/{quote(workspace, safe='')}"
+            f"{BITBUCKET_API_BASE}/repositories/{quote(workspace, safe='')}",
+            params={"pagelen": 100},
         )
 
     def get_repository(self, workspace, repo_slug):
@@ -309,17 +347,48 @@ class BitbucketAPIClient:
         )
         _validate_bitbucket_url(url)
         headers = self._get_headers()
-        response = requests.get(url, headers=headers, timeout=self.REQUEST_TIMEOUT)
+        delay = 1
+        response = None
+        for attempt in range(6):
+            response = requests.get(url, headers=headers, timeout=self.REQUEST_TIMEOUT)
+            if response.status_code != 429 or attempt == 5:
+                break
+            time.sleep(delay)
+            delay = min(delay * 2, 16)
         if response.status_code != 200:
-            logger.error(f"Failed to get file {path}: {response.status_code}")
+            if response.status_code != 404:
+                logger.error(f"Failed to get file {path}: {response.status_code}")
             return self._handle_error(response)
         content_type = response.headers.get("Content-Type", "")
         if "application/json" in content_type:
-            return response.json()
+            # /src answers with JSON for a DIRECTORY listing — but also for a
+            # .json FILE, whose parsed body has no "content" key and would look
+            # like a nonexistent file to callers. Only pass through an actual
+            # paginated directory listing: top-level "values"+"pagelen" AND
+            # every entry typed commit_file/commit_directory (so a stored
+            # pagination fixture of, say, PRs is still treated as file text).
+            try:
+                parsed = response.json()
+            except ValueError:
+                parsed = None
+            if isinstance(parsed, dict) and "values" in parsed and "pagelen" in parsed:
+                values = parsed.get("values")
+                if isinstance(values, list) and all(
+                    isinstance(v, dict) and str(v.get("type", "")).startswith("commit_")
+                    for v in values
+                ):
+                    return parsed
+        self._default_to_utf8(response)
         return {"content": response.text, "path": path, "commit": commit}
 
-    def create_or_update_file(self, workspace, repo_slug, path, content, message, branch, author=None):
-        """Create or update a file via multipart form POST to /src."""
+    def create_or_update_file(self, workspace, repo_slug, path, content, message, branch, author=None, parents=None):
+        """Create or update a file via multipart form POST to /src.
+
+        ``parents`` (a commit hash) makes the write a compare-and-swap:
+        Bitbucket rejects the commit (400, "parent commit ... is not the
+        head of branch") if ``branch`` no longer points at that commit,
+        instead of silently clobbering newer work.
+        """
         url = (
             f"{BITBUCKET_API_BASE}/repositories/"
             f"{quote(workspace, safe='')}/{quote(repo_slug, safe='')}/src"
@@ -330,6 +399,8 @@ class BitbucketAPIClient:
         }
         if author:
             form_data["author"] = author
+        if parents:
+            form_data["parents"] = parents
         files = {path: (path, content)}
         return self._post(url, data=form_data, files=files)
 
@@ -355,7 +426,7 @@ class BitbucketAPIClient:
             f"/src/{quote(commit, safe='')}/{quote(path, safe='/')}"
         )
         # format=meta returns directory metadata; omitting it returns the file listing
-        params = None if list_files else {"format": "meta"}
+        params = {"pagelen": 100} if list_files else {"format": "meta"}
         return self._get(url, params=params)
 
     def search_code(self, workspace, query):

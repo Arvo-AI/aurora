@@ -10,6 +10,8 @@ from pydantic import BaseModel
 from chat.backend.agent.model_mapper import ModelMapper
 from chat.backend.agent.providers import create_chat_model
 from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker
+from chat.backend.agent.utils.message_content import extract_text_from_content
+from chat.backend.agent.utils.usage_normalizer import normalize_usage
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +38,10 @@ class ModelConfig:
     Change these values to switch providers across the entire application.
     """
     
-    _DEFAULT_MODEL = "anthropic/claude-sonnet-4.6"
+    # Opus 5.5 rejects a forced tool_choice, which Trigger RCA and /action pin on their
+    # first turn. ForceToolChoice detects that rejection and retries with tool_choice=auto
+    # plus an explicit prompt directive, so both flows still reach their tool.
+    _DEFAULT_MODEL = "anthropic/claude-opus-5.5"
 
     # Primary models - configurable via env vars
     MAIN_MODEL = os.getenv("MAIN_MODEL") or _DEFAULT_MODEL
@@ -44,9 +49,11 @@ class ModelConfig:
 
     # Background RCA model - configurable via RCA_MODEL env var, falls back to cost-based selection
     RCA_MODEL = os.getenv("RCA_MODEL") or (
-        "anthropic/claude-haiku-4.5" if os.getenv("RCA_OPTIMIZE_COSTS", "true").lower() == "true"
-        else "anthropic/claude-opus-4.6"
+        "anthropic/claude-haiku-5.5" if os.getenv("RCA_OPTIMIZE_COSTS", "true").lower() == "true"
+        else _DEFAULT_MODEL
     )
+    # Yes/no per Jira ticket. Unset uses the resolved RCA model, which is opus when cost optimization is off.
+    JIRA_RCA_JUDGE_MODEL = os.getenv("JIRA_RCA_JUDGE_MODEL") or RCA_MODEL
 
     # Multi-agent RCA orchestrator — required when ORCHESTRATOR_ENABLED=true.
     # No fallback to MAIN_MODEL/RCA_MODEL: must be set explicitly.
@@ -65,6 +72,56 @@ class ModelConfig:
 
     # Email report generation
     EMAIL_REPORT_MODEL = os.getenv("MAIN_MODEL") or _DEFAULT_MODEL
+
+    # Root-cause recurrence detection agent — falls back to MAIN_MODEL
+    RECURRENCE_AGENT_MODEL = os.getenv("RECURRENCE_AGENT_MODEL") or os.getenv("MAIN_MODEL") or _DEFAULT_MODEL
+
+    # Small models the active provider can call. The selector used to read
+    # only the newest 200 memories, so the rest of a large bank never reached it.
+    _SELECTOR_FLASH_LITE = "google/gemini-3.5-flash-lite"
+    _SELECTOR_VERTEX_FLASH_LITE = "vertex/gemini-3.5-flash-lite"
+    _SELECTOR_HAIKU = "anthropic/claude-haiku-5.5"
+    _SELECTOR_OPENAI = "openai/gpt-5.6-luna"
+
+    @staticmethod
+    def memory_selector_model() -> str:
+        """Fast model for the memory selector."""
+        override = (os.getenv("MEMORY_SELECTOR_MODEL") or "").strip()
+        # Operator pin wins, including a Bedrock gateway id only they have enabled.
+        if override:
+            return override
+
+        mode = (os.getenv("LLM_PROVIDER_MODE") or "direct").strip().lower()
+        # Flash-lite is the current small Gemini, and both of these providers can call it.
+        if mode in ("openrouter", "google"):
+            return ModelConfig._SELECTOR_FLASH_LITE
+        # Vertex ids use a different prefix.
+        if mode == "vertex":
+            return ModelConfig._SELECTOR_VERTEX_FLASH_LITE
+        # Luna is the current low-cost OpenAI model.
+        if mode == "openai":
+            return ModelConfig._SELECTOR_OPENAI
+        # Gemini would leave this provider. Haiku 5.5 is the current fast Claude.
+        if mode in ("bedrock", "anthropic"):
+            return ModelConfig._SELECTOR_HAIKU
+
+        # direct/auto: follow MAIN_MODEL's provider so a second API key isn't required.
+        main = (os.getenv("MAIN_MODEL") or "").strip()
+        # Ollama only serves a model the operator installed. Haiku is not one of them.
+        if mode == "ollama" or main.startswith("ollama/"):
+            return main
+        # direct + bedrock/<id> is gateway mode. An anthropic/ id would hit Anthropic.
+        if main.startswith("bedrock/"):
+            return main
+
+        prefix = main.split("/", 1)[0] if "/" in main else ""
+        if prefix == "google":
+            return ModelConfig._SELECTOR_FLASH_LITE
+        if prefix == "vertex":
+            return ModelConfig._SELECTOR_VERTEX_FLASH_LITE
+        if prefix == "openai":
+            return ModelConfig._SELECTOR_OPENAI
+        return ModelConfig._SELECTOR_HAIKU
 
 
 class LLMManager:
@@ -276,14 +333,15 @@ class LLMManager:
                     input_tokens = 0
                     output_tokens = 0
                     cached_input_tokens = 0
+                    cache_write_tokens = 0
 
                     # Prefer usage_metadata (standardized across all LangChain providers)
                     if llm_response and getattr(llm_response, "usage_metadata", None):
-                        um = llm_response.usage_metadata
-                        input_tokens = um.get("input_tokens", 0)
-                        output_tokens = um.get("output_tokens", 0)
-                        input_details = um.get("input_token_details", {})
-                        cached_input_tokens = input_details.get("cache_read", 0) if isinstance(input_details, dict) else 0
+                        norm = normalize_usage(llm_response.usage_metadata)
+                        input_tokens = norm.input_tokens
+                        output_tokens = norm.output_tokens
+                        cached_input_tokens = norm.cache_read_tokens
+                        cache_write_tokens = norm.cache_write_tokens
                         logger.info(
                             f"Provider usage_metadata: {input_tokens} + {output_tokens} tokens"
                             + (f" ({cached_input_tokens} cached)" if cached_input_tokens else "")
@@ -309,6 +367,7 @@ class LLMManager:
                         input_tokens, output_tokens, model_label,
                         provider_mode=self.provider_mode,
                         cached_input_tokens=cached_input_tokens,
+                        cache_write_tokens=cache_write_tokens,
                     )
                     response_time_ms = int((time.time() - start_time) * 1000)
 
@@ -334,6 +393,8 @@ class LLMManager:
                             "has_images": has_images,
                             "provider_mode": self.provider_mode,
                         },
+                        cache_read_tokens=cached_input_tokens,
+                        cache_write_tokens=cache_write_tokens,
                     )
 
                     success = LLMUsageTracker.store_usage(usage_record)
@@ -417,22 +478,8 @@ Summary:"""
                 response = isolated_summarizer.invoke(summarization_prompt)
 
             if hasattr(response, "content"):
-                response_content = response.content
-                # Handle Gemini thinking model responses (list with thinking/text blocks)
-                if isinstance(response_content, list):
-                    text_parts = []
-                    for part in response_content:
-                        if isinstance(part, dict):
-                            part_type = part.get("type", "")
-                            if part_type not in ("thinking", "reasoning"):
-                                text = part.get("text", "")
-                                if text:
-                                    text_parts.append(str(text))
-                        elif isinstance(part, str):
-                            text_parts.append(part)
-                    summary = "".join(text_parts)
-                else:
-                    summary = str(response_content)
+                # Gemini thinking models return a list of thinking/text blocks
+                summary = extract_text_from_content(response.content)
             else:
                 summary = str(response)
 

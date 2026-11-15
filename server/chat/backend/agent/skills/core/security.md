@@ -15,7 +15,7 @@ INVESTIGATION WITHOUT DIRECT ACCESS:
 When you cannot SSH into a VM or access a system directly, you can still perform effective RCA using:
 - Cloud provider CLIs: describe instances, get console output, check instance status
 - Monitoring integrations: Datadog, New Relic, Grafana, Prometheus metrics
-- Log aggregation: CloudWatch Logs, Cloud Logging, Splunk, connected log sources
+- Log aggregation: CloudWatch Logs, Cloud Logging, Splunk, Elastic, connected log sources
 - Cloud-level diagnostics: instance screenshots, serial console output, health checks
 - Kubernetes: kubectl logs, describe, top (if the cluster is accessible)
 - CI/CD and deployment history: recent changes that correlate with the issue

@@ -137,7 +137,7 @@ else
       sudo apt-get update -qq
       sudo apt-get install -y -qq ca-certificates curl gnupg lsb-release
       sudo install -m 0755 -d /etc/apt/keyrings
-      curl -fsSL https://download.docker.com/linux/$OS_ID/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg 2>/dev/null
+      curl -fsSL --proto '=https' --proto-redir '=https' https://download.docker.com/linux/$OS_ID/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg 2>/dev/null
       sudo chmod a+r /etc/apt/keyrings/docker.gpg
       echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/$OS_ID $(lsb_release -cs) stable" \
         | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null

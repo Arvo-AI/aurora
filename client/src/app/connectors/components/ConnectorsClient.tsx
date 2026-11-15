@@ -6,6 +6,7 @@ import ConnectorGrid from "@/components/connectors/ConnectorGrid";
 import ConnectorHeader from "@/components/connectors/ConnectorHeader";
 import { connectorRegistry } from "@/components/connectors/ConnectorRegistry";
 import { useQuery, type Fetcher } from "@/lib/query";
+import { useToast } from "@/hooks/use-toast";
 
 interface StatusPayload {
   connectors: Record<string, { connected?: boolean }>;
@@ -36,6 +37,21 @@ export default function ConnectorsClient() {
   const searchParams = useSearchParams();
   const highlightConnector = searchParams.get("highlight") || "";
   const [searchQuery, setSearchQuery] = useState(highlightConnector);
+  const { toast } = useToast();
+
+  // Landing from the one-click GitHub signup: greet and scrub the param.
+  useEffect(() => {
+    if (searchParams.get("installed") !== "github") return;
+    toast({
+      title: "GitHub connected",
+      description:
+        "Aurora is now reviewing pull requests on the repositories you selected. You can adjust them from the GitHub connector.",
+    });
+    const url = new URL(globalThis.location.href);
+    url.searchParams.delete("installed");
+    globalThis.history.replaceState(null, "", url.toString());
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
 
   const allConnectors = useMemo(() => connectorRegistry.getAll(), []);

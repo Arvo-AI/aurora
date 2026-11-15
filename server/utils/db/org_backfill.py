@@ -84,6 +84,23 @@ def _safe_update(cursor, label: str, sql: str, params: tuple) -> int:
         return 0
 
 
+def _move_chat_execution_steps(cursor, label: str, user_id: str, org_id: str) -> int:
+    """Re-stamp a user's chat tool calls in ``execution_steps``.
+
+    Chat rows have no parent incident, so the incident-child phase can't reach
+    them; they follow the chat session they ran in (sub-agent sessions are
+    ``<chat>::sa_N``, hence the ``split_part``).
+    """
+    return _safe_update(
+        cursor, label,
+        "UPDATE execution_steps es SET org_id = %s "
+        "FROM chat_sessions cs WHERE es.incident_id IS NULL "
+        "AND cs.id = split_part(es.session_id, '::', 1) AND cs.user_id = %s "
+        "AND (es.org_id IS NULL OR es.org_id != %s)",
+        (org_id, user_id, org_id),
+    )
+
+
 # ────────────────────────────────────────────────────────────────────────────
 # Single-user backfill  (called from /setup-org and add-member)
 # ────────────────────────────────────────────────────────────────────────────
@@ -132,6 +149,11 @@ def backfill_user_org_data(cursor, user_id: str, org_id: str) -> dict:
         )
         if n:
             results[tbl] = n
+
+    # Phase 3 — chat tool calls (execution_steps rows with no parent incident)
+    n = _move_chat_execution_steps(cursor, "chat_execution_steps", user_id, org_id)
+    if n:
+        results["execution_steps"] = results.get("execution_steps", 0) + n
 
     if results:
         total = sum(results.values())
@@ -189,6 +211,11 @@ def migrate_user_to_org(cursor, user_id: str, new_org_id: str) -> dict:
         )
         if n:
             results[tbl] = n
+
+    # Phase 3 — chat tool calls (execution_steps rows with no parent incident)
+    n = _move_chat_execution_steps(cursor, "migrate_chat_execution_steps", user_id, new_org_id)
+    if n:
+        results["execution_steps"] = results.get("execution_steps", 0) + n
 
     if results:
         total = sum(results.values())

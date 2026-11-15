@@ -71,7 +71,7 @@ def flyio_connect(user_id):
             "apps": token_info["apps"],
         }
 
-        store_tokens_in_db(user_id, token_data, "flyio")
+        store_tokens_in_db(user_id, token_data, "flyio", schedule_prediscovery=True)
         set_connection_status(user_id, "flyio", org_slug, "connected")
 
         logger.info(f"Fly.io connected for user {user_id}, org: {org_slug}, tier: {token_info['tier']}, apps: {len(token_info['apps'])}")

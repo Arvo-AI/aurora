@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
@@ -291,7 +291,78 @@ class JiraClient:
         result = self._request("GET", "/project/search", params={"maxResults": max_results})
         return result.get("values", [])
 
+    def list_projects(self, limit: int = 200) -> List[Dict[str, Any]]:
+        """Page through accessible projects, capped so a large site stays bounded."""
+        try:
+            return self._collect_pages("/project/search", limit)[0]
+        except requests.HTTPError as exc:
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            # Data Center has no /project/search. /project returns the catalog.
+            if status != 404:
+                raise
+            logger.info("Jira /project/search unavailable (status=404), falling back to /project")
+            return _page_values(self._request("GET", "/project"))[:limit]
+
     def get_issue_types(self, project_key: str) -> List[Dict[str, Any]]:
         """List issue types for a project."""
         result = self._request("GET", f"/project/{project_key}")
         return result.get("issueTypes", [])
+
+    def list_priorities(self, project_key: Optional[str] = None, limit: int = 50) -> List[Any]:
+        """Priorities for a project. Cloud can filter by scheme; Data Center lists them all."""
+        extra: Dict[str, Any] = {}
+        if project_key:
+            project = self._request("GET", f"/project/{project_key}")
+            project_id = str((project or {}).get("id") or "")
+            # A scheme filter needs the numeric id; a key is not accepted here.
+            if project_id:
+                extra["projectId"] = project_id
+        try:
+            return self._collect_pages("/priority/search", limit, extra)[0]
+        except Exception as exc:
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            # Search is missing on Data Center and refused by classic OAuth scopes.
+            if status not in (400, 401, 403, 404, 405):
+                raise
+            logger.info("Jira /priority/search unavailable (status=%s), falling back to /priority", status)
+            return _page_values(self._request("GET", "/priority"))[:limit]
+
+    def list_components(self, project_key: str) -> List[Any]:
+        """Components on one project."""
+        return _page_values(self._request("GET", f"/project/{project_key}/components"))
+
+    def list_statuses(self, project_key: str) -> List[Any]:
+        """Issue types with the statuses each one uses in this project."""
+        return _page_values(self._request("GET", f"/project/{project_key}/statuses"))
+
+    def list_labels(self, limit: int = 100) -> Tuple[List[Any], bool]:
+        """Labels already used on the site, and whether the cap hid more."""
+        return self._collect_pages("/label", limit)
+
+    def _collect_pages(
+        self, path: str, limit: int, extra: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[List[Any], bool]:
+        """Rows up to ``limit``, and whether the cap stopped before the last page."""
+        collected: List[Any] = []
+        while len(collected) < limit:
+            params = {"maxResults": min(50, limit - len(collected)), "startAt": len(collected), **(extra or {})}
+            result = self._request("GET", path, params=params)
+            # A bare list is the whole catalog, not a page.
+            if isinstance(result, list):
+                return result[:limit], False
+            values = result.get("values") or []
+            collected.extend(values)
+            if result.get("isLast", True) or not values:
+                return collected[:limit], False
+        return collected[:limit], True
+
+
+def _page_values(result: Any) -> List[Any]:
+    """Cloud search endpoints wrap rows in values; older routes return a list."""
+    if isinstance(result, list):
+        return result
+    if isinstance(result, dict):
+        values = result.get("values")
+        if isinstance(values, list):
+            return values
+    return []

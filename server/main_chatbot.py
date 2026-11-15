@@ -8,7 +8,6 @@ logger = logging.getLogger(__name__)
 logging.getLogger("langchain").setLevel(logging.WARNING)
 logging.getLogger("websockets").setLevel(logging.WARNING)
 logging.getLogger("websockets.server").setLevel(logging.CRITICAL)
-logging.getLogger("weaviate").setLevel(logging.WARNING)
 logging.getLogger("redis").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
@@ -42,7 +41,6 @@ from chat.backend.agent.agent import Agent
 from chat.backend.agent.db import PostgreSQLClient
 from chat.backend.agent.utils.state import State
 from chat.backend.agent.workflow import Workflow
-from chat.backend.agent.weaviate_client import WeaviateClient
 from chat.backend.agent.utils.llm_context_manager import LLMContextManager
 from chat.backend.agent.utils.chat_context_manager import ChatContextManager
 from utils.db.connection_pool import db_pool
@@ -334,7 +332,9 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
     curr_node = "START"
     sent_message_count = 0
     websocket_connected = True
-    workflow_timeout = 1800  # 30 minutes max for any workflow
+    # Same wall as the background Celery task (INVESTIGATION_TIMEOUT_SECONDS).
+    from chat.investigation_timeout import investigation_timeout_seconds
+    workflow_timeout = investigation_timeout_seconds()
     session_id = getattr(state, 'session_id', 'unknown')
 
     # Helper to save incident thoughts for background chats
@@ -858,8 +858,13 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
                 timeout_msg["session_id"] = state.session_id
             await send_via_appropriate_sender(timeout_msg)
         await send_end_status("timeout")
-        
+
     except Exception as e:
+        from celery.exceptions import SoftTimeLimitExceeded
+        # Raised in the worker, and it subclasses Exception. Swallowing it
+        # lets the task mark a timed-out investigation complete.
+        if isinstance(e, SoftTimeLimitExceeded):
+            raise
         logger.error(f"Error in workflow processing for session {session_id}: {e}", exc_info=True)
         finalize_streaming_chat_message(remove=True)
         if websocket_connected:
@@ -943,7 +948,6 @@ async def handle_connection(websocket) -> None:
         await websocket.close(code=1008, reason="Missing or invalid authentication token")
         return
 
-    weaviate_client = None
     deployment_listener_task = None
     current_user_id = token_user_id
     session_id = None       # Initialize to avoid UnboundLocalError in exception handler
@@ -952,8 +956,6 @@ async def handle_connection(websocket) -> None:
     
     try:
         postgres_client = PostgreSQLClient()
-        weaviate_client = WeaviateClient(postgres_client)
-        # Note: Agent will be created with websocket_sender in the message processing loop
         agent = None
         wf = None 
     except Exception as e: 
@@ -966,10 +968,6 @@ async def handle_connection(websocket) -> None:
                 "session_id": session_id,
             }
         }))
-        # Close the connection to weaviate if opened
-        logger.debug(f"weaviate client is {weaviate_client}")
-        if weaviate_client:
-            weaviate_client.close()
         return
 
     # Send ready status to client
@@ -1191,7 +1189,31 @@ async def handle_connection(websocket) -> None:
             # Resolve org for tenant-scoped DB queries
             org_id = get_org_id_for_user(user_id) if user_id else None
 
-            # RBAC: block viewers from sending messages in incident-linked sessions
+            # A tool call or action with no question is still a chat the viewer switch covers.
+            from utils.auth.viewer_run import message_starts_chat
+            if user_id and org_id and message_starts_chat(question, data):
+                from utils.auth.viewer_run import viewer_may_run
+                try:
+                    viewer_allowed = viewer_may_run(user_id, org_id)
+                except Exception:
+                    # A failed lookup must not drop the websocket.
+                    logger.exception("Viewer chat check failed")
+                    await websocket.send(json.dumps({
+                        "type": "error",
+                        "data": {"text": "Couldn't check whether chat is enabled. Try again."},
+                    }))
+                    continue
+                # Viewers only start a chat when the Access tab allows it.
+                if not viewer_allowed:
+                    await websocket.send(json.dumps({
+                        "type": "error",
+                        "data": {"text": "Chat isn't enabled for viewers in this organization."},
+                    }))
+                    continue
+
+            # RBAC: block viewers from sending messages in incident-linked sessions,
+            # and anyone from continuing someone else's chat: the agent would load
+            # that chat's history and could repeat it.
             _rbac_incident_id = None
             if session_id and user_id and org_id:
                 try:
@@ -1200,10 +1222,22 @@ async def handle_connection(websocket) -> None:
                         with conn.cursor() as cur:
                             set_rls_context(cur, conn, user_id, log_prefix="[Chatbot:RBAC]")
                             cur.execute(
-                                "SELECT incident_id FROM chat_sessions WHERE id = %s AND org_id = %s",
+                                "SELECT incident_id, user_id FROM chat_sessions WHERE id = %s AND org_id = %s",
                                 (session_id, org_id),
                             )
                             row = cur.fetchone()
+                    if row and not row[0] and row[1] != user_id:
+                        from utils.auth.viewer_run import CHAT_ACCESS_DENIED
+                        from utils.log_sanitizer import sanitize
+                        logger.warning(
+                            "Denied: user=%s tried to chat in another user's session=%s",
+                            sanitize(user_id), sanitize(session_id),
+                        )
+                        await websocket.send(json.dumps({
+                            "type": "error",
+                            "data": {"text": CHAT_ACCESS_DENIED}
+                        }))
+                        continue
                     if row and row[0]:
                         _rbac_incident_id = str(row[0])
                         from utils.auth.enforcer import enforce_with_reload
@@ -1288,7 +1322,19 @@ async def handle_connection(websocket) -> None:
                             }
                         }))
                         continue
-                    
+                    from utils.auth.connector_access import denial_text, may_use
+                    # Ask mode is not the only gate. A role without GitHub must not push.
+                    if not may_use(user_id, "github"):
+                        await websocket.send(json.dumps({
+                            "type": "error",
+                            "data": {
+                                "text": denial_text(user_id, "github"),
+                                "session_id": session_id,
+                                "code": "CONNECTOR_DENIED",
+                            },
+                        }))
+                        continue
+
                     # Import and execute the tool
                     try:
                         from chat.backend.agent.tools.github_commit_tool import github_commit
@@ -1363,6 +1409,26 @@ async def handle_connection(websocket) -> None:
                                     "session_id": session_id,
                                     "code": "READ_ONLY_MODE"
                                 }
+                            }))
+                            continue
+                        from utils.auth.connector_access import denial_text, may_use
+                        from utils.auth.stateless_auth import get_connected_providers
+                        # GitHub and Slack are connected too. They are not a cloud for IaC.
+                        cloud_providers = {"aws", "gcp", "azure", "ovh", "scaleway"}
+                        providers = [
+                            provider
+                            for provider in get_connected_providers(user_id)
+                            if provider.lower() in cloud_providers
+                        ]
+                        if not any(may_use(user_id, provider) for provider in providers):
+                            target = providers[0] if providers else "cloud"
+                            await websocket.send(json.dumps({
+                                "type": "error",
+                                "data": {
+                                    "text": denial_text(user_id, target),
+                                    "session_id": session_id,
+                                    "code": "CONNECTOR_DENIED",
+                                },
                             }))
                             continue
 
@@ -1488,7 +1554,7 @@ async def handle_connection(websocket) -> None:
 
             # Create agent and workflow with websocket sender if not already created
             if agent is None:
-                agent = Agent(weaviate_client=weaviate_client, postgres_client=postgres_client, websocket_sender=websocket_sender, event_loop=asyncio.get_event_loop())
+                agent = Agent(postgres_client=postgres_client, websocket_sender=websocket_sender, event_loop=asyncio.get_event_loop())
                 logger.info(f"Created agent with websocket sender")
             
             # Hook: check if LLM call is allowed
@@ -1549,17 +1615,36 @@ async def handle_connection(websocket) -> None:
                 human_message = HumanMessage(content=question)
 
             # Prepare messages list
-            if trigger_rca_requested:
-                rca_instruction = (
+            # Prompt-level belt for the two UI-initiated flows. ForceToolChoice also pins
+            # tool_choice on the first turn, but newer Claude models (Opus 5.5, Fable 5.1)
+            # reject forcing and fall back to tool_choice=auto — at which point this
+            # instruction is what still gets the tool called. Prepended to the message
+            # only, never to state.question, so guardrails and chat history keep the
+            # user's original text (see workflow._get_input_rail_text).
+            # Precedence matches agent.py: a pinned action wins over the RCA button.
+            routing_instruction = ""
+            if trigger_action_id:
+                routing_instruction = (
+                    "[ACTION RUN REQUESTED]\n"
+                    "The user explicitly triggered an Aurora Action from the UI. "
+                    f'You MUST call the trigger_action tool with action_id="{trigger_action_id}". '
+                    "Do not answer with prose and do not ask a follow-up question first.\n\n"
+                )
+            elif trigger_rca_requested:
+                routing_instruction = (
                     "[RCA INVESTIGATION REQUESTED]\n"
                     "The user has explicitly requested a Root Cause Analysis investigation. "
                     "You MUST call the trigger_rca tool with their message as the issue_description. "
                     "Extract a short title, affected service, and severity from their description.\n\n"
                 )
+
+            if routing_instruction:
                 if isinstance(human_message.content, str):
-                    human_message = HumanMessage(content=rca_instruction + human_message.content)
+                    human_message = HumanMessage(content=routing_instruction + human_message.content)
                 elif isinstance(human_message.content, list):
-                    human_message = HumanMessage(content=[{"type": "text", "text": rca_instruction}] + human_message.content)
+                    human_message = HumanMessage(
+                        content=[{"type": "text", "text": routing_instruction}] + human_message.content
+                    )
 
             messages_list = [human_message]
 
@@ -1641,9 +1726,6 @@ async def handle_connection(websocket) -> None:
                 await deployment_listener_task
             except asyncio.CancelledError:
                 pass
-        
-        if weaviate_client:
-            weaviate_client.close()
 
 async def main():
     """Start the WebSocket server and health check endpoint."""

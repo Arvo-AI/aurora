@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GitHub Authentication Error</title>
+    <title>{{ provider or 'GitHub' }} Authentication Error</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
@@ -51,7 +51,7 @@
 <body>
     <div class="error-container">
         <h1>Authentication Failed</h1>
-        <p>We encountered an error while trying to authenticate with GitHub.</p>
+        <p>We encountered an error while trying to authenticate with {{ provider or 'GitHub' }}.</p>
         <div class="error-message">{{ error }}</div>
         <p>You can close this window and try again.</p>
         <p class="close-text">(This window will close automatically in a few seconds.)</p>

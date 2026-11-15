@@ -405,7 +405,7 @@ For a full list, see the
 | Control | Detail |
 |---|---|
 | **External ID** | A UUID v4 unique to your Aurora workspace. Prevents other Aurora tenants from assuming your role (confused-deputy protection). |
-| **No write access** | The role only has `ReadOnlyAccess`. Aurora's session policy can further restrict in read-only mode. |
+| **No write access** | Quick-Create attaches `ReadOnlyAccess`. A configured read role is assumed with no session policy, whatever its name. If none is configured, Aurora trusts `AuroraReadOnly-*` and `AuroraReadOnlyRole` the same way. Ask mode on any other role still applies the read-only session policy. |
 | **Short-lived credentials** | STS sessions last at most 1 hour. Aurora proactively refreshes them before expiry. |
 | **Per-account isolation** | Each AWS account has its own role. Compromising one role does not affect other accounts. |
 | **Audit trail** | Every `AssumeRole` call is logged in the target account's CloudTrail. Session names include `aurora-<workspace_id>` for traceability. |

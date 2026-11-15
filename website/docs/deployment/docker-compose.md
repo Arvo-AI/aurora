@@ -162,10 +162,10 @@ All services run in Docker containers:
     ┌───────────────────┼─────────────────────────┐
     │           │       │             │           │
     ▼           ▼       ▼             ▼           ▼
-┌───────┐ ┌─────────┐ ┌──────────┐ ┌───────┐ ┌─────────┐
-│Postgres│ │  Redis  │ │ Weaviate │ │ Vault │ │SeaweedFS│
-│ :5432  │ │  :6379  │ │  :8080   │ │ :8200 │ │  :8333  │
-└───────┘ └─────────┘ └──────────┘ └───────┘ └─────────┘
+┌───────┐ ┌─────────┐ ┌───────┐ ┌─────────┐ ┌───────────┐
+│Postgres│ │  Redis  │ │ Vault │ │SeaweedFS│ │ Memgraph  │
+│ :5432  │ │  :6379  │ │ :8200 │ │  :8333  │ │  :7687    │
+└───────┘ └─────────┘ └───────┘ └─────────┘ └───────────┘
 ```
 
 ## Data Persistence
@@ -176,7 +176,6 @@ Data is stored in Docker volumes and persists across container restarts:
 |--------|----------|
 | `aurora_postgres_data` | PostgreSQL database |
 | `aurora_redis_data` | Redis data |
-| `aurora_weaviate_data` | Vector embeddings |
 | `aurora_vault_data` | Vault secrets |
 | `aurora_seaweedfs_data` | Object storage |
 

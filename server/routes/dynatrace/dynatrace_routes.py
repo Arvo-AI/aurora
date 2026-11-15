@@ -1,6 +1,5 @@
 import json
 import logging
-import os
 import re
 from typing import Any
 from urllib.parse import urlparse, urlunparse
@@ -10,6 +9,7 @@ from flask import Blueprint, jsonify, request
 
 from routes.dynatrace.tasks import process_dynatrace_problem
 from utils.db.connection_pool import db_pool
+from utils.web.public_url import external_backend_url
 from utils.log_sanitizer import sanitize
 from utils.auth.stateless_auth import (
     get_org_id_from_request,
@@ -124,7 +124,7 @@ def connect(user_id):
     version = client.get_cluster_version()
 
     try:
-        store_tokens_in_db(user_id, {"api_token": api_token, "environment_url": environment_url, "version": version}, "dynatrace")
+        store_tokens_in_db(user_id, {"api_token": api_token, "environment_url": environment_url, "version": version}, "dynatrace", schedule_prediscovery=True)
     except Exception as exc:
         logger.exception("[DYNATRACE] Failed to store credentials for user %s: %s", user_id, exc)
         return jsonify({"error": "Failed to store Dynatrace credentials"}), 500
@@ -234,9 +234,7 @@ def get_alerts(user_id):
 @dynatrace_bp.route("/webhook-url", methods=["GET"])
 @require_permission("connectors", "read")
 def get_webhook_url(user_id):
-    ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")
-    backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "").rstrip("/")
-    base_url = ngrok_url if ngrok_url and backend_url.startswith("http://localhost") else backend_url
+    base_url = external_backend_url()
 
     return jsonify({
         "webhookUrl": f"{base_url}/dynatrace/webhook/{user_id}",

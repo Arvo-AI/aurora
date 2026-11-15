@@ -234,6 +234,38 @@ def get_workspace_by_id(workspace_id: str, user_id: Optional[str] = None) -> Opt
         return None
 
 
+def resolve_connection_external_id(
+    connection: Dict[str, Any], user_id: str
+) -> Optional[str]:
+    """Resolve the ExternalId for an AWS connection from the workspace that owns it.
+
+    Connectors are org-shared but ExternalIds are per-workspace, so the caller's
+    own workspace is the wrong source for anyone who didn't run onboarding --
+    signing STS with it yields AccessDenied on every account. Never falls back to
+    get_or_create_workspace: minting a fresh ExternalId on a read path is what
+    made this fail silently.
+    """
+    workspace_id = connection.get("workspace_id")
+    if not workspace_id:
+        logger.error(
+            "AWS connection for account %s has no workspace_id; cannot resolve ExternalId",
+            sanitize(str(connection.get("account_id"))),
+        )
+        return None
+
+    workspace = get_workspace_by_id(workspace_id, user_id=user_id)
+    if not workspace:
+        logger.error("Workspace %s not found for AWS connection", sanitize(str(workspace_id)))
+        return None
+
+    external_id = workspace.get("aws_external_id")
+    if not external_id:
+        logger.error("Workspace %s missing aws_external_id", sanitize(str(workspace_id)))
+        return None
+
+    return external_id
+
+
 def get_user_workspaces(user_id: str) -> list:
     """
     Get all workspaces for a user.

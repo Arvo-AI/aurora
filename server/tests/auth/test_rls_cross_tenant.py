@@ -166,7 +166,7 @@ class TestCrossTenantIncidentAccess:
         """Control case: same route returns 200 for a valid org-A incident
         (verifies the fixture actually exercises the route, not a shortcut).
         """
-        # Build a minimal 24-column row that _format_incident_response expects.
+        # Build a minimal 26-column row that _format_incident_response expects.
         fake_row = (
             ORG_A_INCIDENT_UUID,  # id
             ORG_A_USER_ID,        # user_id
@@ -192,6 +192,8 @@ class TestCrossTenantIncidentAccess:
             None,                 # affected_services
             None,                 # merged_into_incident_id
             None,                 # merged_into_title
+            None,                 # recurrence_of_incident_id
+            None,                 # recurrence_of_title
         )
         cursor = _make_cursor_returning(fake_row)
         _patch_auth_and_pool(monkeypatch, cursor=cursor)

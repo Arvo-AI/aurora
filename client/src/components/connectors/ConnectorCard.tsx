@@ -1,11 +1,11 @@
 "use client";
 
 import React, { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Check, ExternalLink, AlertCircle, Loader2, BarChart2, LogOut, KeyRound, Settings, Lock } from "lucide-react";
+import { Check, ExternalLink, AlertCircle, Loader2, LogOut, KeyRound, Settings, Lock } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useConnectorStatus } from "@/hooks/use-connector-status";
 import { googleChatService } from "@/lib/services/google-chat";
@@ -46,9 +46,63 @@ function BitbucketStatusBadge() {
   return <TwoTierBadge isAuthenticated={isAuthenticated} isConnected={isConnected} />;
 }
 
+function TeamsStatusBadge({ status }: { status: { connected?: boolean; setup_complete?: boolean; displaced?: boolean; error?: string } | null }) {
+  if (status?.displaced) {
+    return (
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div tabIndex={0} className="flex items-center gap-1 text-amber-600 dark:text-amber-400 cursor-default">
+              <AlertCircle className="h-4 w-4" />
+              <span className="text-xs font-medium">Connected elsewhere</span>
+            </div>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" className="max-w-xs text-xs">
+            {status.error ||
+              "This Microsoft Teams account is connected in another organization, so it no longer receives messages here."}
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    );
+  }
+  if (!status?.connected) return null;
+  if (status.setup_complete) {
+    return (
+      <div className="flex items-center gap-1 text-green-600 dark:text-green-500">
+        <Check className="h-4 w-4" />
+        <span className="text-xs font-medium">Connected</span>
+      </div>
+    );
+  }
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <div className="flex items-center gap-1 text-amber-600 dark:text-amber-400 cursor-default">
+            <AlertCircle className="h-4 w-4" />
+            <span className="text-xs font-medium">Setup incomplete</span>
+          </div>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" className="max-w-xs text-xs">
+          OAuth is done. In each team, add your org’s Aurora app from Teams → Apps, then @mention
+          the bot in a channel.
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
 interface ConnectorCardProps {
   connector: ConnectorConfig;
   connectedOverride?: boolean;
+}
+
+// Otherwise the dialog reopens by itself when the card next mounts.
+function clearConnectParam() {
+  const url = new URL(globalThis.location.href);
+  if (!url.searchParams.has("connect")) return;
+  url.searchParams.delete("connect");
+  globalThis.history.replaceState(null, "", url.toString());
 }
 
 export default function ConnectorCard({ connector, connectedOverride }: ConnectorCardProps) {
@@ -57,7 +111,8 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
   const { user } = useUser();
   const canWrite = checkCanWrite(user?.role);
   const userId = user?.id ?? null;
-  const [showGitHubDialog, setShowGitHubDialog] = useState(false);
+  const searchParams = useSearchParams();
+  const [showGitHubDialog, setShowGitHubDialog] = useState(connector.id === "github" && searchParams.get("connect") === "github");
   const [showBitbucketDialog, setShowBitbucketDialog] = useState(false);
   const [showGcpDialog, setShowGcpDialog] = useState(false);
   const [showOvhDialog, setShowOvhDialog] = useState(false);
@@ -73,6 +128,7 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
     isCheckingConnection,
     isLoadingDetails,
     slackStatus,
+    teamsStatus,
     googleChatStatus,
     checkGitHubStatus,
   } = useConnectorStatus(connector, userId, connectedOverride);
@@ -86,6 +142,9 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
   } = useConnectorOAuth(connector, userId);
 
   const isConnecting = isConnectingOAuth || isConnectingOAuthHandler;
+  // Slack Manage only opens the page, which viewers can already open by URL.
+  const slackManageOpen = connector.id === "slack" && isConnected;
+  const buttonLocked = !canWrite && !slackManageOpen;
 
   const handleDisconnect = async () => {
     if (connector.id === "google_chat") {
@@ -136,6 +195,15 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
         await handleSlackOAuth();
       } else {
         router.push("/slack/manage");
+      }
+      return;
+    }
+
+    if (connector.id === "teams") {
+      if (!isConnected) {
+        router.push("/teams/setup");
+      } else {
+        router.push("/teams/manage");
       }
       return;
     }
@@ -216,12 +284,6 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
     }
   };
 
-  const handleOverview = () => {
-    if (connector.overviewPath) {
-      router.push(connector.overviewPath);
-    }
-  };
-
   const IconComponent = connector.icon;
 
   function renderStatusBadge() {
@@ -230,6 +292,9 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
     }
     if (connector.id === "bitbucket") {
       return <BitbucketStatusBadge />;
+    }
+    if (connector.id === "teams") {
+      return <TeamsStatusBadge status={teamsStatus} />;
     }
 
     if (connector.id === "onprem" && isCheckingConnection) {
@@ -241,7 +306,7 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
       );
     }
 
-    if (isConnected) {
+    if (isConnected && connector.id !== "teams") {
       return (
         <div className="flex items-center gap-1 text-green-600 dark:text-green-500">
           <Check className="h-4 w-4" />
@@ -380,7 +445,7 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
                         onClick={handleConnect} 
                         className="w-full"
                         variant={isConnected ? "outline" : "default"}
-                        disabled={isConnecting || (!isConnected && !canWrite) || (isConnected && !canWrite)}
+                        disabled={isConnecting || buttonLocked}
                       >
                         {isConnecting ? (
                           <>
@@ -420,7 +485,7 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
                       </Button>
                     </span>
                   </TooltipTrigger>
-                  {!canWrite && (
+                  {buttonLocked && (
                     <TooltipContent>
                       <p>Editor or Admin role required</p>
                     </TooltipContent>
@@ -440,29 +505,15 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
             </>
           )}
           
-          {isConnected && (connector.alertsPath || connector.overviewPath) && (
-            <div className="flex w-full flex-col gap-2">
-              {connector.alertsPath && (
-                <Button
-                  onClick={handleViewAlerts}
-                  className="w-full sm:flex-1"
-                  variant="secondary"
-                >
-                  <AlertCircle className="h-4 w-4 mr-2" />
-                  {connector.alertsLabel ?? "View Alerts"}
-                </Button>
-              )}
-              {connector.overviewPath && (
-                <Button
-                  onClick={handleOverview}
-                  className="w-full sm:flex-1"
-                  variant="secondary"
-                >
-                  <BarChart2 className="h-4 w-4 mr-2" />
-                  {connector.overviewLabel ?? "Overview"}
-                </Button>
-              )}
-            </div>
+          {isConnected && connector.alertsPath && (
+            <Button
+              onClick={handleViewAlerts}
+              className="w-full"
+              variant="secondary"
+            >
+              <AlertCircle className="h-4 w-4 mr-2" />
+              {connector.alertsLabel ?? "View Alerts"}
+            </Button>
           )}
         </CardFooter>
       </Card>
@@ -478,6 +529,7 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
         showNotionDialog={showNotionDialog}
         onGitHubDialogChange={(open) => {
           setShowGitHubDialog(open);
+          if (!open) clearConnectParam();
           if (!open) {
             checkGitHubStatus();
             window.dispatchEvent(new Event('providerStateChanged'));
@@ -494,7 +546,10 @@ export default function ConnectorCard({ connector, connectedOverride }: Connecto
         onOvhDialogChange={setShowOvhDialog}
         onScalewayDialogChange={setShowScalewayDialog}
         onNotionDialogChange={setShowNotionDialog}
-        onGitHubDialogClose={() => setShowGitHubDialog(false)}
+        onGitHubDialogClose={() => {
+          setShowGitHubDialog(false);
+          clearConnectParam();
+        }}
       />
 
       <DisconnectConfirmDialog

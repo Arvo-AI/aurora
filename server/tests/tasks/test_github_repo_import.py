@@ -1,23 +1,24 @@
-"""Tests for the GitHub App repo auto-import task.
+"""Tests for the GitHub App repo auto-import, the hourly sync and the backfill.
 
-Pins ``import_installation_repos`` (routes/github/github_repo_metadata.py):
-after an App install, the repos the user granted on GitHub are UPSERTed into
-``connected_repos`` (with ``installation_id`` set) so they don't have to be
-re-selected in Aurora, metadata generation fires only for NEW rows, and the
-task degrades safely (suspended install / no repos / no org → no-op).
+``import_installation_repos`` (routes/github/github_repo_metadata.py) UPSERTs
+an installation's repos into ``connected_repos``. These tests run it against
+a small in-memory stand-in for the tables it touches, so they check what ends
+up connected and enrolled rather than which SQL was sent.
 
-GitHub API, DB and Celery ``delay`` are all mocked — no I/O.
+GitHub API and Celery ``delay`` are mocked — no I/O.
 """
 
 from __future__ import annotations
 
 from contextlib import contextmanager
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import routes.github.github_repo_metadata as mod
 
 _USER = "user-1"
+_ORG = "org-1"
 _INSTALL = 4242
 
 
@@ -26,129 +27,344 @@ class _MaxRetriesExceeded(Exception):
 
 
 def _task_self():
-    """Fake bound-task ``self`` so the body runs without Celery (stubbed in CI).
-
-    Tests call ``_import_installation_repos`` directly rather than the
-    ``@celery_app.task``-decorated wrapper, because the lightweight test env
-    stubs Celery and a decorated task degrades to a no-op MagicMock.
-    """
+    """Fake bound-task ``self`` so the body runs without Celery (stubbed in CI)."""
     return SimpleNamespace(retry=MagicMock(), MaxRetriesExceededError=_MaxRetriesExceeded)
 
 
-def _mock_db(existing_repos=()):
-    """Build a db_pool whose cursor returns ``existing_repos`` for the SELECT."""
-    cur = MagicMock()
-    # The SELECT returns (repo_full_name, owner_user_id). Accept either a dict
-    # {repo: owner} or a sequence of names (owner defaults to the installing user).
-    if isinstance(existing_repos, dict):
-        rows = [(name, owner) for name, owner in existing_repos.items()]
-    else:
-        rows = [(name, _USER) for name in existing_repos]
-    cur.fetchall.return_value = rows
-    conn = MagicMock()
+class _FakeDb:
+    """The rows the importer reads and writes, keyed the way the SQL keys them."""
 
-    @contextmanager
-    def _cursor_cm():
-        yield cur
+    def __init__(self, connected=None, imported_at=None, excluded=()):
+        # {repo_full_name: {"owner": user_id, "gating": bool}}
+        self.connected = {
+            name: {"owner": owner, "gating": gating}
+            for name, (owner, gating) in (connected or {}).items()
+        }
+        self.imported_at = imported_at
+        # {repo_full_name: excluded_at}; a bare name was excluded at time 0.
+        self.excluded = dict(excluded) if isinstance(excluded, dict) else dict.fromkeys(excluded, 0)
+        self.delivery_received = {}
+        self.disconnected = False
+        self.commits = 0
+        self._result = []
 
-    conn.cursor.side_effect = _cursor_cm
+    # cursor API
+    def execute(self, sql, params=()):
+        s = " ".join(sql.split())
+        self._result = []
+        if "MAX(repos_imported_at)" in s:
+            self._result = [(self.imported_at,)]
+        elif s.startswith("SELECT repo_full_name FROM github_repo_exclusions"):
+            self._result = [(n,) for n in params[1] if n in self.excluded]
+        elif s.startswith("DELETE FROM github_repo_exclusions"):
+            granted = self.delivery_received.get(params[2], float("-inf"))
+            for name in params[1]:
+                if name in self.excluded and self.excluded[name] < granted:
+                    del self.excluded[name]
+        elif s.startswith("SELECT repo_full_name, user_id FROM connected_repos"):
+            self._result = [(n, r["owner"]) for n, r in self.connected.items()]
+        elif s.startswith("DELETE FROM connected_repos WHERE installation_id"):
+            for name in [n for n in self.connected if n not in params[1]]:
+                del self.connected[name]
+        elif s.startswith("INSERT INTO connected_repos"):
+            owner, _org, name = params[0], params[1], params[2]
+            if name not in self.connected:
+                self.connected[name] = {"owner": owner, "gating": params[-1]}
+        elif s.startswith("UPDATE user_github_installations SET repos_imported_at"):
+            if self.imported_at is None:
+                self.imported_at = "now"
+        elif s.startswith("UPDATE user_github_installations SET disconnected_at = NOW()"):
+            self.disconnected = True
+        elif s.startswith("UPDATE connected_repos SET change_gating_enabled = TRUE"):
+            for row in self.connected.values():
+                row["gating"] = True
+        elif "FROM user_github_installations ugi JOIN github_installations" in s:
+            self._result = [(_USER,)]
+        else:
+            raise AssertionError(f"unexpected SQL: {s[:80]}")
 
-    @contextmanager
-    def _conn_cm():
-        yield conn
+    def fetchone(self):
+        return self._result[0] if self._result else None
 
-    db_pool = MagicMock()
-    db_pool.get_admin_connection.side_effect = _conn_cm
-    return db_pool, conn, cur
+    def fetchall(self):
+        return list(self._result)
+
+    rowcount = 0
+
+    def pool(self):
+        db = self
+
+        class _Conn:
+            def commit(self):
+                db.commits += 1
+
+            @contextmanager
+            def cursor(self):
+                yield db
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        pool = MagicMock()
+        pool.get_admin_connection.side_effect = lambda: _Conn()
+        return pool
+
+    def gated(self):
+        return {n for n, r in self.connected.items() if r["gating"]}
 
 
-def _run(repos, existing=(), org="org-1", token_exc=None):
-    db_pool, conn, cur = _mock_db(existing)
+def _run(repos, db=None, org=_ORG, token_exc=None, task=None, owner=_USER, **kwargs):
+    db = db or _FakeDb()
     gen = MagicMock()
     with patch("utils.auth.github_app_token.get_installation_token") as get_tok, \
          patch("routes.github.github_user_repos._fetch_installation_repos",
                return_value=repos) as fetch, \
          patch("utils.auth.stateless_auth.set_rls_context", return_value=org), \
-         patch("utils.db.connection_pool.db_pool", db_pool), \
+         patch("utils.db.connection_pool.db_pool", db.pool()), \
+         patch("tasks.github_webhook_tasks.auto_enroll_owner", return_value=owner), \
          patch.object(mod, "generate_repo_metadata", gen):
         if token_exc is not None:
             get_tok.side_effect = token_exc
         else:
             get_tok.return_value = "ghs_installtoken"
-        mod._import_installation_repos(_task_self(), _USER, _INSTALL)
-    return conn, cur, gen, fetch
+        if isinstance(repos, Exception):
+            fetch.side_effect = repos
+        mod._import_installation_repos(task or _task_self(), _USER, _INSTALL, **kwargs)
+    return db, gen, fetch
 
 
-def _insert_calls(cur):
-    return [c for c in cur.execute.call_args_list if "INSERT INTO connected_repos" in c.args[0]]
+def _repo(name, created="2026-09-01T00:00:00Z"):
+    return {"full_name": name, "id": 1, "default_branch": "main", "created_at": created}
 
 
 class TestImportInstallationRepos:
-    def test_imports_and_dispatches_metadata_for_new_repos(self):
-        repos = [
-            {"full_name": "acme/api", "id": 1, "default_branch": "main", "private": True},
-            {"full_name": "acme/web", "id": 2, "default_branch": "trunk", "private": False},
-        ]
-        conn, cur, gen, _ = _run(repos, existing=())
+    def test_first_import_connects_everything_and_marks_the_install(self):
+        db, gen, _ = _run([_repo("acme/api"), _repo("acme/web")], enroll_change_gating=True)
+        assert db.gated() == {"acme/api", "acme/web"}
+        assert db.imported_at is not None
+        assert {c.args for c in gen.delay.call_args_list} == {
+            (_USER, "acme/api"), (_USER, "acme/web"),
+        }
 
-        inserts = _insert_calls(cur)
-        assert len(inserts) == 2
-        # INSERT values tuple: (user_id, org_id, full_name, id, default_branch,
-        # is_private, installation_id, repo_data) — installation_id at index 6.
-        for call in inserts:
-            params = call.args[1]
-            assert params[0] == _USER
-            assert params[6] == _INSTALL
-        conn.commit.assert_called_once()
-        dispatched = {c.args for c in gen.delay.call_args_list}
-        assert dispatched == {(_USER, "acme/api"), (_USER, "acme/web")}
+    def test_existing_repo_keeps_its_owner_and_review_choice(self):
+        db = _FakeDb(connected={"shared/repo": ("other-user", False)})
+        db, gen, _ = _run([_repo("shared/repo")], db=db, enroll_change_gating=True)
+        assert db.connected["shared/repo"] == {"owner": "other-user", "gating": False}
+        gen.delay.assert_not_called()
 
-    def test_existing_repo_upserted_but_no_duplicate_metadata(self):
-        repos = [
-            {"full_name": "acme/api", "id": 1, "default_branch": "main"},
-            {"full_name": "acme/web", "id": 2, "default_branch": "main"},
-        ]
-        _, cur, gen, _ = _run(repos, existing=("acme/api",))
-        # Both repos are still upserted (idempotent)...
-        assert len(_insert_calls(cur)) == 2
-        # ...but metadata only fires for the genuinely new one.
-        assert {c.args for c in gen.delay.call_args_list} == {(_USER, "acme/web")}
+    def test_empty_install_still_counts_as_imported(self):
+        db, _, _ = _run([])
+        assert db.connected == {}
+        assert db.imported_at is not None
 
-    def test_repo_owned_by_other_org_member_keeps_owner_no_duplicate_row(self):
-        # A repo already connected by another org member must UPSERT under that
-        # owner (matching the UNIQUE key) — not create a second row for it.
-        repos = [{"full_name": "shared/repo", "id": 5, "default_branch": "main"}]
-        _, cur, gen, _ = _run(repos, existing={"shared/repo": "other-user"})
-        inserts = _insert_calls(cur)
-        assert len(inserts) == 1
-        assert inserts[0].args[1][0] == "other-user"  # owner preserved, no dup row
-        gen.delay.assert_not_called()  # already present → no metadata re-dispatch
-
-    def test_repo_missing_full_name_skipped(self):
-        repos = [{"id": 9, "default_branch": "main"}, {"full_name": "acme/ok", "id": 1}]
-        _, cur, gen, _ = _run(repos, existing=())
-        assert len(_insert_calls(cur)) == 1
-        assert {c.args for c in gen.delay.call_args_list} == {(_USER, "acme/ok")}
-
-    def test_suspended_installation_is_a_noop(self):
-        from utils.auth.github_app_token import GitHubAppInstallationSuspended
-
-        _, cur, gen, fetch = _run(
-            [{"full_name": "acme/api"}], token_exc=GitHubAppInstallationSuspended("x")
+    def test_suspended_or_uninstalled_installation_is_not_retried(self):
+        from utils.auth.github_app_token import (
+            GitHubAppInstallationNotFound,
+            GitHubAppInstallationSuspended,
         )
-        fetch.assert_not_called()
-        cur.execute.assert_not_called()
-        gen.delay.assert_not_called()
 
-    def test_no_repos_is_a_noop(self):
-        conn, cur, gen, _ = _run([], existing=())
-        cur.execute.assert_not_called()
-        gen.delay.assert_not_called()
-        conn.commit.assert_not_called()
+        for exc in (GitHubAppInstallationSuspended("x"), GitHubAppInstallationNotFound("x")):
+            task = _task_self()
+            db, _, fetch = _run([_repo("acme/api")], token_exc=exc, task=task)
+            fetch.assert_not_called()
+            task.retry.assert_not_called()
+            assert db.imported_at is None
+            # One 404 can be a GitHub incident or a misconfigured App: the
+            # link stays; the installation.deleted webhook removes it.
+            assert db.disconnected is False
 
     def test_no_org_aborts_before_writing(self):
-        # set_rls_context returning falsy (no org) must abort before any write.
-        conn, cur, gen, _ = _run([{"full_name": "acme/api"}], org=None)
-        assert _insert_calls(cur) == []
-        conn.commit.assert_not_called()
+        db, gen, _ = _run([_repo("acme/api")], org=None)
+        assert db.connected == {} and db.commits == 0
         gen.delay.assert_not_called()
+
+
+class TestImportRunsOncePerLink:
+    """Logins, relinks and claims must not bring back repos removed in Aurora."""
+
+    def test_full_import_skipped_once_one_landed(self):
+        db = _FakeDb(connected={"acme/api": (_USER, True)}, imported_at=datetime(2026, 9, 1))
+        db, _, fetch = _run([_repo("acme/api"), _repo("acme/removed")], db=db,
+                            enroll_change_gating=True)
+        fetch.assert_not_called()
+        assert set(db.connected) == {"acme/api"}
+
+    def test_force_reimports_but_skips_repos_removed_in_the_picker(self):
+        db = _FakeDb(imported_at=datetime(2026, 9, 1), excluded={"acme/removed"})
+        db, _, _ = _run([_repo("acme/missed"), _repo("acme/removed")], db=db,
+                        enroll_change_gating=True, force=True)
+        assert db.gated() == {"acme/missed"}
+
+    def test_granting_a_removed_repo_again_on_github_brings_it_back(self):
+        db = _FakeDb(imported_at=datetime(2026, 9, 1), excluded={"acme/back": 3})
+        db.delivery_received["d-1"] = 5
+        db, _, _ = _run([_repo("acme/back")], db=db, enroll_change_gating=True,
+                        only_repos=["acme/back"], grant_delivery_id="d-1")
+        assert db.gated() == {"acme/back"}
+        assert db.excluded == {}
+
+    def test_removal_made_after_the_grant_wins_over_the_queued_grant(self):
+        # The added webhook arrived at t=5, the user removed the repo in the
+        # picker at t=9, then the queued import ran.
+        db = _FakeDb(imported_at=datetime(2026, 9, 1), excluded={"acme/back": 9})
+        db.delivery_received["d-1"] = 5
+        db, _, _ = _run([_repo("acme/back")], db=db, enroll_change_gating=True,
+                        only_repos=["acme/back"], grant_delivery_id="d-1")
+        assert db.connected == {}
+
+    def test_grant_with_no_known_delivery_does_not_clear_a_removal(self):
+        db = _FakeDb(imported_at=datetime(2026, 9, 1), excluded={"acme/back": 3})
+        db, _, _ = _run([_repo("acme/back")], db=db, enroll_change_gating=True,
+                        only_repos=["acme/back"])
+        assert db.connected == {}
+
+    def test_review_turned_off_after_queueing_is_respected(self):
+        db, _, fetch = _run([_repo("acme/new")], owner=None, enroll_change_gating=True,
+                            only_repos=["acme/new"], require_enrollment=True)
+        fetch.assert_not_called()
+        assert db.connected == {}
+
+
+class TestListingFailure:
+    """A GitHub outage during the listing must not read as "no repos"."""
+
+    def test_failed_listing_retries_and_leaves_the_install_unmarked(self):
+        from routes.github.github_user_repos import InstallationRepoListError
+
+        task = _task_self()
+        db, _, fetch = _run(InstallationRepoListError("status=502"), task=task)
+        assert fetch.call_args.kwargs == {"strict": True}
+        task.retry.assert_called_once()
+        assert db.connected == {} and db.imported_at is None
+
+    def test_backoff_grows_and_is_capped(self):
+        countdowns = []
+        for attempt in (0, 3, 20):
+            task = _task_self()
+            task.request = SimpleNamespace(retries=attempt)
+            mod._retry_import(task, _INSTALL, "repo listing")
+            countdowns.append(task.retry.call_args.kwargs["countdown"])
+        assert countdowns == [60, 480, mod._IMPORT_RETRY_CAP_SEC]
+
+
+class TestStrictListing:
+    def _list(self, pages):
+        from routes.github.github_user_repos import _fetch_installation_repos
+
+        responses = []
+        for body in pages:
+            r = MagicMock(status_code=200)
+            r.json.return_value = body
+            responses.append(r)
+        with patch("routes.github.github_user_repos.requests.get", side_effect=responses):
+            return _fetch_installation_repos("t", _INSTALL, strict=True)
+
+    def test_malformed_body_raises_instead_of_reading_as_empty(self):
+        from routes.github.github_user_repos import InstallationRepoListError
+
+        for body in ({}, {"repositories": None}, []):
+            try:
+                self._list([body])
+            except InstallationRepoListError:
+                continue
+            raise AssertionError(f"{body!r} read as an empty installation")
+
+    def test_lists_past_the_lenient_page_limit(self):
+        from routes.github.github_user_repos import _PER_PAGE, _REPOS_PAGE_LIMIT
+
+        full = {"repositories": [_repo("a/b")] * _PER_PAGE}
+        pages = [full] * (_REPOS_PAGE_LIMIT + 1) + [{"repositories": []}]
+        assert len(self._list(pages)) == _PER_PAGE * (_REPOS_PAGE_LIMIT + 1)
+
+
+class TestHourlySync:
+    """The safety net repairs failed imports without undoing removals."""
+
+    def _sync(self, rows, owner=_USER):
+        db = MagicMock()
+
+        @contextmanager
+        def _conn():
+            conn = MagicMock()
+            cur = MagicMock()
+            cur.fetchall.return_value = rows
+            conn.cursor.return_value.__enter__.return_value = cur
+            conn.__enter__.return_value = conn
+            yield conn
+
+        db.get_admin_connection.side_effect = lambda: _conn().__enter__()
+        task = MagicMock()
+        with patch("utils.db.connection_pool.db_pool", db), \
+             patch("tasks.github_webhook_tasks.auto_enroll_owner", return_value=owner), \
+             patch.object(mod, "import_installation_repos", task):
+            mod._sync_installation_repos()
+        return task
+
+    def test_install_whose_first_import_never_landed_gets_it(self):
+        kwargs = self._sync([(_INSTALL, None, False)]).delay.call_args.kwargs
+        assert kwargs["created_after"] is None and kwargs["reconcile"] is False
+
+    def test_imported_install_is_reconciled_against_everything_granted(self):
+        # Catches a repo granted on GitHub whose added webhook was lost,
+        # however old the repo is.
+        kwargs = self._sync([(_INSTALL, datetime(2026, 11, 12), False)]).delay.call_args.kwargs
+        assert kwargs["reconcile"] is True and kwargs["created_after"] is None
+
+    def test_legacy_install_only_gets_repos_created_since(self):
+        # Removals from before the exclusions table were never recorded.
+        task = self._sync([(_INSTALL, datetime(2026, 9, 27, 0, 4), True)])
+        assert task.delay.call_args.kwargs["created_after"] == "2026-09-27T00:04:00Z"
+        # Still pruned: dropping what GitHub no longer grants loses no intent.
+        assert task.delay.call_args.kwargs["reconcile"] is True
+
+    def test_legacy_reconcile_prunes_but_only_adds_new_repos(self):
+        db = _FakeDb(connected={"acme/kept": (_USER, True), "acme/revoked": (_USER, True)},
+                     imported_at=datetime(2026, 9, 27))
+        db, _, _ = _run(
+            [_repo("acme/kept"), _repo("acme/removed"), _repo("acme/new", "2026-10-10T00:00:00Z")],
+            db=db, enroll_change_gating=True, reconcile=True,
+            created_after="2026-09-27T00:00:00Z",
+        )
+        assert set(db.connected) == {"acme/kept", "acme/new"}
+
+    def test_repo_existing_at_import_and_now_missing_is_not_readded(self):
+        # End to end through the importer: removed on purpose stays removed.
+        db = _FakeDb(connected={"acme/kept": (_USER, True)}, imported_at=datetime(2026, 9, 27))
+        db, _, _ = _run(
+            [_repo("acme/kept"), _repo("acme/removed"), _repo("acme/new", "2026-10-10T00:00:00Z")],
+            db=db, enroll_change_gating=True, created_after="2026-09-27T00:00:00Z",
+        )
+        assert set(db.connected) == {"acme/kept", "acme/new"}
+
+    def test_reconcile_adds_a_missed_grant_but_not_a_picker_removal(self):
+        db = _FakeDb(connected={"acme/kept": (_USER, True)}, imported_at=datetime(2026, 11, 12),
+                     excluded={"acme/removed"})
+        db, _, _ = _run([_repo("acme/kept"), _repo("acme/removed"), _repo("acme/old-grant")],
+                        db=db, enroll_change_gating=True, reconcile=True)
+        assert set(db.connected) == {"acme/kept", "acme/old-grant"}
+
+    def test_reconcile_drops_a_repo_github_no_longer_grants(self):
+        # Its removed webhook was lost, or it raced an import.
+        db = _FakeDb(connected={"acme/kept": (_USER, True), "acme/revoked": (_USER, True)},
+                     imported_at=datetime(2026, 11, 12))
+        db, _, _ = _run([_repo("acme/kept")], db=db, enroll_change_gating=True, reconcile=True)
+        assert set(db.connected) == {"acme/kept"}
+
+    def test_install_with_review_turned_off_is_skipped(self):
+        task = self._sync([(_INSTALL, None, False)], owner=None)
+        task.delay.assert_not_called()
+
+
+class TestBackfill:
+    def test_turns_review_on_and_forces_a_full_import(self):
+        db = _FakeDb(connected={"acme/api": (_USER, False)}, imported_at=datetime(2026, 9, 1))
+        task = MagicMock()
+        with patch("utils.db.connection_pool.db_pool", db.pool()), \
+             patch("utils.auth.stateless_auth.set_rls_context", return_value=_ORG), \
+             patch.object(mod, "import_installation_repos", task):
+            mod._backfill_installation_repos([_INSTALL], enable_review=True)
+        assert db.gated() == {"acme/api"}
+        assert task.delay.call_args.kwargs["force"] is True

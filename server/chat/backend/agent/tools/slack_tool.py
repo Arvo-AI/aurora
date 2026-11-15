@@ -1,12 +1,17 @@
 """
 Slack Tools for Agent
 
-Agent-callable tools for reading Slack channel messages and threads.
-Used by the "Generate Postmortem" action to gather human context
-from team conversations during incidents.
+Agent-callable tools for reading Slack channel messages/threads and for posting
+a message (new or threaded reply) back into a channel.
+
+The read tools gather human context from team conversations during incidents
+(e.g. the "Generate Postmortem" action). The single write tool, post_slack_message,
+lets the team-routing agent act like a teammate: after reading a channel it can
+either start a new message or reply in an existing thread (thread_ts) so a
+recurring incident threads under the prior conversation instead of adding noise.
 
 NOTE: A shared run_slack_tool() callback pattern was considered but rejected —
-with only 3 tools, the indirection decreases readability for little benefit.
+with a handful of tools, the indirection decreases readability for little benefit.
 """
 
 import json
@@ -16,17 +21,35 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from connectors.slack_connector.client import get_slack_client_for_user
+from connectors.slack_connector.client import get_slack_client_for_user, SlackAPIError
 
 logger = logging.getLogger(__name__)
 
 _ERR_NO_USER = "No user context available."
 _ERR_NOT_CONNECTED = "Slack not connected for this user."
+# users.list has no name filter, so a prefix is applied while paging.
+_USER_LIST_PAGE_SIZE = 200
+_USER_LIST_MAX_PAGES = 15
+_USER_LIST_MAX_RESULTS = 20
+# Slack hard-caps a single message's text; keep well under it so a post never
+# fails wholesale on an over-long body (the agent should be terse anyway).
+_MAX_POST_CHARS = 3000
 
 
 class ListSlackChannelsArgs(BaseModel):
     """Arguments for listing Slack channels."""
     pass
+
+
+class ListSlackUsersArgs(BaseModel):
+    """Arguments for finding Slack users to mention."""
+    name: str = Field(
+        description=(
+            "Case-insensitive prefix matched against first name, display name, "
+            "and full name. 'a' returns Ada and Alex. Required so the whole "
+            "workspace is not returned."
+        ),
+    )
 
 
 class GetChannelHistoryArgs(BaseModel):
@@ -53,6 +76,27 @@ class GetThreadRepliesArgs(BaseModel):
     limit: int = Field(
         default=50,
         description="Maximum number of replies to return (1-200)",
+    )
+
+
+class PostSlackMessageArgs(BaseModel):
+    """Arguments for posting a message to a Slack channel."""
+    channel_id: str = Field(description="The Slack channel ID to post to (e.g. C01234ABCDE)")
+    text: str = Field(
+        description=(
+            "The message text (Slack mrkdwn). To notify someone, include the <@USERID> "
+            "from the thread or from list_slack_users. A plain @name does not notify. "
+            "Keep it short and human."
+        ),
+    )
+    thread_ts: Optional[str] = Field(
+        default=None,
+        description=(
+            "Timestamp (ts) of an existing message to reply UNDER as a threaded "
+            "reply. Set this to keep a follow-up on a recurring incident in the "
+            "same thread instead of posting a new top-level message. Omit to "
+            "start a new message."
+        ),
     )
 
 
@@ -127,6 +171,92 @@ def list_slack_channels(user_id: str | None = None, **kwargs) -> str:
         return json.dumps({"error": f"Failed to list Slack channels: {e}"})
 
 
+def _slack_name_fields(member: dict) -> tuple[str, str, str]:
+    profile = member.get("profile") or {}
+    display = (profile.get("display_name") or "").strip()
+    real = (profile.get("real_name") or member.get("real_name") or "").strip()
+    source = real or display
+    first = source.split()[0] if source else ""
+    return display, real, first
+
+
+def _matches_name_prefix(member: dict, prefix: str) -> bool:
+    needle = prefix.casefold()
+    return any(
+        value.casefold().startswith(needle)
+        for value in _slack_name_fields(member)
+        if value
+    )
+
+
+def _is_taggable_person(member: dict) -> bool:
+    # Bots and deactivated accounts have no one to notify.
+    if member.get("deleted") or member.get("is_bot"):
+        return False
+    return bool(member.get("id")) and member.get("id") != "USLACKBOT"
+
+
+def list_slack_users(name: str = "", user_id: str | None = None, **kwargs) -> str:
+    """Find people whose name starts with a prefix, with the mention token Slack notifies on."""
+    if not user_id:
+        return json.dumps({"error": _ERR_NO_USER})
+
+    prefix = (name or "").strip()
+    # An empty prefix would page the whole workspace into the prompt.
+    if not prefix:
+        return json.dumps({"error": "name prefix is required, for example 'a' or 'ada'."})
+
+    client = get_slack_client_for_user(user_id)
+    if not client:
+        return json.dumps({"error": _ERR_NOT_CONNECTED})
+
+    matches = []
+    cursor = ""
+    scanned_all = True
+    try:
+        for _ in range(_USER_LIST_MAX_PAGES):
+            params = {"limit": _USER_LIST_PAGE_SIZE}
+            # First page has no cursor; later pages continue where Slack left off.
+            if cursor:
+                params["cursor"] = cursor
+            result = client._make_request("GET", "users.list", params)
+            for member in result.get("members") or []:
+                if not _is_taggable_person(member) or not _matches_name_prefix(member, prefix):
+                    continue
+                display, real, _first = _slack_name_fields(member)
+                matches.append({
+                    "mention": f"<@{member['id']}>",
+                    "display_name": display,
+                    "real_name": real,
+                })
+                # Enough to disambiguate; a longer prefix can narrow further.
+                if len(matches) >= _USER_LIST_MAX_RESULTS:
+                    break
+            # Hit the result cap before the workspace ended — later people may match too.
+            if len(matches) >= _USER_LIST_MAX_RESULTS:
+                scanned_all = False
+                break
+            cursor = (result.get("response_metadata") or {}).get("next_cursor") or ""
+            # Slack signals the last page with an empty cursor.
+            if not cursor:
+                break
+        else:
+            # The page cap ran out with Slack still offering another page.
+            scanned_all = not cursor
+    except Exception as e:
+        logger.info("[SlackTool] Failed to list users: %s", type(e).__name__)
+        return json.dumps({"error": f"Failed to list Slack users: {e}"})
+
+    payload = {"status": "ok", "users": matches, "total": len(matches)}
+    # Page cap hit with workspace still unread — the prefix may be too short.
+    if not scanned_all:
+        payload["truncated"] = True
+        payload["message"] = "Scanned part of the workspace. Pass a longer prefix to narrow it."
+    elif not matches:
+        payload["message"] = f"No one whose name starts with {prefix!r}."
+    return json.dumps(payload)
+
+
 def get_channel_history(
     channel_id: str,
     oldest: Optional[str] = None,
@@ -148,19 +278,26 @@ def get_channel_history(
 
     limit = max(1, min(limit, 200))
 
-    try:
-        params = {
-            "channel": channel_id,
-            "limit": limit,
-        }
-        oldest_ts = _iso_to_slack_ts(oldest)
-        latest_ts = _iso_to_slack_ts(latest)
-        if oldest_ts:
-            params["oldest"] = oldest_ts
-        if latest_ts:
-            params["latest"] = latest_ts
+    params = {
+        "channel": channel_id,
+        "limit": limit,
+    }
+    oldest_ts = _iso_to_slack_ts(oldest)
+    latest_ts = _iso_to_slack_ts(latest)
+    if oldest_ts:
+        params["oldest"] = oldest_ts
+    if latest_ts:
+        params["latest"] = latest_ts
 
-        result = client._make_request("GET", "conversations.history", params)
+    def _fetch():
+        return client._make_request("GET", "conversations.history", params)
+
+    try:
+        # Public channels can be read without an invite: on not_in_channel we
+        # join (conversations.join works for PUBLIC channels only) and retry, so
+        # Aurora can read any public channel it can see — matching how a human
+        # teammate would just open it. Private channels still require an invite.
+        result = _read_with_public_join_retry(client, channel_id, _fetch)
         messages = result.get("messages", [])
 
         formatted = [_format_message(m) for m in messages]
@@ -172,13 +309,45 @@ def get_channel_history(
             "count": len(formatted),
         })
 
+    except SlackAPIError as e:
+        # Private channel Aurora hasn't been invited to (join couldn't recover it).
+        if getattr(e, "error", None) == "not_in_channel":
+            logger.info("[SlackTool] channel history read blocked (private, not invited) for %s", channel_id)
+            return json.dumps({"error": f"Channel {channel_id} is private and the bot hasn't been invited. Invite the bot to read it."})
+        logger.info("[SlackTool] Slack API error reading channel history for %s: %s", channel_id, getattr(e, "error", e))
+        return json.dumps({"error": f"Slack API error: {e}"})
     except ValueError as e:
-        if "not_in_channel" in str(e):
-            return json.dumps({"error": f"Bot is not a member of channel {channel_id}. The bot must be invited to the channel first."})
+        # Transport failure (SlackAPIError's non-membership sibling).
+        logger.info("[SlackTool] transport error reading channel history for %s: %s", channel_id, e)
         return json.dumps({"error": f"Slack API error: {e}"})
     except Exception as e:
         logger.info("[SlackTool] Failed to get channel history for %s", channel_id)
         return json.dumps({"error": f"Failed to fetch channel history: {e}"})
+
+
+def _read_with_public_join_retry(client, channel_id: str, fetch):
+    """Run ``fetch`` (a read call); on not_in_channel, join the PUBLIC channel
+    once and retry.
+
+    Slack's conversations.history/replies require membership. For public
+    channels a bot can self-join via conversations.join (no human invite needed),
+    so Aurora can read any public channel it can see. join_channel returns None
+    for private channels (join isn't supported), so the original not_in_channel
+    error propagates and the caller reports the "invite required" message.
+    """
+    try:
+        return fetch()
+    except SlackAPIError as e:
+        # Only not_in_channel is recoverable by joining; match the error code
+        # structurally (not substring) so transport errors / other API errors
+        # don't accidentally trigger a join+retry. Re-raise everything else.
+        if getattr(e, "error", None) != "not_in_channel":
+            raise
+        joined = client.join_channel(channel_id)  # None ⇒ private / can't join
+        if not joined:
+            raise
+        logger.info("[SlackTool] Joined public channel %s to read it", channel_id)
+        return fetch()
 
 
 def get_thread_replies(
@@ -201,14 +370,19 @@ def get_thread_replies(
 
     limit = max(1, min(limit, 200))
 
-    try:
-        params = {
-            "channel": channel_id,
-            "ts": thread_ts,
-            "limit": limit,
-        }
+    params = {
+        "channel": channel_id,
+        "ts": thread_ts,
+        "limit": limit,
+    }
 
-        result = client._make_request("GET", "conversations.replies", params)
+    def _fetch():
+        return client._make_request("GET", "conversations.replies", params)
+
+    try:
+        # Same public-channel self-join as get_channel_history — read any public
+        # thread even if Aurora hasn't been invited.
+        result = _read_with_public_join_retry(client, channel_id, _fetch)
         messages = result.get("messages", [])
 
         formatted = [_format_message(m) for m in messages]
@@ -221,8 +395,159 @@ def get_thread_replies(
             "count": len(formatted),
         })
 
+    except SlackAPIError as e:
+        # Private channel Aurora hasn't been invited to (join couldn't recover it).
+        if getattr(e, "error", None) == "not_in_channel":
+            logger.info("[SlackTool] thread read blocked (private, not invited) for %s/%s", channel_id, thread_ts)
+            return json.dumps({"error": f"Channel {channel_id} is private and the bot hasn't been invited. Invite the bot to read it."})
+        logger.info("[SlackTool] Slack API error reading thread %s/%s: %s", channel_id, thread_ts, getattr(e, "error", e))
+        return json.dumps({"error": f"Slack API error: {e}"})
     except ValueError as e:
+        # Transport failure (SlackAPIError's non-membership sibling).
+        logger.info("[SlackTool] transport error reading thread %s/%s: %s", channel_id, thread_ts, e)
         return json.dumps({"error": f"Slack API error: {e}"})
     except Exception as e:
         logger.info("[SlackTool] Failed to get thread replies for %s/%s", channel_id, thread_ts)
         return json.dumps({"error": f"Failed to fetch thread replies: {e}"})
+
+
+def post_slack_message(
+    channel_id: str,
+    text: str,
+    thread_ts: Optional[str] = None,
+    user_id: str | None = None,
+    **kwargs,
+) -> str:
+    """Post a message to a Slack channel, optionally as a threaded reply.
+
+    The one write tool on the Slack surface. Never raises — a failure here must
+    not abort the agent loop; it returns a JSON error the agent can react to.
+
+    Membership guard (``_is_member_channel``): the destination must be a channel
+    Aurora is a member of, i.e. an active channel — deactivating a channel is a
+    real ``conversations.leave``. This is NOT redundant with Slack's own
+    ``not_in_channel`` rejection: this tool used to answer ``not_in_channel`` by
+    calling ``conversations.join`` and retrying, so a post aimed at a
+    deactivated *public* channel (a stale "service -> #channel" mapping in the
+    Slack memory, or a name resolved via the live list_slack_channels) would
+    make Aurora silently rejoin the channel it had just been told to leave, and
+    the post would land. Slack won't stop that for us; the guard does, and the
+    auto-join is gone from the write path (reads still self-join public
+    channels, which is harmless). Joining is an explicit user action
+    (activate / invite), never a side effect of posting.
+    """
+    if not user_id:
+        return json.dumps({"error": _ERR_NO_USER})
+    if not channel_id:
+        return json.dumps({"error": "channel_id is required."})
+
+    text = (text or "").strip()
+    if not text:
+        return json.dumps({"error": "text is required and must be non-empty."})
+    # Trim rather than fail: a slightly long teammate note should still land.
+    if len(text) > _MAX_POST_CHARS:
+        text = text[: _MAX_POST_CHARS - 3] + "..."
+
+    is_member = _is_member_channel(user_id, channel_id)
+    if is_member is None:
+        # Lookup failed: still refuse (fail closed), but say so — this is not
+        # evidence the channel is inactive, so the agent must not touch mappings.
+        return json.dumps({
+            "error": f"Could not verify Aurora's membership of channel {channel_id}; message not posted. "
+                     "Transient error, do not change any routing mapping because of it.",
+            "code": "membership_check_failed",
+        })
+    if not is_member:
+        logger.info("[SlackTool] Refused post to non-member channel %s", channel_id)
+        return json.dumps({
+            "error": (
+                f"Aurora is not a member of channel {channel_id} (it was deactivated, "
+                "or never activated). Do not post here and do not try to join it. "
+                "Only post to channels returned by get_connected_slack_channels."
+            ),
+            "code": "channel_not_active",
+        })
+
+    client = get_slack_client_for_user(user_id)
+    if not client:
+        return json.dumps({"error": _ERR_NOT_CONNECTED})
+
+    def _send() -> dict:
+        return client.send_message(channel=channel_id, text=text, thread_ts=thread_ts or None)
+
+    try:
+        response = _send()
+    except SlackAPIError as e:
+        # not_in_channel here means membership changed under us (removed
+        # between the guard and the post). Never join to recover — see the
+        # docstring — just report it.
+        if getattr(e, "error", None) == "not_in_channel":
+            logger.info("[SlackTool] Post refused, Aurora is not in channel %s", channel_id)
+            return json.dumps({
+                "error": f"Aurora is not a member of channel {channel_id}; message not posted.",
+                "code": "channel_not_active",
+            })
+        return json.dumps({"error": f"Slack API error: {e}"})
+    except Exception as e:
+        logger.info("[SlackTool] Failed to post message to %s", channel_id)
+        return json.dumps({"error": f"Failed to post message: {e}"})
+
+    message_ts = (response or {}).get("ts")
+    return json.dumps({
+        "status": "posted",
+        "channel_id": channel_id,
+        "ts": message_ts,
+        # Echo back whether this landed in a thread so the agent knows it did
+        # not add a new top-level message.
+        "threaded": bool(thread_ts),
+    })
+
+
+def _is_member_channel(user_id: str, channel_id: str) -> Optional[bool]:
+    """True if Aurora is a member of ``channel_id`` (an org ``slack_channels``
+    row with ``is_member``), False if not, None if the lookup itself failed.
+
+    Same bar as ``routes.slack.slack_channels._is_active_channel``: membership
+    is the permission to post. See ``registry.channel_membership`` for why a DB
+    error yields None (fail closed, but don't claim the channel is inactive).
+    """
+    from services.channels import registry
+    return registry.channel_membership(user_id, "slack", channel_id)
+
+
+class GetConnectedSlackChannelsArgs(BaseModel):
+    """No required args — reads the org's known channels from context."""
+    pass
+
+
+def get_connected_slack_channels(user_id: str | None = None, **kwargs) -> str:
+    """Return the ACTIVE Slack channels Aurora may post to, each with its description.
+
+    This is the routing-decision source: only channels Aurora is a member of
+    (membership is the source of truth) that have been described
+    (``metadata_status='ready'``) are returned, so the agent routes only to
+    channels it's actually in. Use the descriptions to choose which channel(s)
+    are relevant. Distinct from list_slack_channels (a live, description-less
+    listing of bot memberships).
+    """
+    if not user_id:
+        return json.dumps({"error": _ERR_NO_USER})
+
+    try:
+        from services.channels import registry
+        channels = registry.get_connected_channels(user_id, "slack")
+
+        if not channels:
+            return json.dumps({
+                "channels": [],
+                "message": (
+                    "No active Slack channels yet. Ask the user to activate "
+                    "channels on the Slack manage page (or invite Aurora to them "
+                    "in Slack and refresh), or use list_slack_channels for a live "
+                    "listing."
+                ),
+            })
+        return json.dumps({"channels": channels})
+    except Exception as e:
+        logger.exception("Error fetching connected Slack channels")
+        return json.dumps({"error": f"Failed to fetch connected Slack channels: {e}"})

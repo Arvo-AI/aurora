@@ -39,3 +39,14 @@ def duration_ms(start, end) -> Optional[int]:
 def clamp(value, low: int, high: int) -> int:
     """Clamp an int-coercible value into the inclusive ``[low, high]`` range."""
     return max(low, min(int(value), high))
+
+
+def clamp_int(value, default: int, low: int, high: int) -> int:
+    """``clamp`` that falls back to ``default`` for missing or non-numeric input.
+
+    ``OverflowError`` covers JSON bodies that decode to ``inf`` (``1e400``).
+    """
+    try:
+        return clamp(value, low, high)
+    except (TypeError, ValueError, OverflowError):
+        return default

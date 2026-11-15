@@ -29,9 +29,8 @@ import CitationBadge from './CitationBadge';
 import CitationModal from './CitationModal';
 import SuggestionModal from './SuggestionModal';
 import FixSuggestionModal from './FixSuggestionModal';
-import IncidentFeedback from './IncidentFeedback';
 import CorrelatedAlertsSection from './CorrelatedAlertsSection';
-import RecentAlertsSection from './RecentAlertsSection';
+import OccurrencesSection from './OccurrencesSection';
 import PostmortemPanel from './PostmortemPanel';
 import InfrastructureVisualization from '@/components/incidents/InfrastructureVisualization';
 import IncidentActionRuns from './IncidentActionRuns';
@@ -406,6 +405,14 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
             )}
           </div>
         )}
+
+        {/* Recurrences folded into this anchor (root-cause dedup) */}
+        {incident.occurrences?.length ? (
+          <OccurrencesSection
+            occurrences={incident.occurrences}
+            total={incident.occurrencesTotal ?? incident.occurrences.length}
+          />
+        ) : null}
       </div>
 
       {/* Separator */}
@@ -465,13 +472,6 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
           {incident.correlatedAlerts && incident.correlatedAlerts.length > 0 && (
             <CorrelatedAlertsSection alerts={incident.correlatedAlerts} />
           )}
-
-          {/* Other Recent Alerts - for manual correlation */}
-          <RecentAlertsSection
-            currentIncidentId={incident.id}
-            auroraStatus={incident.auroraStatus}
-            onAlertMerged={onRefresh}
-          />
         </div>
       ) : (
         <div className="text-center py-8 text-zinc-500">
@@ -595,13 +595,6 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
           </button>
 
       </div>
-
-      {/* Feedback Section - only show when analysis is complete */}
-      {incident.auroraStatus === 'complete' && (
-        <div className="mt-6 pt-6 border-t border-zinc-800/50">
-          <IncidentFeedback incidentId={incident.id} readOnly={!canWrite} />
-        </div>
-      )}
 
       {/* Action Runs linked to this incident (collapsible, lazy-loaded) */}
       <div className="collapsible-panel" data-open={showActions}>

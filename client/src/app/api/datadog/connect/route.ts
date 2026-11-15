@@ -25,8 +25,15 @@ export async function POST(request: NextRequest) {
     });
 
     if (!response.ok) {
+      // Forward the parsed body so structured failures (e.g. a 409 label
+      // conflict carrying conflictingLabel) survive. Wrapping the raw text in
+      // { error } instead would stringify the whole JSON object into the message.
       const text = await response.text();
-      return NextResponse.json({ error: text || 'Failed to connect Datadog' }, { status: response.status });
+      try {
+        return NextResponse.json(JSON.parse(text), { status: response.status });
+      } catch {
+        return NextResponse.json({ error: text || 'Failed to connect Datadog' }, { status: response.status });
+      }
     }
 
     const data = await response.json();

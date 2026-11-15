@@ -66,18 +66,23 @@ A clean pick like **Claude Opus 4.7** is then translated to that provider's nati
 | | `openai/gpt-4.1-mini` | Fast and affordable |
 | | `openai/gpt-4o` | Multimodal (text + vision) |
 | | `openai/gpt-4o-mini` | Cheapest OpenAI option |
-| **Anthropic** | `anthropic/claude-opus-4.6` | Most capable, 1M context |
-| | `anthropic/claude-sonnet-4.6` | Near Opus quality at lower cost |
+| **Anthropic** | `anthropic/claude-fable-5.1` | Most capable, 1M context |
+| | `anthropic/claude-opus-5.5` | Default — high capability, 1M context |
+| | `anthropic/claude-sonnet-5` | Near Opus quality at lower cost |
+| | `anthropic/claude-opus-4.6` | Previous generation flagship |
+| | `anthropic/claude-sonnet-4.6` | Previous generation balanced |
 | | `anthropic/claude-opus-4.5` | Previous generation flagship |
 | | `anthropic/claude-sonnet-4.5` | Balanced quality and speed |
-| | `anthropic/claude-haiku-4.5` | Fast, affordable |
+| | `anthropic/claude-haiku-5.5` | Fast, affordable |
 | | `anthropic/claude-3.5-sonnet` | Widely used, reliable |
-| | `anthropic/claude-3-haiku` | Cheapest (default RCA model) |
-| **Google Gemini** | `google/gemini-3.5-flash` | Fast, cost-effective with thinking |
-| | `google/gemini-3.1-pro-preview` | Latest flagship with thinking |
+| | `anthropic/claude-3-haiku` | Legacy Claude 3 |
+| **Google Gemini** | `google/gemini-4-argon` | Frontier model for hard coding and agent tasks |
+| | `google/gemini-3.5-flash` | Fast, cost-effective with thinking |
+| | `google/gemini-3.1-pro-preview` | Previous flagship with thinking |
 | | `google/gemini-2.5-pro` | Strong for complex tasks |
 | | `google/gemini-2.5-flash` | Cost-effective |
-| **Vertex AI** | `vertex/gemini-3.6-flash` | Latest Flash — agentic workflows, coding, multimodal (thinking) |
+| **Vertex AI** | `vertex/gemini-4-argon` | Frontier model for hard coding and agent tasks |
+| | `vertex/gemini-3.6-flash` | Latest Flash — agentic workflows, coding, multimodal (thinking) |
 | | `vertex/gemini-3.5-flash-lite` | Fastest, lowest-cost — high-throughput workloads |
 | | `vertex/gemini-3.5-flash` | Previous Flash generation (still supported in env vars) |
 | | `vertex/gemini-3.1-pro-preview` | Strong reasoning with thinking |
@@ -87,7 +92,7 @@ A clean pick like **Claude Opus 4.7** is then translated to that provider's nati
 | | `ollama/qwen2.5` | Alibaba's Qwen 2.5 (various sizes) |
 | | Any model via `ollama pull` | |
 | **AWS Bedrock** | `bedrock/us.anthropic.claude-sonnet-4-5-v1:0` | Native mode: a Bedrock **inference-profile** id (region-prefixed `us.`/`eu.`/`apac.`) |
-| | `bedrock/us.anthropic.claude-haiku-4-5-v1:0` | Faster, cheaper Claude on Bedrock |
+| | `bedrock/us.anthropic.claude-haiku-5-5` | Faster, cheaper Claude on Bedrock |
 | | Gateway: the model name your gateway expects | Gateway mode passes the suffix through to your OpenAI-compatible endpoint |
 
 Model names use the `provider/model` format. New models from each provider are generally supported automatically — update the relevant env var (`MAIN_MODEL`, `RCA_MODEL`) or select chat models in the UI.
@@ -250,8 +255,15 @@ BEDROCK_SECRET_ACCESS_KEY=...
 
 # Recommended: route every model pick through Bedrock with clean model names.
 LLM_PROVIDER_MODE=bedrock
-MAIN_MODEL=anthropic/claude-sonnet-4.6   # auto-translated to us.anthropic.claude-sonnet-4-6
+MAIN_MODEL=anthropic/claude-sonnet-5   # auto-translated to us.anthropic.claude-sonnet-5
 ```
+
+**Inference-profile geo:** the geo prefix (`us.` / `eu.` / `apac.`) is derived from
+`BEDROCK_REGION`. Set `BEDROCK_REGION=global` to use the `global.` profiles instead,
+which bill at the direct list price rather than the ~10% cross-region (geo CRIS)
+premium; boto3 still signs against `AWS_REGION` / `AWS_DEFAULT_REGION` (default
+`us-east-1`). Claude Fable 5 / 5.1 are only published as `us.` and `global.` profiles,
+so on an EU or APAC install those two automatically route to `global.`.
 
 **Requirements (native mode):**
 - A Bedrock-enabled AWS account with access to the chosen model granted in the Bedrock console.
@@ -267,18 +279,18 @@ Background RCA uses the single-agent path by default (`ORCHESTRATOR_ENABLED=fals
 
 ### Single-agent RCA (default)
 
-By default, Aurora uses `anthropic/claude-haiku-4.5` for background Root Cause Analysis. You can change this to any supported provider/model.
+By default, Aurora uses `anthropic/claude-haiku-5.5` for background Root Cause Analysis. You can change this to any supported provider/model.
 
 ```bash
 # Format: provider/model-name
-RCA_MODEL=anthropic/claude-haiku-4.5
+RCA_MODEL=anthropic/claude-haiku-5.5
 ```
 
 **Examples:**
 
 ```bash
 # Anthropic (default)
-RCA_MODEL=anthropic/claude-haiku-4.5
+RCA_MODEL=anthropic/claude-haiku-5.5
 
 # OpenAI
 RCA_MODEL=openai/gpt-4o
@@ -293,12 +305,12 @@ RCA_MODEL=vertex/gemini-3.6-flash
 RCA_MODEL=ollama/llama3.1
 
 # AWS Bedrock (native — inference-profile id)
-RCA_MODEL=bedrock/us.anthropic.claude-haiku-4-5-v1:0
+RCA_MODEL=bedrock/us.anthropic.claude-haiku-5-5
 ```
 
 When `RCA_MODEL` is not set, the default depends on `RCA_OPTIMIZE_COSTS`:
-- `RCA_OPTIMIZE_COSTS=true` (default): Uses `anthropic/claude-haiku-4.5`
-- `RCA_OPTIMIZE_COSTS=false`: Uses `anthropic/claude-opus-4.6`
+- `RCA_OPTIMIZE_COSTS=true` (default): Uses `anthropic/claude-haiku-5.5`
+- `RCA_OPTIMIZE_COSTS=false`: Uses `anthropic/claude-opus-5.5`
 
 ### Multi-agent orchestrator
 
@@ -342,11 +354,28 @@ The safety judge model can be any provider supported above. A fast, cheap, **non
 The Next Steps recommender polishes suggestion descriptions and summaries with a separate, lightweight model.
 
 ```bash
-# Defaults to anthropic/claude-haiku-4.5 when unset.
-ENRICHMENT_MODEL=anthropic/claude-haiku-4.5
+# Defaults to anthropic/claude-haiku-5.5 when unset.
+ENRICHMENT_MODEL=anthropic/claude-haiku-5.5
 ```
 
 This is light text-formatting work (turning validated fixes into readable descriptions), so a small, cheap model is recommended. Same `provider/model` format as `MAIN_MODEL`.
+
+## Memory Selector Model
+
+On every turn Aurora asks a model which memories to inject. That call has about six seconds. The loader used to return only the newest 200 memories, so anything older in a large bank never reached the model. Unset, the selector uses a small model the active provider can already call.
+
+```bash
+# Optional. Same provider/model format as MAIN_MODEL.
+# Unset: Gemini 3.5 Flash-Lite on Google/OpenRouter/Vertex, Haiku 5.5 on
+# Anthropic and on LLM_PROVIDER_MODE=bedrock, GPT-5.6 Luna on OpenAI.
+# Ollama uses MAIN_MODEL when that id is ollama/<installed-model>.
+# Bedrock gateway (LLM_PROVIDER_MODE=direct and MAIN_MODEL=bedrock/<id>)
+# stays on that gateway id. Pin a fast one explicitly:
+# MEMORY_SELECTOR_MODEL=bedrock/us.anthropic.claude-haiku-5-5
+MEMORY_SELECTOR_MODEL=google/gemini-3.5-flash-lite
+```
+
+Use a small model. Flash-Lite still thinks at its minimum setting, so the selector leaves room in the output cap for those tokens plus the JSON. The selector also ranks the bank down to 100 candidates before the call, so a few hundred memories still fit in the window.
 
 ## Troubleshooting
 

@@ -37,12 +37,20 @@ _TOOL_NAME_MAPPING: Dict[str, str] = {
     "cloudbees_rca": "CloudBees RCA",
     "tailscale_ssh": "Tailscale SSH",
     "analyze_zip_file": "ZIP Analyzer",
-    "rag_index_zip": "RAG Indexer",
-    "knowledge_base_search": "Knowledge Base",
-    "save_discovery_finding": "Discovery Finding",
+    "list_memories": "Memory",
+    "read_memory": "Memory",
+    "write_memory": "Memory",
+    "append_to_memory": "Memory",
+    "edit_memory": "Memory",
+    "grep_memories": "Memory",
     "search_splunk": "Splunk Search",
     "list_splunk_indexes": "Splunk Indexes",
     "list_splunk_sourcetypes": "Splunk Sourcetypes",
+    "elastic_search_logs": "Elastic Logs",
+    "elastic_esql": "Elastic ES|QL",
+    "elastic_get_alerts": "Elastic Alerts",
+    "elastic_list_indices": "Elastic Indices",
+    "elastic_get_fields": "Elastic Fields",
     "query_dynatrace": "Dynatrace",
     "query_datadog": "Datadog",
     "query_newrelic": "New Relic",
@@ -50,6 +58,13 @@ _TOOL_NAME_MAPPING: Dict[str, str] = {
     "list_incidentio_incidents": "incident.io",
     "get_incidentio_incident": "incident.io",
     "get_incidentio_timeline": "incident.io Timeline",
+    "list_incidentio_alerts": "incident.io Alerts",
+    "get_incidentio_alert": "incident.io Alert",
+    "list_servicenow_incidents": "ServiceNow",
+    "get_servicenow_incident": "ServiceNow",
+    "servicenow_add_work_note": "ServiceNow",
+    "servicenow_create_incident": "ServiceNow",
+    "servicenow_update_incident": "ServiceNow",
     "confluence_runbook_parse": "Confluence Runbook",
     "confluence_search_similar": "Confluence Search",
     "confluence_search_runbooks": "Confluence Runbooks",
@@ -100,6 +115,15 @@ _TOOL_NAME_MAPPING: Dict[str, str] = {
     "coroot_get_node_detail": "Coroot Node Detail",
     "coroot_get_costs": "Coroot Costs",
     "coroot_get_risks": "Coroot Risks",
+    "rabbitmq_get_overview": "RabbitMQ Overview",
+    "rabbitmq_list_nodes": "RabbitMQ Nodes",
+    "rabbitmq_list_queues": "RabbitMQ Queues",
+    "rabbitmq_get_queue": "RabbitMQ Queue",
+    "rabbitmq_list_exchanges": "RabbitMQ Exchanges",
+    "rabbitmq_list_bindings": "RabbitMQ Bindings",
+    "rabbitmq_list_connections": "RabbitMQ Connections",
+    "rabbitmq_list_consumers": "RabbitMQ Consumers",
+    "rabbitmq_health_checks": "RabbitMQ Health",
 }
 
 # Internal coordination tools that show up as tool messages but aren't real
@@ -288,6 +312,7 @@ class CitationExtractor:
                 continue
 
             command = self._extract_command(call_info.get("args", {}), content, tool_name)
+            command = self._with_splunk_instance(tool_name, command, call_info.get("args", {}), content)
             output = self._extract_output(content)
             if not output or output.strip() == "":
                 continue
@@ -341,9 +366,11 @@ class CitationExtractor:
             # `command` is captured server-side before args truncation; prefer
             # it. Fall back to parsing args/output for entries without it.
             command = entry.get("command") or ""
+            args = self._parse_history_args(entry.get("args") or entry.get("input"))
+            # Stored command is the SPL text. The instance is on the result.
             if not command:
-                args = self._parse_history_args(entry.get("args") or entry.get("input"))
                 command = self._extract_command(args, output_excerpt, inner_tool)
+            command = self._with_splunk_instance(inner_tool, command, args, output_excerpt)
             started_at = entry.get("started_at")
             rows.append({
                 "tool_name": self._normalize_tool_name(inner_tool),
@@ -407,6 +434,68 @@ class CitationExtractor:
             pass
 
         return "Command not available"
+
+    @staticmethod
+    def _with_splunk_instance(tool_name: str, command: str, args: Any, content: str) -> str:
+        """Append the Splunk instance a search, index, or sourcetype call used."""
+        if tool_name not in ("search_splunk", "list_splunk_indexes", "list_splunk_sourcetypes"):
+            return command
+        label = CitationExtractor._splunk_instance_label(args, content)
+        if not label or label in command:
+            return command
+        return f"{command} on {label}"
+
+    @staticmethod
+    def _splunk_instance_label(args: Any, content: str) -> str:
+        parsed: Any = None
+        if isinstance(content, str) and content:
+            try:
+                parsed = json.loads(content)
+            except (json.JSONDecodeError, TypeError):
+                parsed = None
+        elif isinstance(content, dict):
+            parsed = content
+
+        # The tool result lists every instance the call talked to.
+        if isinstance(parsed, dict):
+            instances = parsed.get("instances")
+            if isinstance(instances, list) and instances:
+                labels = [CitationExtractor._one_splunk_label(item) for item in instances]
+                joined = ", ".join(label for label in labels if label)
+                if joined:
+                    return joined
+            by_account = parsed.get("results_by_account")
+            if isinstance(by_account, dict) and by_account:
+                labels = []
+                for account_id, item in by_account.items():
+                    server_name = item.get("server_name") if isinstance(item, dict) else ""
+                    labels.append(CitationExtractor._format_splunk_label(str(account_id), server_name or ""))
+                return ", ".join(labels)
+            if parsed.get("account_id"):
+                return CitationExtractor._format_splunk_label(
+                    str(parsed.get("account_id")),
+                    str(parsed.get("server_name") or ""),
+                )
+
+        # Result not stored yet — use the account the model asked for.
+        if isinstance(args, dict) and args.get("account_id"):
+            return str(args["account_id"])
+        return ""
+
+    @staticmethod
+    def _one_splunk_label(item: Any) -> str:
+        if not isinstance(item, dict):
+            return ""
+        account_id = item.get("account_id")
+        if not account_id:
+            return ""
+        return CitationExtractor._format_splunk_label(str(account_id), str(item.get("server_name") or ""))
+
+    @staticmethod
+    def _format_splunk_label(account_id: str, server_name: str) -> str:
+        if server_name and server_name != account_id:
+            return f"{server_name} ({account_id})"
+        return account_id
 
     def _extract_output(self, content: str) -> str:
         """Extract the meaningful output from tool response."""

@@ -2,15 +2,20 @@
 
 OAuth 2.0 or API Token authentication for PagerDuty.
 
+This directory is documentation only; the connector code lives in `server/routes/pagerduty/` and the RCA note writer in `server/utils/notifications/pagerduty_notification_service.py`.
+
 ## Authentication
 
 ### Option A: API Token (Recommended for Development)
 
-1. Go to [PagerDuty](https://app.pagerduty.com/) > **Integrations** > **API Access Keys**
-2. Click **Create New API Key**
-3. Select either **Read** or **Write** permissions (both work fine)
-4. Copy the generated API token
-5. Enter the token via the Aurora UI when connecting PagerDuty
+Use a **user API token** from a PagerDuty user with write access (Responder or higher); a dedicated "Aurora" user is recommended.
+
+1. In PagerDuty, go to **User Icon** > **My Profile** > **User Settings** > **API Access**
+2. Click **Create API User Token**
+3. Copy the generated API token
+4. Enter the token via the Aurora UI when connecting PagerDuty
+
+A read-only or account-level key still works for reading incidents and triggering RCA, but cannot post RCA notes back to PagerDuty, and the **RCA Notes** toggle stays disabled.
 
 ### Option B: OAuth
 
@@ -20,7 +25,7 @@ OAuth 2.0 or API Token authentication for PagerDuty.
 2. Click **Create New App**
    - Name: `Aurora`
    - Enable **OAuth 2.0**
-   - Redirect URL: `http://localhost:5000/pagerduty/oauth/callback`
+   - Redirect URL: `http://localhost:5080/pagerduty/oauth/callback` (must match `NEXT_PUBLIC_BACKEND_URL` + `/pagerduty/oauth/callback` exactly)
 3. Copy the **Client ID** and **Client Secret**
 
 #### 2. Configure `.env`
@@ -39,7 +44,7 @@ For local development, PagerDuty webhooks cannot reach `localhost:5080` directly
 
 #### 1. Generate API Token in PagerDuty
 
-First, ensure you have generated an API token in PagerDuty (see [Authentication](#authentication) above). Either **Read** or **Write** permissions work fine.
+First, ensure you have generated an API token in PagerDuty (see [Authentication](#authentication) above). Any token works for receiving webhooks; only RCA notes need a write-capable user token.
 
 #### 2. Set Up Port Forwarding
 

@@ -6,9 +6,11 @@ import requests
 from typing import Any, Optional, Tuple
 
 from utils.db.connection_pool import db_pool
+from utils.db.org_scope import resolve_org, org_read_predicate
 from utils.log_sanitizer import sanitize
 from utils.secrets.secret_ref_utils import delete_user_secret
 from utils.auth.token_management import get_token_data
+from utils.ssh.session_reply import session_reply_result
 from utils.ssh.ssh_jump_parser import SSHJumpConfig, parse_ssh_jump_command
 
 logger = logging.getLogger(__name__)
@@ -130,17 +132,21 @@ def load_user_private_key(user_id: str, ssh_key_id: int) -> str:
     Raises:
         ValueError: if the key does not exist for the user or no private key is stored.
     """
+    predicate, pred_params = org_read_predicate(user_id, resolve_org(user_id))
     with db_pool.get_user_connection() as conn:
         with conn.cursor() as cur:
             from utils.auth.stateless_auth import set_rls_context
             set_rls_context(cur, conn, user_id, log_prefix="[SSHUtils]")
+            # Org-shared, but only Aurora SSH rows — other connector secrets stay out
             cur.execute(
-                """
+                f"""
                 SELECT provider
                 FROM user_tokens
-                WHERE id = %s AND user_id = %s AND is_active = TRUE
+                WHERE id = %s AND {predicate}
+                  AND provider LIKE 'aurora_ssh%%'
+                  AND is_active = TRUE
                 """,
-                (ssh_key_id, user_id),
+                (ssh_key_id, *pred_params),
             )
             row = cur.fetchone()
             if not row:
@@ -287,7 +293,12 @@ def validate_and_test_ssh(
 
     try:
         if jump_command:
-            jump_cfg: SSHJumpConfig = parse_ssh_jump_command(jump_command)
+            # Parser messages name the bad flag. Other failures stay generic.
+            try:
+                jump_cfg: SSHJumpConfig = parse_ssh_jump_command(jump_command)
+            except ValueError as e:
+                logger.error(f"SSH jump command invalid: {e}")
+                return False, str(e), None
             target_host = jump_cfg.target_host or target_host
             if jump_cfg.target_port is not None:
                 target_port = jump_cfg.target_port
@@ -363,21 +374,52 @@ def validate_and_test_ssh(
                 allow_agent=False,
             )
 
-        # Verify connection by running a command
-        stdin, stdout, stderr = ssh.exec_command("whoami", timeout=5)
-        result = stdout.read().decode().strip()
-        error_output = stderr.read().decode().strip()
+        # whoami proves the session can carry a command. Network OSes have no
+        # such command; their error text is still a live channel.
+        result = ""
+        error_output = ""
+        channel_error = None
+        exec_rejected = False
+        try:
+            _stdin, stdout, stderr = ssh.exec_command("whoami", timeout=5)
+        except socket.timeout as exc:
+            # The channel never opened. That is not a server refusing the command.
+            channel_error = exc
+        except paramiko.ChannelException as exc:
+            # The session channel never opened. That is not an exec refusal.
+            channel_error = exc
+        except paramiko.SSHException as exc:
+            # Paramiko also reports a channel-open timeout as SSHException.
+            if "timeout" in str(exc).lower():
+                channel_error = exc
+            else:
+                # connect() already authenticated. Some servers refuse the exec request.
+                exec_rejected = True
+        else:
+            try:
+                result = stdout.read().decode(errors="replace").strip()
+                error_output = stderr.read().decode(errors="replace").strip()
+            except (socket.timeout, paramiko.SSHException, OSError) as exc:
+                channel_error = exc
+
+        transport = ssh.get_transport()
+        success, error_msg, connected_as = session_reply_result(
+            result,
+            error_output,
+            target_user,
+            transport_active=transport is not None and transport.is_active(),
+            channel_error=channel_error is not None,
+            exec_rejected=exec_rejected,
+        )
+        # Timeout, or a dead transport with no reply
+        if not success:
+            detail = f" ({channel_error})" if channel_error else ""
+            logger.warning(f"{error_msg}{detail}")
+            return False, error_msg, None
 
         logger.info(f"SSH command result: '{result}', error: '{error_output}'")
-
-        # Compare against target_user which may differ from username when using jump commands
-        if result == target_user:
-            logger.info(f"SSH authentication successful! Connected as: {result}")
-            return True, None, result
-        else:
-            error_msg = f"SSH connection succeeded but unexpected user: {result} (expected {target_user})"
-            logger.warning(error_msg)
-            return False, error_msg, None
+        logger.info(f"SSH authentication successful! Connected as: {connected_as}")
+        return True, None, connected_as
 
     except socket.timeout:
         error_msg = "SSH connection timeout. The server may not be accessible or SSH port may be blocked by firewall."
@@ -392,11 +434,13 @@ def validate_and_test_ssh(
         logger.error(f"Socket error to {target_host}: {e}")
         return False, error_msg, None
     except paramiko.SSHException as e:
-        error_msg = f"SSH connection error: {str(e)}. The server may not be ready or SSH service may not be running."
+        # Protocol errors can embed internal detail; the client gets a fixed message
+        error_msg = "SSH connection error. The server may not be ready or SSH service may not be running."
         logger.error(f"SSH protocol error to {target_host}: {e}", exc_info=True)
         return False, error_msg, None
     except Exception as e:
-        error_msg = f"An unexpected error occurred: {str(e)}"
+        # Unexpected failures must not return exception text to the caller
+        error_msg = "An unexpected error occurred during the SSH connection."
         logger.error(f"Unexpected SSH error to {target_host}: {e}", exc_info=True)
         return False, error_msg, None
     finally:

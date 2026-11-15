@@ -14,6 +14,16 @@ Aurora connects to your Datadog via two data paths:
 1. **Webhooks (push):** Datadog sends alert payloads to Aurora when your monitors fire.
 1. **API queries (pull):** Aurora's RCA agent queries your Datadog for logs, metrics, traces, events, monitors, hosts, and incidents.
 
+:::danger Configure every connected organization
+Every control in this guide — Sensitive Data Scanner rules, the `Aurora Restricted` role,
+restriction queries, the dedicated service account — is per organization. Child organizations
+do not inherit them from the parent.
+
+Aurora queries whichever connected organization matches the alert, so unfiltered PII in
+**any** of them can reach Aurora. Hardening only some provides no guarantee: repeat this
+guide for each, and audit the list on Aurora's Datadog page against what you have hardened.
+:::
+
 ## Architecture
 
 ```mermaid
@@ -22,7 +32,7 @@ flowchart TB
         raw["Raw Data with PII"]
     end
 
-    subgraph datadog["Your Datadog Org"]
+    subgraph datadog["Each Connected Datadog Org"]
         sds["Sensitive Data Scanner"]
         stored["Stored Data — PII hashed/masked"]
         rbac["RBAC Restricted Dataset"]

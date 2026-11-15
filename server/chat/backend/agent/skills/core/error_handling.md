@@ -1,6 +1,6 @@
 LONG-RUNNING OPERATIONS & TIMEOUTS:
-- Default tool timeouts are ~300 seconds. When a workflow (cluster creation, RDS/SQL provisioning, managed service rollouts, etc.) is expected to take longer, explicitly raise the `timeout` argument to cover the full 20-40+ minute window.
-- Before launching a heavy task, set a generous timeout on the command/tool call instead of relying on the default.
+- Default tool timeouts are ~300 seconds. A caller `timeout` is capped at 600 seconds, so one command cannot run until the investigation is killed.
+- Cluster and database creates already wait up to 1200 seconds when `timeout` is omitted. Passing `timeout` replaces that wait and is still capped at 600.
 
 ERROR HANDLING & PERSISTENCE - CRITICAL:
 - NEVER finish a workflow silently when a tool returns an error

@@ -5,6 +5,8 @@ import sys
 import logging
 from dotenv import load_dotenv
 
+from routes.slack.slack_backfill_config import BACKFILL_INTERVAL_SECONDS
+
 # ------------------------------------------------------------
 # Configure root logger BEFORE Celery starts.
 # Uses stdout-only logging for container-native log aggregation.
@@ -38,6 +40,45 @@ celery_app = Celery('aurora_tasks',
                     broker=redis_url,
                     backend=redis_url)
 
+# ------------------------------------------------------------
+# Tolerant result serializer.
+#
+# Background chat tasks run heavy async streaming; a cancelled coroutine can
+# leave an ``asyncio.CancelledError`` embedded in the task's result/meta. The
+# stock kombu JSON encoder then dies at RESULT-STORE time with
+# ``EncodeError: Object of type CancelledError is not JSON serializable`` — a
+# failure that happens AFTER the task body ran (in a pool callback), so it
+# can't be caught by our task-level try/except and it poisons the result
+# backend. Register a JSON serializer that stringifies any unknown object
+# instead of raising, and use it for results so storing a result can never
+# crash. Task *inputs* stay on strict 'json' (we control those payloads).
+# ------------------------------------------------------------
+try:
+    import json as _json
+    from kombu.serialization import register as _kombu_register
+
+    def _tolerant_json_dumps(obj):
+        # default=str: any non-JSON leaf (exceptions, objects) becomes its repr
+        # rather than raising, so result encoding is always safe.
+        return _json.dumps(obj, default=str)
+
+    _kombu_register(
+        "json-tolerant",
+        _tolerant_json_dumps,
+        _json.loads,
+        content_type="application/x-json-tolerant",
+        content_encoding="utf-8",
+    )
+    _RESULT_SERIALIZER = "json-tolerant"
+except Exception as _ser_err:  # pragma: no cover - never block worker startup
+    # Registration failed — fall back to the built-in 'json' serializer so the
+    # config below never references an unregistered serializer (which would make
+    # result storage fail at lookup time).
+    _RESULT_SERIALIZER = "json"
+    logging.getLogger(__name__).warning(
+        "Could not register tolerant JSON serializer; falling back to 'json': %s", _ser_err
+    )
+
 # Configure SSL for Redis broker/backend when using rediss:// scheme
 if redis_url.startswith('rediss://'):
     import ssl as _ssl
@@ -65,8 +106,9 @@ if redis_url.startswith('rediss://'):
 # Configure Celery
 celery_app.conf.update(
     task_serializer='json',
-    accept_content=['json'],
-    result_serializer='json',
+    accept_content=['json', 'json-tolerant'],
+    result_serializer=_RESULT_SERIALIZER,
+    result_accept_content=['json', 'json-tolerant'],
     timezone='UTC',
     enable_utc=True,
     task_track_started=True,
@@ -75,6 +117,21 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,  # Process one task at a time
     broker_connection_retry_on_startup=True,  # Explicitly enable for Celery 6.0+
     result_expires=3600,  # Expire task results after 1 hour (backend= is set above)
+    # ponytail: workers listen `-Q high,celery` (high first). Interactive
+    # Bitbucket Incident Prevention must not sit behind a Save of N metadata jobs.
+    task_routes={
+        "bitbucket.enable_change_gating_bulk": {"queue": "high"},
+        # Same reason: a user clicking "Activate" on the Slack manage page must not
+        # queue behind the description backfill, which can hold hundreds of
+        # generate_channel_metadata jobs in the default queue (observed: an
+        # activation sat at position 289/453, ~85 min behind).
+        "routes.slack.slack_channel_metadata.bulk_activate_channels_task": {"queue": "high"},
+        # Someone just clicked "See a demo incident" and is watching the thread.
+        "routes.slack.slack_onboarding.run_demo_incident_task": {"queue": "high"},
+        "routes.slack.slack_onboarding.publish_home_task": {"queue": "high"},
+        "routes.slack.slack_onboarding.send_welcome_dm_task": {"queue": "high"},
+        "routes.teams.teams_channel_metadata.bulk_activate_channels_task": {"queue": "high"},
+    },
     # Explicitly include task modules from their new locations
     include=[
         'connectors.gcp_connector.gcp_post_auth_tasks',
@@ -83,6 +140,7 @@ celery_app.conf.update(
         'routes.datadog.tasks',
         'routes.netdata.tasks',
         'routes.splunk.tasks',
+        'routes.elastic.tasks',
         'routes.dynatrace.tasks',
         'routes.bigpanda.tasks',
         'routes.pagerduty.tasks',
@@ -93,21 +151,28 @@ celery_app.conf.update(
         'routes.jira.tasks',
         'routes.spinnaker.tasks',
         'routes.incidentio.tasks',
+        'routes.servicenow.tasks',
+        'routes.slack.slack_onboarding',
         'utils.terminal.terminal_pod_cleanup',
         'chat.background.task',
         'chat.background.summarization',
         'chat.background.visualization_generator',
         'chat.background.prediscovery_task',
-        'routes.knowledge_base.tasks',
+        'services.memory.migration_task',
+        'services.memory.collector',
         'services.discovery.tasks',
         'utils.aws.credential_refresh',
         'routes.aws.cloudwatch_tasks',
         'tasks.github_webhook_tasks',
         'tasks.bitbucket_webhook_tasks',
         'tasks.change_gating',
+        'routes.bitbucket.bitbucket_selection',
         'routes.github.github_repo_metadata',
+        'routes.slack.slack_channel_metadata',
+        'routes.teams.teams_channel_metadata',
         'utils.repo_metadata',
         'services.actions.scheduler',
+        'services.connectors.heal',
     ],
     # Periodic task schedule
     beat_schedule={
@@ -118,10 +183,6 @@ celery_app.conf.update(
         'cleanup-stale-background-chats': {
             'task': 'chat.background.cleanup_stale_sessions',
             'schedule': 300.0,  # Every 5 minutes
-        },
-        'cleanup-stale-kb-documents': {
-            'task': 'knowledge_base.cleanup_stale_documents',
-            'schedule': 180.0,  # Every 3 minutes
         },
         'run-full-discovery': {
             'task': 'services.discovery.tasks.run_full_discovery',
@@ -142,6 +203,30 @@ celery_app.conf.update(
         'run-scheduled-actions': {
             'task': 'services.actions.scheduler.run_scheduled_actions',
             'schedule': 60.0,  # Check every minute
+        },
+        # Safety net for connector rows whose owner was removed outside the
+        # member-deletion path. Not on the minute action tick.
+        'reassign-orphaned-connectors': {
+            'task': 'services.connectors.heal.reassign_orphaned_connectors',
+            'schedule': 3600.0,
+        },
+        # Safety net so every Slack channel Aurora is a member of eventually gets
+        # an LLM description (agent routing only offers described channels).
+        # Reconcile passes are user-triggered and capped per pass, so without this
+        # the tail of a large membership stays invisible to routing.
+        'backfill-slack-channel-descriptions': {
+            'task': 'routes.slack.slack_channel_metadata.backfill_channel_descriptions',
+            'schedule': BACKFILL_INTERVAL_SECONDS,  # Every 15 minutes
+        },
+        # Safety net so GitHub repos missed by an import or a webhook still
+        # get PR reviews (new repos, imports that hit a GitHub outage).
+        'sync-github-installation-repos': {
+            'task': 'routes.github.github_repo_metadata.sync_installation_repos',
+            'schedule': 3600.0,
+        },
+        'backfill-teams-channel-descriptions': {
+            'task': 'routes.teams.teams_channel_metadata.backfill_channel_descriptions',
+            'schedule': BACKFILL_INTERVAL_SECONDS,
         },
     },
     beat_schedule_filename='celerybeat-schedule',
@@ -182,6 +267,12 @@ try:
     logging.info("PagerDuty tasks imported successfully")
 except ImportError as e:
     logging.warning(f"Failed to import PagerDuty tasks: {e}")
+
+try:
+    import routes.servicenow.tasks  # noqa: F401
+    logging.info("ServiceNow tasks imported successfully")
+except ImportError as e:
+    logging.warning(f"Failed to import ServiceNow tasks: {e}")
 
 try:
     import routes.opsgenie.tasks  # noqa: F401
@@ -242,6 +333,12 @@ try:
     logging.info("GitHub repo metadata task imported successfully")
 except ImportError as e:
     logging.warning(f"Failed to import GitHub repo metadata task: {e}")
+
+try:
+    importlib.import_module("routes.slack.slack_channel_metadata")  # registers Celery task
+    logging.info("Slack channel metadata task imported successfully")
+except ImportError as e:
+    logging.warning(f"Failed to import Slack channel metadata task: {e}")
 
 # Log the number of registered tasks for debugging
 if hasattr(celery_app, 'tasks'):

@@ -12,24 +12,45 @@ logger = logging.getLogger(__name__)
 
 
 class PagerDutyAPIError(Exception):
-    """PagerDuty API error."""
+    """PagerDuty API error.
+
+    status_code is the HTTP status PagerDuty answered with, or None when no
+    response arrived (timeout, connection reset): the request's outcome is
+    then unknown to the caller.
+    """
+
+    def __init__(self, message: str, status_code: Optional[int] = None):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+# Base roles that cannot modify incidents (add notes). Observer/restricted_access
+# may hold object-level write roles, but /users/me does not expose those, so
+# they are denied here; a team-level restriction on a write role surfaces as a
+# 403 at post time instead.
+PD_READ_ONLY_ROLES = frozenset({"read_only_user", "read_only_limited_user", "observer", "restricted_access"})
 
 
 class PagerDutyClient:
     """PagerDuty API client."""
     
-    def __init__(self, api_token: str = None, oauth_token: str = None):
+    def __init__(self, api_token: str = None, oauth_token: str = None, from_email: str = None):
         self.token = oauth_token if oauth_token else api_token
         self.is_oauth = bool(oauth_token)
+        self.from_email = from_email
         self.base_url = "https://api.pagerduty.com"
     
     @property
     def headers(self) -> Dict[str, str]:
         auth = f"Bearer {self.token}" if self.is_oauth else f"Token token={self.token}"
-        return {
+        headers = {
             "Accept": "application/vnd.pagerduty+json;version=2",
             "Authorization": auth,
         }
+        if self.from_email:
+            # Required by write endpoints (e.g. create note): the user recorded as the actor
+            headers["From"] = self.from_email
+        return headers
     
     def _request(self, method: str, path: str, **kwargs) -> requests.Response:
         try:
@@ -40,9 +61,9 @@ class PagerDutyClient:
             if hasattr(e, 'response') and e.response is not None:
                 status_code = e.response.status_code
                 if status_code == 429:
-                    raise PagerDutyAPIError("Rate limited")
+                    raise PagerDutyAPIError("Rate limited", status_code)
                 elif status_code == 401:
-                    raise PagerDutyAPIError("Unauthorized: Invalid or expired API token")
+                    raise PagerDutyAPIError("Unauthorized: Invalid or expired API token", status_code)
                 elif status_code == 400:
                     # Extract error message for account-level token detection
                     try:
@@ -55,16 +76,26 @@ class PagerDutyClient:
                             error_msg = 'Bad Request'
                     except (ValueError, KeyError):
                         error_msg = 'Bad Request: Invalid token format'
-                    raise PagerDutyAPIError(error_msg)
+                    raise PagerDutyAPIError(error_msg, status_code)
                 elif status_code == 403:
-                    raise PagerDutyAPIError("Forbidden: Token lacks required permissions")
+                    raise PagerDutyAPIError("Forbidden: Token lacks required permissions", status_code)
                 else:
-                    raise PagerDutyAPIError(str(e))
+                    raise PagerDutyAPIError(str(e), status_code)
             else:
                 raise PagerDutyAPIError(str(e))
     
     def get_current_user(self) -> Dict[str, Any]:
         return self._request("GET", "/users/me").json()
+    
+    def create_note(self, incident_id: str, content: str) -> Dict[str, Any]:
+        """Add a note to an incident (needs incidents.write and a From header).
+
+        Notes are immutable: PagerDuty has no edit or delete endpoint, so the
+        caller owns idempotency (one note per Aurora incident).
+        """
+        return self._request(
+            "POST", f"/incidents/{incident_id}/notes", json={"note": {"content": content}}
+        ).json()
     
     def get_subdomain(self) -> Optional[str]:
         try:
@@ -78,28 +109,65 @@ class PagerDutyClient:
             return None
 
 
-def validate_token(client: PagerDutyClient) -> Dict[str, Any]:
-    """Validate token and extract info."""
-    result = {"validated_at": datetime.now(timezone.utc).isoformat(), "capabilities": {"can_read_incidents": True}}
-    
+def _user_identity(user: Dict[str, Any]) -> Dict[str, Any]:
+    """Identity fields from a /users/me payload (email, name, subdomain, role)."""
+    info: Dict[str, Any] = {}
+    if email := user.get("email"):
+        info["external_user_email"] = email
+    if name := (user.get("name") or user.get("summary")):
+        info["external_user_name"] = name
+    if url := user.get("html_url"):
+        hostname = urlparse(url).hostname
+        if hostname and hostname.endswith(".pagerduty.com"):
+            info["account_subdomain"] = hostname.replace(".pagerduty.com", "")
+    if role := user.get("role"):
+        info["external_user_role"] = role
+    return info
+
+
+def _can_write_incidents(role: Optional[str], is_oauth: bool, granted_scopes: Optional[str]) -> bool:
+    """Default-deny: a write role is required; OAuth also needs the incidents.write scope."""
+    if not role or role in PD_READ_ONLY_ROLES:
+        return False
+    if is_oauth:
+        return "incidents.write" in (granted_scopes or "").split()
+    return True
+
+
+def _is_account_level_error(exc: PagerDutyAPIError) -> bool:
+    msg = str(exc).lower()
+    return "account-level" in msg or "user's identity" in msg
+
+
+def validate_token(client: PagerDutyClient, granted_scopes: Optional[str] = None) -> Dict[str, Any]:
+    """Validate token and extract info, including whether it can write incidents.
+
+    can_write_incidents is default-deny: True only for a user-scoped key (or
+    OAuth token) whose /users/me role is not read-only. OAuth additionally
+    needs `incidents.write` in granted_scopes (the space-separated `scope`
+    from the token response); passing None denies, so a connectivity check
+    can never upgrade a stored capability. Account-level keys cannot be
+    introspected (no /users/me) and are reported as api_key_access="account".
+    """
+    capabilities = {
+        "can_read_incidents": True,
+        "can_write_incidents": False,
+        "api_key_access": "oauth" if client.is_oauth else "user",
+    }
+    result = {"validated_at": datetime.now(timezone.utc).isoformat(), "capabilities": capabilities}
+
     try:
         user = client.get_current_user().get("user", {})
-        if email := user.get("email"):
-            result["external_user_email"] = email
-        if name := (user.get("name") or user.get("summary")):
-            result["external_user_name"] = name
-        if url := user.get("html_url"):
-            parsed_url = urlparse(url)
-            if parsed_url.hostname and parsed_url.hostname.endswith(".pagerduty.com"):
-                result["account_subdomain"] = parsed_url.hostname.replace(".pagerduty.com", "")
     except PagerDutyAPIError as e:
-        error_msg = str(e).lower()
-        if "account-level" in error_msg or "user's identity" in error_msg:
-            if subdomain := client.get_subdomain():
-                result["account_subdomain"] = subdomain
-        else:
+        if not _is_account_level_error(e):
             raise
-    
+        capabilities["api_key_access"] = "account"
+        if subdomain := client.get_subdomain():
+            result["account_subdomain"] = subdomain
+        return result
+
+    result.update(_user_identity(user))
+    capabilities["can_write_incidents"] = _can_write_incidents(user.get("role"), client.is_oauth, granted_scopes)
     return result
 
 

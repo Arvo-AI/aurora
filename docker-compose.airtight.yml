@@ -22,6 +22,7 @@ x-common-env: &common-env
   POSTGRES_PORT: ${POSTGRES_PORT}
   DB_POOL_MIN: ${DB_POOL_MIN:-2}
   DB_POOL_MAX: ${DB_POOL_MAX:-20}
+  DB_MIGRATION_LOCK_TIMEOUT: ${DB_MIGRATION_LOCK_TIMEOUT:-240}
 
   # Redis
   REDIS_URL: ${REDIS_URL}
@@ -40,18 +41,16 @@ x-common-env: &common-env
   # Terraform
   TF_CLI_CONFIG_FILE: /etc/terraform-airgapped.rc
 
-  # Weaviate
-  WEAVIATE_HOST: ${WEAVIATE_HOST}
-  WEAVIATE_PORT: ${WEAVIATE_PORT}
-  WEAVIATE_GRPC_PORT: ${WEAVIATE_GRPC_PORT}
+  MCP_ALLOW_PRIVATE_TARGETS: ${MCP_ALLOW_PRIVATE_TARGETS:-true}
 
   # SSL/TLS for external services
   POSTGRES_SSLMODE: ${POSTGRES_SSLMODE:-prefer}
   POSTGRES_SSLROOTCERT: ${POSTGRES_SSLROOTCERT:-}
   REDIS_SSL_CA_CERTS: ${REDIS_SSL_CA_CERTS:-}
   REDIS_SSL_CERT_REQS: ${REDIS_SSL_CERT_REQS:-}
-  WEAVIATE_SECURE: ${WEAVIATE_SECURE:-false}
   SPLUNK_SSL_VERIFY: ${SPLUNK_SSL_VERIFY:-false}
+  RABBITMQ_SSL_VERIFY: ${RABBITMQ_SSL_VERIFY:-false}
+  ELASTIC_SSL_VERIFY: ${ELASTIC_SSL_VERIFY:-true}
 
   # AWS base credentials for role assumption
   AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
@@ -61,7 +60,6 @@ x-common-env: &common-env
   # Feature Flags (all disabled by default for minimal local setup)
   NEXT_PUBLIC_ENABLE_OVH: ${NEXT_PUBLIC_ENABLE_OVH}
   NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH: ${NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH}
-  NEXT_PUBLIC_ENABLE_JIRA: ${NEXT_PUBLIC_ENABLE_JIRA}
   NEXT_PUBLIC_ENABLE_SHAREPOINT: ${NEXT_PUBLIC_ENABLE_SHAREPOINT}
   NEXT_PUBLIC_ENABLE_NOTION: ${NEXT_PUBLIC_ENABLE_NOTION}
   NEXT_PUBLIC_ENABLE_SPINNAKER: ${NEXT_PUBLIC_ENABLE_SPINNAKER}
@@ -82,6 +80,11 @@ x-common-env: &common-env
   SLACK_CLIENT_ID: ${SLACK_CLIENT_ID}
   SLACK_CLIENT_SECRET: ${SLACK_CLIENT_SECRET}
   SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET}
+  # Socket Mode app-level token (xapp-...) is intentionally NOT in this shared
+  # env — it is a sensitive secret only the slack_socket_mode listener needs, so
+  # it is scoped to that service alone (below). In an air-gapped deployment
+  # Socket Mode's OUTBOUND WebSocket is the only way Slack events can reach
+  # Aurora.
 
   # Confluence OAuth
   CONFLUENCE_CLIENT_ID: ${CONFLUENCE_CLIENT_ID}
@@ -112,21 +115,40 @@ x-common-env: &common-env
   # Infrastructure visualization feature: gates periodic + final LLM extraction during RCA. Off by default for cost.
   VISUALIZATION_ENABLED: ${VISUALIZATION_ENABLED:-false}
   RCA_MODEL: ${RCA_MODEL}
+  JIRA_RCA_JUDGE_MODEL: ${JIRA_RCA_JUDGE_MODEL}
   MAIN_MODEL: ${MAIN_MODEL}
   RCA_ORCHESTRATOR_MODEL: ${RCA_ORCHESTRATOR_MODEL}
   RCA_SUBAGENT_MODEL: ${RCA_SUBAGENT_MODEL}
   VISION_MODEL: ${VISION_MODEL}
   SUMMARIZATION_MODEL: ${SUMMARIZATION_MODEL}
   ENRICHMENT_MODEL: ${ENRICHMENT_MODEL}
+  MEMORY_SELECTOR_MODEL: ${MEMORY_SELECTOR_MODEL}
   AGENT_RECURSION_LIMIT: ${AGENT_RECURSION_LIMIT}
+  # Wall-clock limit for one investigation, in seconds. Default is one hour.
+  INVESTIGATION_TIMEOUT_SECONDS: ${INVESTIGATION_TIMEOUT_SECONDS:-3600}
+  # Stop an investigation that makes no progress for this long, in seconds. 0 turns it off.
+  INVESTIGATION_STALL_SECONDS: ${INVESTIGATION_STALL_SECONDS:-600}
   TOOL_OUTPUT_PASS_THROUGH_CHARS: ${TOOL_OUTPUT_PASS_THROUGH_CHARS:-40000}
   TOOL_OUTPUT_MAX_SUMMARIZATION_INPUT_CHARS: ${TOOL_OUTPUT_MAX_SUMMARIZATION_INPUT_CHARS:-400000}
   TOOL_CONTEXT_SUMMARIZATION_THRESHOLD_TOKENS: ${TOOL_CONTEXT_SUMMARIZATION_THRESHOLD_TOKENS:-10000}
+  EMBEDDING_MODEL: ${EMBEDDING_MODEL}
+
+  # Root-cause recurrence detection (dedup layer 1): off | shadow | live
+  RECURRENCE_DETECTION_MODE: ${RECURRENCE_DETECTION_MODE:-live}
+  RECURRENCE_AGENT_TIMEOUT_SECONDS: ${RECURRENCE_AGENT_TIMEOUT_SECONDS:-120}
+  RECURRENCE_AGENT_MODEL: ${RECURRENCE_AGENT_MODEL}
 
   # AI Safety Guardrails
   GUARDRAILS_ENABLED: ${GUARDRAILS_ENABLED:-true}
   GUARDRAILS_SIGMA_ENABLED: ${GUARDRAILS_SIGMA_ENABLED:-true}
   GUARDRAILS_LLM_MODEL: ${GUARDRAILS_LLM_MODEL:-}
+  GUARDRAILS_DISABLE_THINKING: ${GUARDRAILS_DISABLE_THINKING:-true}
+  GUARDRAILS_LLM_TIMEOUT_SECONDS: ${GUARDRAILS_LLM_TIMEOUT_SECONDS:-10}
+
+  # Slack: keep editing the "Thinking…" placeholder with live progress while a
+  # background investigation runs. Interval in seconds (min 10).
+  SLACK_PROGRESS_UPDATES_ENABLED: ${SLACK_PROGRESS_UPDATES_ENABLED:-true}
+  SLACK_PROGRESS_UPDATE_INTERVAL_SECONDS: ${SLACK_PROGRESS_UPDATE_INTERVAL_SECONDS:-30}
 
   # Vertex AI (Google Cloud)
   VERTEX_AI_PROJECT: ${VERTEX_AI_PROJECT}
@@ -195,10 +217,14 @@ services:
       - "${FLASK_PORT}:${FLASK_PORT}"
     volumes:
       - terraform-workdir:/app/terraform_workdir
-    command: ["sh", "-c", "gunicorn main_compute:app --bind 0.0.0.0:${FLASK_PORT:-5080} -k gthread --threads ${GUNICORN_THREADS:-4} --workers ${GUNICORN_WORKERS:-2} --timeout 300 --preload"]
+    command: ["sh", "-c", "gunicorn main_compute:app --bind 0.0.0.0:${FLASK_PORT:-5080} -k gthread --threads ${GUNICORN_THREADS:-32} --workers ${GUNICORN_WORKERS:-2} --timeout 300 --preload"]
     environment:
       <<: *common-env
       OTEL_SERVICE_NAME: aurora-server
+      # The SSE stream cap in routes/incidents_sse.py is bounded by the thread
+      # count; pass it in so the cap matches the command line above.
+      GUNICORN_WORKERS: ${GUNICORN_WORKERS:-2}
+      GUNICORN_THREADS: ${GUNICORN_THREADS:-32}
       FLASK_PORT: ${FLASK_PORT}
       INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
       FRONTEND_URL: ${FRONTEND_URL}
@@ -241,8 +267,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      weaviate:
-        condition: service_healthy
       redis:
         condition: service_started
       vault:
@@ -267,10 +291,13 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - terraform-workdir:/app/terraform_workdir
+    # Idle workers exit on SIGTERM immediately. This only waits while a task is running.
+    stop_grace_period: 3660s
     command: >
       celery -A celery_config worker
         --loglevel=info
         --concurrency=${CELERY_CONCURRENCY:-4}
+        -Q high,celery
     environment:
       <<: *common-env
       OTEL_SERVICE_NAME: celery-worker
@@ -279,6 +306,7 @@ services:
       FRONTEND_URL: ${FRONTEND_URL}
       BACKEND_URL: ${BACKEND_URL}
       NEXT_PUBLIC_BACKEND_URL: ${NEXT_PUBLIC_BACKEND_URL}
+      NGROK_URL: ${NGROK_URL}
       AURORA_SETUP_CACHE_ENABLED: ${AURORA_SETUP_CACHE_ENABLED}
       AURORA_SETUP_CACHE_TTL: ${AURORA_SETUP_CACHE_TTL}
       AURORA_VERIFY_CLI_IDENTITY: ${AURORA_VERIFY_CLI_IDENTITY}
@@ -294,6 +322,7 @@ services:
       OVH_US_CLIENT_SECRET: ${OVH_US_CLIENT_SECRET}
       GOOGLE_CHAT_SERVICE_ACCOUNT_KEY: ${GOOGLE_CHAT_SERVICE_ACCOUNT_KEY}
     depends_on:
+      - postgres
       - redis
       - vault
       - memgraph
@@ -314,6 +343,32 @@ services:
         --loglevel=info
     depends_on:
       - redis
+    restart: unless-stopped
+
+  # Slack Socket Mode listener. In an air-gapped/private deployment there is no
+  # public inbound webhook URL, so this OUTBOUND WebSocket is the only transport
+  # for Slack events/interactions. Runs the server image with the listener entry
+  # point (same alias pattern as the other backend services). No-op unless
+  # SLACK_APP_TOKEN (xapp-...) is set, so it is safe to leave running.
+  slack_socket_mode:
+    image: aurora_server:latest
+    pull_policy: never
+    logging: *default-logging
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: ["python", "-m", "services.slack.socket_mode"]
+    environment:
+      <<: *common-env
+      # Scoped here (not in *common-env) — only the listener needs this secret.
+      SLACK_APP_TOKEN: ${SLACK_APP_TOKEN:-}
+      OTEL_SERVICE_NAME: slack_socket_mode
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
+      FRONTEND_URL: ${FRONTEND_URL}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      vault:
+        condition: service_healthy
     restart: unless-stopped
 
   redis:
@@ -412,8 +467,6 @@ services:
       TERMINAL_IMAGE: ${TERMINAL_IMAGE}
       TERMINAL_POD_TTL: ${TERMINAL_POD_TTL}
     depends_on:
-      weaviate:
-        condition: service_healthy
       postgres:
         condition: service_healthy
       vault:
@@ -439,47 +492,6 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
-
-  weaviate:
-    image: cr.weaviate.io/semitechnologies/weaviate:1.27.6
-    pull_policy: never
-    container_name: weaviate
-    logging: *default-logging
-    depends_on:
-      postgres:
-        condition: service_healthy
-    command:
-      - --host
-      - 0.0.0.0
-      - --port
-      - "8080"
-      - --scheme
-      - http
-    ports:
-      - "8080:8080"
-      - "50051:50051"
-    volumes:
-      - weaviate_data:/var/lib/weaviate
-    restart: unless-stopped
-    environment:
-      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true"
-      PERSISTENCE_DATA_PATH: "/var/lib/weaviate"
-      ENABLE_API_BASED_MODULES: "true"
-      CLUSTER_HOSTNAME: "node1"
-      ENABLE_MODULES: "text2vec-transformers"
-      TRANSFORMERS_INFERENCE_API: "http://t2v-transformers:8080"
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "wget",
-          "-q",
-          "--spider",
-          "http://localhost:8080/v1/.well-known/ready",
-        ]
-      interval: 10s
-      timeout: 5s
-      retries: 3
 
   aurora-mcp:
     image: aurora_mcp:latest
@@ -508,14 +520,6 @@ services:
       retries: 3
       start_period: 10s
 
-  t2v-transformers:
-    image: cr.weaviate.io/semitechnologies/transformers-inference:sentence-transformers-all-MiniLM-L6-v2
-    pull_policy: never
-    logging: *default-logging
-    environment:
-      ENABLE_CUDA: '0'
-    restart: unless-stopped
-
   frontend:
     image: aurora_frontend:latest
     pull_policy: never
@@ -531,7 +535,6 @@ services:
       PUBLIC_WS_URL: ${NEXT_PUBLIC_WEBSOCKET_URL}
       NEXT_PUBLIC_ENABLE_OVH: ${NEXT_PUBLIC_ENABLE_OVH}
       NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH: ${NEXT_PUBLIC_ENABLE_PAGERDUTY_OAUTH}
-      NEXT_PUBLIC_ENABLE_JIRA: ${NEXT_PUBLIC_ENABLE_JIRA}
       NEXT_PUBLIC_ENABLE_SHAREPOINT: ${NEXT_PUBLIC_ENABLE_SHAREPOINT}
       NEXT_PUBLIC_ENABLE_NOTION: ${NEXT_PUBLIC_ENABLE_NOTION}
       NEXT_PUBLIC_ENABLE_SPINNAKER: ${NEXT_PUBLIC_ENABLE_SPINNAKER}
@@ -694,7 +697,6 @@ services:
 
 volumes:
   postgres-data:
-  weaviate_data:
   terraform-workdir:
   seaweedfs_master_data:
   seaweedfs_volume_data:

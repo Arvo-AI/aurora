@@ -1,0 +1,819 @@
+"""Tests for the one-click GitHub App signup flow (routes/github/github_signup.py).
+
+Pins the security contract:
+
+- The whole flow is OFF unless ``HOSTED_SIGNUP_ENABLED=true`` AND the App is
+  runtime-enabled AND a client secret exists (OSS deployments stay invite-only).
+- The signup state is signed + expiring and its salt differs from the
+  authenticated install flow's, so tokens are not interchangeable.
+- The callback verifies state and installation BEFORE any provisioning; a
+  missing/forged param renders the hard-coded error template with zero writes.
+- Identity comes only from the OAuth code exchange; private-email profiles
+  fall back to the noreply convention rather than failing.
+- An email-only collision (GitHub email matches an Aurora account that never
+  linked this GitHub identity) redirects to sign-in — never auto-login.
+- The handoff exchange burns the token on first use (single redemption).
+
+GitHub API and DB are mocked — no I/O.
+"""
+
+from __future__ import annotations
+
+import sys
+from contextlib import contextmanager
+from unittest.mock import MagicMock, patch
+
+import pytest
+from urllib.parse import parse_qs, urlparse
+
+
+@pytest.fixture
+def signup_app(monkeypatch):
+    """Fresh Flask app with the signup blueprint, hosted mode fully enabled."""
+    mods_to_evict = [
+        m for m in sys.modules
+        if m.startswith(("routes.github.github_signup",))
+    ]
+    for _mod in mods_to_evict:
+        del sys.modules[_mod]
+
+    monkeypatch.setenv("HOSTED_SIGNUP_ENABLED", "true")
+    monkeypatch.setenv("GITHUB_APP_CLIENT_SECRET", "shhh")
+    monkeypatch.setenv("FLASK_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("NEXT_PUBLIC_GITHUB_APP_SLUG", "aurora-test")
+
+    from flask import Flask
+    from routes.github import github_signup as mod
+
+    application = Flask(__name__)  # NOSONAR
+    application.config["GITHUB_APP_ENABLED"] = True
+    application.register_blueprint(mod.github_signup_bp, url_prefix="/github")
+
+    @application.errorhandler(500)
+    def _err(e):  # noqa: ANN001
+        return "err", 500
+
+    # Error template is rendered with render_template — stub it so tests
+    # don't need the template file on disk.
+    monkeypatch.setattr(
+        mod.flask, "render_template",
+        lambda *a, **kw: f"ERROR:{kw.get('error', '')}",
+    )
+    return application, mod
+
+
+def _install_payload(install_id=777, login="octo-org", account_id=99, acct_type="Organization"):
+    return {
+        "id": install_id,
+        "account": {"login": login, "id": account_id, "type": acct_type},
+        "target_type": acct_type,
+        "permissions": {"pull_requests": "write"},
+        "events": ["pull_request"],
+        "repository_selection": "selected",
+        "suspended_at": None,
+    }
+
+
+class TestGating:
+    def test_disabled_flag_blocks_start(self, signup_app, monkeypatch):
+        app, mod = signup_app
+        monkeypatch.setenv("HOSTED_SIGNUP_ENABLED", "false")
+        resp = app.test_client().get("/github/app/signup/start")
+        assert resp.status_code == 200
+        assert b"not available" in resp.data
+
+    def test_missing_client_secret_blocks(self, signup_app, monkeypatch):
+        app, mod = signup_app
+        monkeypatch.delenv("GITHUB_APP_CLIENT_SECRET")
+        resp = app.test_client().get("/github/app/signup/start")
+        assert b"not available" in resp.data
+
+    def test_app_disabled_blocks(self, signup_app):
+        app, mod = signup_app
+        app.config["GITHUB_APP_ENABLED"] = False
+        resp = app.test_client().get("/github/app/signup/start")
+        assert b"not available" in resp.data
+
+    def test_callback_gated_too(self, signup_app, monkeypatch):
+        app, mod = signup_app
+        monkeypatch.setenv("HOSTED_SIGNUP_ENABLED", "false")
+        resp = app.test_client().get(
+            "/github/app/signup/callback?installation_id=1&state=x&code=y"
+        )
+        assert b"not available" in resp.data
+
+
+class TestStartRedirect:
+    def test_redirects_to_github_with_signed_state(self, signup_app):
+        app, mod = signup_app
+        resp = app.test_client().get("/github/app/signup/start")
+        assert resp.status_code == 302
+        assert resp.location.startswith(
+            "https://github.com/apps/aurora-test/installations/new?state="
+        )
+        state = resp.location.split("state=", 1)[1]
+        with app.test_request_context():
+            assert mod._verify_signup_state(state) is True
+
+
+class TestAttribution:
+    @pytest.mark.parametrize("db_rows, expected_prefix", [
+        ([("user-9",), ("org-9",)], "/sign-in?handoff="),          # returning GitHub user
+        ([None, ("existing-user",)], "/sign-in?error=account_exists"),  # email collision
+    ])
+    def test_website_attribution_reaches_the_app_redirect(self, signup_app, db_rows, expected_prefix):
+        app, mod = signup_app
+        client = app.test_client()
+        start = client.get(
+            "/github/app/signup/start?ph_did=0199a1b2-c3d4-7e5f&utm_source=aurorasre.ai"
+            "&utm_medium=website&next=https://evil.example"
+        )
+        state = start.location.split("state=", 1)[1]
+        db_pool, _, _ = _mock_db(mod, db_rows)
+        with patch.object(mod, "_verify_installation", return_value=_install_payload()), \
+             patch.object(mod, "_exchange_code_for_identity",
+                          return_value=(TestProvisioning._IDENTITY, "gho_x")), \
+             patch.object(mod, "_user_authorized_for_installation", return_value=True), \
+             patch.object(mod, "db_pool", db_pool), \
+             patch("utils.auth.tool_registry.seed_org_tool_permissions"), \
+             patch("routes.github.github_repo_metadata.import_installation_repos"):
+            resp = client.get(f"/github/app/signup/callback?installation_id=777&state={state}&code=c")
+        assert resp.status_code == 302
+        assert resp.location.startswith(mod.FRONTEND_URL + expected_prefix)
+        assert resp.location.endswith(
+            "&ph_did=0199a1b2-c3d4-7e5f&utm_source=aurorasre.ai&utm_medium=website"
+        )
+        assert "evil" not in resp.location
+
+    def test_malformed_attribution_is_dropped(self, signup_app):
+        app, mod = signup_app
+        resp = app.test_client().get(
+            "/github/app/signup/start?ph_did=x%26handoff%3Dforged&utm_source=%3Cscript%3E"
+            "&utm_medium=site%0A"
+        )
+        state = resp.location.split("state=", 1)[1]
+        with app.test_request_context():
+            assert mod._signup_state_attribution(state) == {}
+
+
+class TestStateToken:
+    def test_round_trip(self, signup_app):
+        app, mod = signup_app
+        with app.test_request_context():
+            assert mod._verify_signup_state(mod._sign_signup_state()) is True
+
+    def test_garbage_rejected(self, signup_app):
+        app, mod = signup_app
+        with app.test_request_context():
+            assert mod._verify_signup_state("not-a-token") is False
+
+    def test_install_flow_state_not_interchangeable(self, signup_app):
+        # A state signed for the AUTHENTICATED install flow (different salt)
+        # must not validate for signup — the flows have different trust levels.
+        app, mod = signup_app
+        from itsdangerous import URLSafeTimedSerializer
+
+        other = URLSafeTimedSerializer(
+            "test-secret", salt="aurora.github.app.install-state.v1"
+        ).dumps({"flow": "signup"})
+        with app.test_request_context():
+            assert mod._verify_signup_state(other) is False
+
+
+class TestCallbackValidation:
+    def test_missing_installation_id_rejected(self, signup_app):
+        app, mod = signup_app
+        resp = app.test_client().get("/github/app/signup/callback?state=s&code=c")
+        assert b"Missing required parameters" in resp.data
+
+    def test_install_request_lands_on_notice(self, signup_app):
+        # An org member without admin rights only requests the install; no
+        # installation exists yet, so this is a notice, not an error page.
+        app, mod = signup_app
+        resp = app.test_client().get(
+            "/github/app/signup/callback?setup_action=request&code=c"
+        )
+        assert resp.status_code == 302
+        assert resp.headers["Location"].endswith("/sign-in?notice=github_install_requested")
+
+    def test_install_request_with_install_state_still_lands_on_notice(self, signup_app):
+        app, mod = signup_app
+        from routes.github.github_app import _sign_install_state
+
+        with app.test_request_context():
+            state = _sign_install_state("user-1")
+        with patch("routes.github.github_app.github_app_install_callback") as delegated:
+            resp = app.test_client().get(
+                f"/github/app/signup/callback?setup_action=request&state={state}"
+            )
+        delegated.assert_not_called()
+        assert resp.location.endswith("/sign-in?notice=github_install_requested")
+
+    def test_repo_change_without_code_goes_to_app(self, signup_app):
+        app, mod = signup_app
+        with patch.object(mod, "_verify_installation") as verify:
+            resp = app.test_client().get(
+                "/github/app/signup/callback?installation_id=1&setup_action=update"
+            )
+        assert resp.status_code == 302
+        assert "/connectors" in resp.headers["Location"]
+        verify.assert_not_called()
+
+    @pytest.mark.parametrize("state_qs", ["", "&state=forged"])
+    def test_install_not_started_on_website_still_provisions(self, signup_app, state_qs):
+        # Installs from the App's GitHub page, a README link or an expired tab
+        # carry no valid signup state. They get an account on the same three
+        # checks, without attribution.
+        app, mod = signup_app
+        with patch.object(mod, "_verify_installation", return_value=_install_payload()), \
+             patch.object(mod, "_exchange_code_for_identity",
+                          return_value=(self._IDENTITY, "gho_x")), \
+             patch.object(mod, "_user_authorized_for_installation", return_value=True) as authz, \
+             patch.object(mod, "_provision_and_handoff",
+                          return_value=(mod.flask.redirect("/sign-in?handoff=h"),
+                                        "user-1", 777, True)), \
+             patch("routes.github.github_repo_metadata.import_installation_repos") as task:
+            resp = app.test_client().get(
+                f"/github/app/signup/callback?installation_id=777&code=c{state_qs}"
+            )
+        assert resp.status_code == 302
+        assert "utm_" not in resp.headers["Location"]
+        authz.assert_called_once_with("gho_x", 777)
+        task.delay.assert_called_once_with("user-1", 777, enroll_change_gating=True)
+
+    def test_signup_state_without_code_rejected(self, signup_app):
+        # A valid signup state but no OAuth code means the App is missing
+        # "Request user authorization during installation" — fail loudly
+        # rather than provisioning an account with no identity.
+        app, mod = signup_app
+        with app.test_request_context():
+            state = mod._sign_signup_state()
+        with patch.object(mod, "_verify_installation") as verify:
+            resp = app.test_client().get(
+                f"/github/app/signup/callback?installation_id=1&state={state}"
+            )
+        assert b"Missing required parameters" in resp.data
+        verify.assert_not_called()
+
+    def test_install_flow_state_delegates_to_authenticated_callback(self, signup_app):
+        # With OAuth-during-install on, GitHub sends in-app installs (state
+        # signed under the INSTALL salt, bound to a logged-in user) to this
+        # same first Callback URL. They must reach the authenticated handler
+        # untouched — never the signup provisioning path.
+        app, mod = signup_app
+        from itsdangerous import URLSafeTimedSerializer
+
+        install_state = URLSafeTimedSerializer(
+            "test-secret", salt="aurora.github.app.install-state.v1"
+        ).dumps("user-123")
+        with patch("routes.github.github_app.github_app_install_callback",
+                   return_value="DELEGATED") as delegate, \
+             patch.object(mod, "_verify_installation") as verify, \
+             patch.object(mod, "_provision_and_handoff") as provision:
+            resp = app.test_client().get(
+                f"/github/app/signup/callback?installation_id=1&state={install_state}&code=c"
+            )
+        assert resp.data == b"DELEGATED"
+        delegate.assert_called_once_with()
+        verify.assert_not_called()
+        provision.assert_not_called()
+
+    def test_install_flow_delegation_survives_signup_flag_off(self, signup_app, monkeypatch):
+        # Rollback story: HOSTED_SIGNUP_ENABLED=false while the App still
+        # points at this URL must not strand logged-in users' installs.
+        app, mod = signup_app
+        monkeypatch.setenv("HOSTED_SIGNUP_ENABLED", "false")
+        from itsdangerous import URLSafeTimedSerializer
+
+        install_state = URLSafeTimedSerializer(
+            "test-secret", salt="aurora.github.app.install-state.v1"
+        ).dumps("user-123")
+        with patch("routes.github.github_app.github_app_install_callback",
+                   return_value="DELEGATED") as delegate:
+            resp = app.test_client().get(
+                f"/github/app/signup/callback?installation_id=1&state={install_state}"
+            )
+        assert resp.data == b"DELEGATED"
+        delegate.assert_called_once_with()
+
+    def test_forged_state_is_not_delegated(self, signup_app):
+        app, mod = signup_app
+        with patch("routes.github.github_app.github_app_install_callback") as delegate, \
+             patch.object(mod, "_verify_installation", return_value=None):
+            app.test_client().get(
+                "/github/app/signup/callback?installation_id=1&state=forged&code=c"
+            )
+        delegate.assert_not_called()
+
+    @pytest.mark.parametrize("bad_id", ["abc", "-5", "0"])
+    def test_bad_installation_id_rejected(self, signup_app, bad_id):
+        app, mod = signup_app
+        with app.test_request_context():
+            state = mod._sign_signup_state()
+        resp = app.test_client().get(
+            f"/github/app/signup/callback?installation_id={bad_id}&state={state}&code=c"
+        )
+        assert b"installation could not be verified" in resp.data
+
+    def test_unverifiable_installation_writes_nothing(self, signup_app):
+        app, mod = signup_app
+        with app.test_request_context():
+            state = mod._sign_signup_state()
+        with patch.object(mod, "_verify_installation", return_value=None), \
+             patch.object(mod, "_provision_and_handoff") as provision:
+            resp = app.test_client().get(
+                f"/github/app/signup/callback?installation_id=777&state={state}&code=c"
+            )
+        assert b"Could not verify installation" in resp.data
+        provision.assert_not_called()
+
+    def test_installation_id_mismatch_rejected(self, signup_app):
+        # GitHub returning metadata for a DIFFERENT id than the query param
+        # (or a tampered proxy) must not provision.
+        app, mod = signup_app
+        with app.test_request_context():
+            state = mod._sign_signup_state()
+        with patch.object(
+            mod, "_verify_installation", return_value=_install_payload(install_id=888)
+        ), patch.object(mod, "_provision_and_handoff") as provision:
+            app.test_client().get(
+                f"/github/app/signup/callback?installation_id=777&state={state}&code=c"
+            )
+        provision.assert_not_called()
+
+    def test_failed_identity_exchange_writes_nothing(self, signup_app):
+        app, mod = signup_app
+        with app.test_request_context():
+            state = mod._sign_signup_state()
+        with patch.object(
+            mod, "_verify_installation", return_value=_install_payload()
+        ), patch.object(mod, "_exchange_code_for_identity", return_value=None), \
+             patch.object(mod, "_provision_and_handoff") as provision:
+            resp = app.test_client().get(
+                f"/github/app/signup/callback?installation_id=777&state={state}&code=c"
+            )
+        assert b"identity" in resp.data
+        provision.assert_not_called()
+
+    _IDENTITY = {"id": 42, "login": "octocat", "name": "Octo Cat", "email": "octo@cat.dev"}
+
+    def test_unauthorized_installation_writes_nothing(self, signup_app):
+        # Invariant #6: the OAuth user swapped in someone else's (real)
+        # installation id. Must reject with ZERO DB writes and no import.
+        app, mod = signup_app
+        with app.test_request_context():
+            state = mod._sign_signup_state()
+        db_pool, conn, cur = _mock_db(mod, [])
+        with patch.object(mod, "_verify_installation", return_value=_install_payload()), \
+             patch.object(mod, "_exchange_code_for_identity",
+                          return_value=(self._IDENTITY, "gho_x")), \
+             patch.object(mod, "_user_authorized_for_installation",
+                          return_value=False) as authz, \
+             patch.object(mod, "db_pool", db_pool), \
+             patch("routes.github.github_repo_metadata.import_installation_repos") as task:
+            resp = app.test_client().get(
+                f"/github/app/signup/callback?installation_id=777&state={state}&code=c"
+            )
+        assert b"does not have access to this installation" in resp.data
+        authz.assert_called_once_with("gho_x", 777)
+        cur.execute.assert_not_called()
+        conn.commit.assert_not_called()
+        task.delay.assert_not_called()
+
+    def test_authorized_installation_provisions_and_imports(self, signup_app):
+        app, mod = signup_app
+        with app.test_request_context():
+            state = mod._sign_signup_state()
+        with patch.object(mod, "_verify_installation", return_value=_install_payload()), \
+             patch.object(mod, "_exchange_code_for_identity",
+                          return_value=(self._IDENTITY, "gho_x")), \
+             patch.object(mod, "_user_authorized_for_installation", return_value=True), \
+             patch.object(mod, "_provision_and_handoff",
+                          return_value=(mod.flask.redirect("/x"), "user-1", 777, True)), \
+             patch("routes.github.github_repo_metadata.import_installation_repos") as task:
+            resp = app.test_client().get(
+                f"/github/app/signup/callback?installation_id=777&state={state}&code=c"
+            )
+        assert resp.status_code == 302
+        task.delay.assert_called_once_with("user-1", 777, enroll_change_gating=True)
+
+
+class TestIdentityExchange:
+    def _token_resp(self, token="gho_x"):
+        r = MagicMock()
+        r.status_code = 200
+        r.json.return_value = {"access_token": token}
+        return r
+
+    def _user_resp(self, **overrides):
+        r = MagicMock()
+        r.status_code = 200
+        payload = {"id": 42, "login": "octocat", "name": "Octo Cat", "email": "octo@cat.dev"}
+        payload.update(overrides)
+        r.json.return_value = payload
+        return r
+
+    def test_happy_path(self, signup_app):
+        app, mod = signup_app
+        with app.test_request_context(), \
+             patch.object(mod.requests, "post", return_value=self._token_resp()), \
+             patch.object(mod.requests, "get", return_value=self._user_resp()), \
+             patch("connectors.github_connector.config.load_github_app_config",
+                   return_value=MagicMock(client_id="Iv1.test")):
+            identity, token = mod._exchange_code_for_identity("c0de")
+        assert identity == {"id": 42, "login": "octocat", "name": "Octo Cat", "email": "octo@cat.dev"}
+        assert token == "gho_x"
+
+    def test_private_email_uses_verified_primary(self, signup_app):
+        app, mod = signup_app
+        emails = MagicMock()
+        emails.status_code = 200
+        emails.json.return_value = [
+            {"email": "old@x.dev", "primary": False, "verified": True},
+            {"email": "real@x.dev", "primary": True, "verified": True},
+        ]
+        with app.test_request_context(), \
+             patch.object(mod.requests, "post", return_value=self._token_resp()), \
+             patch.object(mod.requests, "get",
+                          side_effect=[self._user_resp(email=None), emails]), \
+             patch("connectors.github_connector.config.load_github_app_config",
+                   return_value=MagicMock(client_id="Iv1.test")):
+            identity, _ = mod._exchange_code_for_identity("c0de")
+        assert identity["email"] == "real@x.dev"
+
+    def test_private_email_falls_back_to_noreply(self, signup_app):
+        app, mod = signup_app
+        emails_404 = MagicMock()
+        emails_404.status_code = 404
+        with app.test_request_context(), \
+             patch.object(mod.requests, "post", return_value=self._token_resp()), \
+             patch.object(mod.requests, "get",
+                          side_effect=[self._user_resp(email=None), emails_404]), \
+             patch("connectors.github_connector.config.load_github_app_config",
+                   return_value=MagicMock(client_id="Iv1.test")):
+            identity, _ = mod._exchange_code_for_identity("c0de")
+        assert identity["email"] == "42+octocat@users.noreply.github.com"
+
+    def test_no_access_token_returns_none(self, signup_app):
+        app, mod = signup_app
+        bad = MagicMock()
+        bad.status_code = 200
+        bad.json.return_value = {"error": "bad_verification_code"}
+        with app.test_request_context(), \
+             patch.object(mod.requests, "post", return_value=bad), \
+             patch("connectors.github_connector.config.load_github_app_config",
+                   return_value=MagicMock(client_id="Iv1.test")):
+            assert mod._exchange_code_for_identity("c0de") is None
+
+
+class TestInstallationAuthorization:
+    def _page(self, ids, status=200):
+        r = MagicMock()
+        r.status_code = status
+        r.json.return_value = {
+            "total_count": len(ids),
+            "installations": [{"id": i} for i in ids],
+        }
+        return r
+
+    def test_listed_installation_is_authorized(self, signup_app):
+        app, mod = signup_app
+        with patch.object(mod.requests, "get", return_value=self._page([5, 777])) as get:
+            assert mod._user_authorized_for_installation("gho_x", 777) is True
+        assert get.call_args.kwargs["headers"]["Authorization"] == "Bearer gho_x"
+
+    def test_unlisted_installation_is_rejected(self, signup_app):
+        app, mod = signup_app
+        with patch.object(mod.requests, "get", return_value=self._page([5, 6])):
+            assert mod._user_authorized_for_installation("gho_x", 777) is False
+
+    def test_api_error_fails_closed(self, signup_app):
+        app, mod = signup_app
+        with patch.object(mod.requests, "get", return_value=self._page([], status=401)):
+            assert mod._user_authorized_for_installation("gho_x", 777) is False
+
+    def test_network_error_fails_closed(self, signup_app):
+        app, mod = signup_app
+        with patch.object(mod.requests, "get",
+                          side_effect=mod.requests.RequestException("boom")):
+            assert mod._user_authorized_for_installation("gho_x", 777) is False
+
+    def test_paginates_full_pages(self, signup_app):
+        app, mod = signup_app
+        full = self._page(list(range(1, 101)))          # 100 ids, none match
+        with patch.object(mod.requests, "get",
+                          side_effect=[full, self._page([777])]) as get:
+            assert mod._user_authorized_for_installation("gho_x", 777) is True
+        assert [c.kwargs["params"]["page"] for c in get.call_args_list] == [1, 2]
+
+    def test_pagination_is_bounded(self, signup_app):
+        app, mod = signup_app
+        full = self._page(list(range(1, 101)))
+        with patch.object(mod.requests, "get", return_value=full) as get:
+            assert mod._user_authorized_for_installation("gho_x", 777) is False
+        assert get.call_count == mod._USER_INSTALLATIONS_MAX_PAGES
+
+
+def _mock_db(mod, fetchone_seq):
+    """Patch db_pool with a cursor whose fetchone returns the given sequence."""
+    cur = MagicMock()
+    cur.fetchone.side_effect = list(fetchone_seq)
+    conn = MagicMock()
+
+    @contextmanager
+    def _conn_ctx():
+        yield conn
+
+    conn.cursor.return_value.__enter__ = MagicMock(return_value=cur)
+    conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
+    conn.__enter__ = MagicMock(return_value=conn)
+    conn.__exit__ = MagicMock(return_value=False)
+
+    db_pool = MagicMock()
+    db_pool.get_admin_connection.return_value = conn
+    return db_pool, conn, cur
+
+
+class TestProvisioning:
+    _IDENTITY = {"id": 42, "login": "octocat", "name": "Octo Cat", "email": "octo@cat.dev"}
+
+    def test_email_collision_redirects_to_signin(self, signup_app):
+        app, mod = signup_app
+        # fetchone: no github_user_id match, then email EXISTS.
+        db_pool, conn, cur = _mock_db(mod, [None, ("existing-user",)])
+        with app.test_request_context(), patch.object(mod, "db_pool", db_pool):
+            response, user_id, install_id, created = mod._provision_and_handoff(
+                self._IDENTITY, _install_payload()
+            )
+        assert user_id is None
+        assert created is False
+        assert response.status_code == 302
+        assert "error=account_exists" in response.location
+        # Nothing committed on this path.
+        conn.commit.assert_not_called()
+        # The redirect carries a claim the sign-in page redeems once the
+        # account owner has proven who they are.
+        claim = response.location.split("gh_claim=", 1)[1]
+        with app.test_request_context():
+            payload = mod.verify_claim_token(claim)
+        assert payload == {"iid": 777, "gh_id": 42, "gh_login": "octocat", "email": "octo@cat.dev"}
+
+    def test_claim_token_does_not_verify_as_signup_state(self, signup_app):
+        app, mod = signup_app
+        with app.test_request_context():
+            claim = mod._sign_claim_token(777, self._IDENTITY)
+            assert mod._verify_signup_state(claim) is False
+            assert mod.verify_claim_token(mod._sign_signup_state()) is None
+
+    def test_existing_github_identity_logs_in_without_insert(self, signup_app):
+        app, mod = signup_app
+        # fetchone: github_user_id match -> user row; org lookup; (link upsert
+        # does no fetchone); handoff mint does no fetchone.
+        db_pool, conn, cur = _mock_db(mod, [("user-9",), ("org-9",)])
+        with app.test_request_context(), patch.object(mod, "db_pool", db_pool), \
+             patch("utils.auth.tool_registry.seed_org_tool_permissions"):
+            response, user_id, install_id, created = mod._provision_and_handoff(
+                self._IDENTITY, _install_payload()
+            )
+        assert user_id == "user-9"
+        assert created is False
+        assert install_id == 777
+        assert response.status_code == 302
+        assert "/sign-in?handoff=" in response.location
+        inserts = [
+            c.args[0] for c in cur.execute.call_args_list
+            if "INSERT INTO users" in c.args[0]
+        ]
+        assert inserts == []
+
+    @pytest.mark.parametrize(
+        "fetchone_seq",
+        [
+            [("user-9",), ("org-9",)],  # their GitHub id matches a user in another org
+            [None, None],  # no Aurora account for this GitHub user yet
+        ],
+    )
+    def test_install_linked_by_another_org_is_never_provisioned(
+        self, signup_app, fetchone_seq
+    ):
+        # Anyone who can see one repo passes GitHub's access check; linking
+        # the install into their org would hand them every repo it covers.
+        app, mod = signup_app
+        db_pool, conn, cur = _mock_db(mod, fetchone_seq)
+        cur.fetchall.return_value = [("org-owner",)]
+        with app.test_request_context(), patch.object(mod, "db_pool", db_pool):
+            response, user_id, _, created = mod._provision_and_handoff(
+                self._IDENTITY, _install_payload()
+            )
+        assert user_id is None and created is False
+        assert response.location.endswith("/connectors?installed=github")
+        sql = " ".join(c.args[0] for c in cur.execute.call_args_list)
+        assert "INSERT INTO users" not in sql
+        assert "user_github_installations (user_id" not in sql
+        conn.commit.assert_not_called()
+
+    def test_new_installer_is_not_created_before_the_app_checks_for_a_session(
+        self, signup_app
+    ):
+        # A browser already signed in to Aurora must get the choice to connect
+        # the install to that org, so nothing is created on the first hop.
+        app, mod = signup_app
+        db_pool, conn, cur = _mock_db(mod, [None, None])
+        with app.test_request_context(), patch.object(mod, "db_pool", db_pool):
+            response, user_id, _, created = mod._provision_and_handoff(
+                self._IDENTITY, _install_payload(), attribution={"utm_source": "hn"}
+            )
+        assert user_id is None and created is False
+        assert "/sign-in?gh_new=" in response.location
+        assert "gh_login" not in response.location  # names come from the token only
+        assert mod._PENDING_BIND_COOKIE in response.headers.get("Set-Cookie", "")
+        sql = " ".join(c.args[0] for c in cur.execute.call_args_list)
+        assert "INSERT INTO users" not in sql
+        conn.commit.assert_not_called()
+        token = parse_qs(urlparse(response.location).query)["gh_new"][0]
+        with app.test_request_context():
+            pending = mod.verify_pending_signup(token)
+        assert pending["iid"] == 777
+        assert pending["identity"]["id"] == 42
+        assert pending["attr"] == {"utm_source": "hn"}
+
+    def test_pending_signup_and_claim_tokens_are_not_interchangeable(self, signup_app):
+        app, mod = signup_app
+        with app.test_request_context():
+            pending = mod._sign_pending_signup(777, self._IDENTITY, {}, "octo-org", "bind")
+            claim = mod._sign_claim_token(777, self._IDENTITY)
+            assert mod.verify_claim_token(pending) is None
+            assert mod.verify_pending_signup(claim) is None
+            assert mod._verify_signup_state(pending) is False
+
+    def test_new_user_creates_org_and_handoff(self, signup_app):
+        app, mod = signup_app
+        # fetchone seq: no gh match; no email match; INSERT users
+        # RETURNING; org-name check (None); slug check (None); INSERT org
+        # RETURNING.
+        db_pool, conn, cur = _mock_db(
+            mod, [None, None, ("new-user",), None, None, ("new-org",)]
+        )
+        with app.test_request_context(), patch.object(mod, "db_pool", db_pool), \
+             patch("utils.auth.enforcer.assign_role_to_user") as role, \
+             patch("utils.auth.command_policy.seed_default_command_policy"), \
+             patch("utils.auth.tool_registry.seed_org_tool_permissions"), \
+             patch("routes.audit_routes.record_audit_event"):
+            response, user_id, install_id, created = mod._provision_and_handoff(
+                self._IDENTITY, _install_payload(), confirmed=True
+            )
+        assert user_id == "new-user"
+        assert created is True
+        assert "/sign-in?handoff=" in response.location
+        role.assert_called_once_with("new-user", "admin", "new-org")
+        conn.commit.assert_called_once()
+        sql = " ".join(c.args[0] for c in cur.execute.call_args_list)
+        assert "signup_handoff_hash" in sql        # handoff minted
+        assert "github_installations" in sql       # install linked
+        assert "email_verified" in sql             # provisioned verified
+
+    def test_new_user_has_unusable_password(self, signup_app):
+        app, mod = signup_app
+        # Same fetchone order as test_new_user_creates_org_and_handoff:
+        # gh-id miss, email miss, INSERT users RETURNING, org-name check,
+        # slug check, INSERT org RETURNING.
+        db_pool, conn, cur = _mock_db(
+            mod, [None, None, ("new-user",), None, None, ("new-org",)]
+        )
+        with app.test_request_context(), patch.object(mod, "db_pool", db_pool), \
+             patch("utils.auth.enforcer.assign_role_to_user"), \
+             patch("utils.auth.command_policy.seed_default_command_policy"), \
+             patch("utils.auth.tool_registry.seed_org_tool_permissions"), \
+             patch("routes.audit_routes.record_audit_event"):
+            _, user_id, _, created = mod._provision_and_handoff(
+                self._IDENTITY, _install_payload(), confirmed=True
+            )
+        # Pin the success path: on the failure path the INSERT is still
+        # recorded, so the hash assertion alone could pass vacuously.
+        assert user_id == "new-user"
+        assert created is True
+        insert = next(
+            c for c in cur.execute.call_args_list
+            if "INSERT INTO users" in c.args[0]
+        )
+        password_hash = insert.args[1][1]
+        # bcrypt of random bytes — never equal to any typable password's hash,
+        # and never empty (which some checkpw impls short-circuit on).
+        assert password_hash.startswith("$2")
+
+
+    def _provision_new_user(self, signup_app):
+        app, mod = signup_app
+        db_pool, conn, cur = _mock_db(
+            mod, [None, None, ("new-user",), None, None, ("new-org",)]
+        )
+        with app.test_request_context(), patch.object(mod, "db_pool", db_pool), \
+             patch("utils.auth.enforcer.assign_role_to_user"), \
+             patch("utils.auth.command_policy.seed_default_command_policy"), \
+             patch("utils.auth.tool_registry.seed_org_tool_permissions"), \
+             patch("routes.audit_routes.record_audit_event"):
+            return mod._provision_and_handoff(self._IDENTITY, _install_payload(), confirmed=True)
+
+    def test_new_user_fires_after_user_created(self, signup_app):
+        hook = MagicMock()
+        with patch("utils.hooks.get_hook", return_value=hook) as get_hook:
+            self._provision_new_user(signup_app)
+        get_hook.assert_called_once_with("after_user_created")
+        hook.assert_called_once_with("new-user", "new-org", "octo@cat.dev", "github", True)
+
+    def test_returning_user_does_not_fire_after_user_created(self, signup_app):
+        app, mod = signup_app
+        db_pool, conn, cur = _mock_db(mod, [("user-9",), ("org-9",)])
+        with app.test_request_context(), patch.object(mod, "db_pool", db_pool), \
+             patch("utils.auth.tool_registry.seed_org_tool_permissions"), \
+             patch("utils.hooks.get_hook") as get_hook:
+            mod._provision_and_handoff(self._IDENTITY, _install_payload())
+        get_hook.assert_not_called()
+
+    def test_raising_after_user_created_does_not_block_signup(self, signup_app):
+        import utils.hooks as hooks
+
+        class Broken:
+            @staticmethod
+            def after_user_created(*args):
+                raise RuntimeError("analytics down")
+
+        with patch.object(hooks, "_hooks_module", Broken), \
+             patch.object(hooks, "_hooks_loaded", True), \
+             patch.dict(hooks._hook_cache, clear=True):
+            response, user_id, _, created = self._provision_new_user(signup_app)
+        assert created is True
+        assert "/sign-in?handoff=" in response.location
+
+
+class TestOrgIdentity:
+    def test_collision_suffixes(self, signup_app):
+        app, mod = signup_app
+        cur = MagicMock()
+        cur.fetchone.side_effect = [("taken",)]  # name collision
+        name, slug = mod._unique_org_identity(cur, "Acme")
+        assert name.startswith("Acme-")
+        assert slug.startswith("acme-")
+
+    def test_no_collision_passthrough(self, signup_app):
+        app, mod = signup_app
+        cur = MagicMock()
+        cur.fetchone.side_effect = [None, None]
+        name, slug = mod._unique_org_identity(cur, "Acme Corp")
+        assert name == "Acme Corp"
+        assert slug == "acme-corp"
+
+
+class TestSignupComplete:
+    """/signup/complete: the signed-out second hop that creates the account."""
+
+    _IDENTITY = {"id": 42, "login": "octocat", "name": "Octo Cat", "email": "octo@cat.dev"}
+
+    @pytest.fixture
+    def redis(self):
+        used = set()
+        rc = MagicMock()
+        rc.set.side_effect = lambda key, *a, **k: not (key in used or used.add(key))
+        rc.delete.side_effect = lambda key: used.discard(key)
+        with patch("utils.cache.redis_client.get_redis_client", return_value=rc):
+            yield used
+
+    def _token(self, app, mod, bind="bind-1"):
+        with app.test_request_context():
+            return mod._sign_pending_signup(777, self._IDENTITY, {}, "octo-org", bind)
+
+    def _get(self, app, mod, token, cookie="bind-1", complete=None):
+        client = app.test_client()
+        if cookie:
+            client.set_cookie(mod._PENDING_BIND_COOKIE, cookie, path=mod._PENDING_BIND_PATH)
+        done = complete or MagicMock(return_value=mod.flask.redirect("/sign-in?handoff=h", code=302))
+        with patch.object(mod, "_verify_installation", return_value=_install_payload()), \
+             patch.object(mod, "_complete_signup", done):
+            return client.get(f"/github/app/signup/complete?t={token}"), done
+
+    def test_link_opened_in_another_browser_creates_nothing(self, signup_app, redis):
+        # Without the install's cookie a forwarded link would log that
+        # browser in as the installer.
+        app, mod = signup_app
+        resp, done = self._get(app, mod, self._token(app, mod), cookie="other")
+        assert "error=github_signup_expired" in resp.location
+        done.assert_not_called()
+
+    def test_creates_the_account_once(self, signup_app, redis):
+        app, mod = signup_app
+        token = self._token(app, mod)
+        resp, done = self._get(app, mod, token)
+        assert "handoff=" in resp.location
+        assert done.call_args.kwargs == {"confirmed": True}
+        again, done2 = self._get(app, mod, token)
+        assert "error=github_signup_expired" in again.location
+        done2.assert_not_called()
+
+    def test_a_failed_attempt_can_be_retried(self, signup_app, redis):
+        app, mod = signup_app
+        token = self._token(app, mod)
+        failing = MagicMock(return_value=mod.flask.Response("err", status=500))
+        resp, _ = self._get(app, mod, token, complete=failing)
+        assert resp.status_code == 500
+        resp, done = self._get(app, mod, token)
+        assert "handoff=" in resp.location

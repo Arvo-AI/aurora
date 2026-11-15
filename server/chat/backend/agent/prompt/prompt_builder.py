@@ -16,11 +16,11 @@ from .cache_registration import (
 )
 from .composer import (
     assemble_system_prompt,
+    assemble_system_prompt_parts,
     build_prompt_segments,
     build_system_invariant,
 )
 from .context_fetchers import (
-    build_knowledge_base_memory_segment,
     build_manual_vm_access_segment,
 )
 from .provider_rules import (
@@ -42,11 +42,11 @@ __all__ = [
     "PREFIX_CACHE_EPHEMERAL_TTL",
     "PromptSegments",
     "assemble_system_prompt",
+    "assemble_system_prompt_parts",
     "build_action_mode_segment",
     "build_background_mode_segment",
     "build_ephemeral_rules",
     "build_failure_recovery_segment",
-    "build_knowledge_base_memory_segment",
     "build_long_documents_note",
     "build_manual_vm_access_segment",
     "build_model_overlay_segment",

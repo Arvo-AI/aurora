@@ -47,15 +47,18 @@ SUPPORTED_SECRET_PROVIDERS: Set[str] = {
     "pagerduty", # PagerDuty connector tokens
     "opsgenie",  # OpsGenie connector tokens
     "splunk",    # Splunk connector tokens
+    "elastic",   # Elastic Cloud connector tokens
     "ovh",      # OVH Cloud
     "scaleway", # Scaleway Cloud
     "tailscale", # Tailscale VPN
     "cloudflare", # Cloudflare (DNS, Workers, WAF, analytics)
     "slack",    # Slack connector tokens
+    "teams",    # Microsoft Teams connector tokens
     "confluence", # Confluence connector tokens
     "jira",       # Jira connector tokens
     "sharepoint", # SharePoint connector tokens
     "coroot",   # Coroot connector tokens
+    "rabbitmq", # RabbitMQ management API credentials
     "bitbucket", # Bitbucket connector tokens
     "dynatrace", # Dynatrace connector tokens
     "bigpanda", # BigPanda connector tokens
@@ -69,8 +72,10 @@ SUPPORTED_SECRET_PROVIDERS: Set[str] = {
     "notion",   # Notion (documentation platform)
     "google",   # Google Chat — provider is "google_chat", split('_')[0] matches this
     "incidentio",  # incident.io connector tokens
+    "servicenow",  # ServiceNow connector tokens
     "flyio",    # Fly.io connector tokens
     "kubeconfig", # Kubernetes kubeconfig uploads
+    "mcp",      # Customer-registered MCP servers (list of servers in one blob)
 }
 
 
@@ -105,11 +110,20 @@ class SecretRefManager:
     # ------------------------------------------------------------------
 
     def store_secret(self, secret_name: str, secret_value: str) -> str:
-        """Store a secret in Vault and return the reference."""
-        return self.backend.store_secret(
+        """Store a secret in Vault and return the reference.
+
+        Re-storing under an existing name yields the same reference, so any
+        copy of the previous value in the shared Redis cache must go — otherwise
+        every container keeps serving the old value for the cache TTL (e.g. a
+        Slack credential blob still carrying a card channel the user just
+        removed, so incident cards keep landing in the deactivated channel).
+        """
+        secret_ref = self.backend.store_secret(
             secret_name=secret_name,
             secret_value=secret_value,
         )
+        clear_secret_cache(secret_ref)
+        return secret_ref
 
     def get_secret(self, secret_ref: str) -> str:
         """Retrieve a secret from Vault using a reference."""
@@ -200,7 +214,9 @@ class SecretRefManager:
             if conn:
                 conn.close()
 
-    def get_user_token_data(self, user_id: str, provider: str) -> Optional[Dict[str, Any]]:
+    def get_user_token_data(
+        self, user_id: str, provider: str, *, raise_on_error: bool = False
+    ) -> Optional[Dict[str, Any]]:
         """Get user token data from Vault."""
         provider_base = provider.lower().split('_')[0]
         if provider_base not in SUPPORTED_SECRET_PROVIDERS:
@@ -262,13 +278,17 @@ class SecretRefManager:
             )
 
             error_str = error_msg.lower()
+            # A missing secret is "not connected", not a failed read of the others.
             if "not found" in error_str or "no versions" in error_str or "invalidpath" in error_str:
                 logger.info(
                     "Secret not found in Vault for provider %s. Clearing stale secret_ref.",
                     provider,
                 )
                 self._clear_secret_ref(user_id, provider)
-
+                return None
+            # Callers that merge into the stored blob must not treat this as empty.
+            if raise_on_error:
+                raise
             return None
         finally:
             if cursor:
@@ -422,9 +442,11 @@ def has_user_credentials(user_id: str, provider: str) -> bool:
     return secret_manager.has_user_credentials(user_id, provider)
 
 
-def get_user_token_data(user_id: str, provider: str) -> Optional[Dict[str, Any]]:
+def get_user_token_data(
+    user_id: str, provider: str, *, raise_on_error: bool = False
+) -> Optional[Dict[str, Any]]:
     """Get user token data, automatically handling secret references."""
-    return secret_manager.get_user_token_data(user_id, provider)
+    return secret_manager.get_user_token_data(user_id, provider, raise_on_error=raise_on_error)
 
 
 def get_token_owner_id(user_id: str, provider: str) -> str:

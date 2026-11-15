@@ -30,7 +30,24 @@ class CompletedProcess:
     stderr: str
 
 
-def terminal_run(
+def terminal_run(args: Union[str, List[str]], *, timeout: Optional[int] = None, **kwargs) -> CompletedProcess:
+    """Run a command (see :func:`_terminal_run`), reporting it to the stall watchdog.
+
+    The command enforces its own timeout, so while it runs a watched
+    investigation is not stuck: a 20-minute query is waited for, not cancelled.
+    """
+    from utils.progress_watch import bounded_call
+
+    if isinstance(args, str):
+        program = args.split(None, 1)[0] if args.strip() else "command"
+    else:
+        program = str(args[0]) if args else "command"
+    # Only the program name: arguments can carry identifiers or secrets.
+    with bounded_call(timeout or 300, f"command '{os.path.basename(program)}'"):
+        return _terminal_run(args, timeout=timeout, **kwargs)
+
+
+def _terminal_run(
     args: Union[str, List[str]],
     *,
     capture_output: bool = False,
@@ -40,6 +57,7 @@ def terminal_run(
     cwd: Optional[str] = None,
     env: Optional[Dict[str, str]] = None,
     trusted: bool = False,
+    oauth_access_token: Optional[str] = None,
     **kwargs
 ) -> CompletedProcess:
     """
@@ -61,6 +79,8 @@ def terminal_run(
         cwd: Working directory
         env: Environment variables to set
         trusted: If True, skip safety guardrail checks (for internal infra ops)
+        oauth_access_token: Applied to the argv after the guardrail hash, so the
+            token is never part of the command that gets hashed or logged
         **kwargs: Other subprocess.run() arguments
     
     Returns:
@@ -71,6 +91,9 @@ def terminal_run(
         blocked = _check_guardrails(args)
         if blocked is not None:
             return blocked
+    # After the hash. The token must not be in the command that guardrails hash.
+    clean_args = args
+    args = _apply_oauth_access_token(args, oauth_access_token)
     # Check if pod isolation is enabled (default: true for security)
     # Only explicitly set to "false" for local development
     enable_pod_isolation = os.getenv('ENABLE_POD_ISOLATION', 'true') == 'true'
@@ -116,7 +139,7 @@ def terminal_run(
                 stderr=result.stderr if capture_output else ""
             )
         except subprocess.TimeoutExpired as e:
-            logger.error(f"Command timed out after {timeout}s: {cmd}")
+            logger.error("Command timed out after %ss", timeout or 300)
             return CompletedProcess(
                 args=args,
                 returncode=124,  # Standard timeout exit code
@@ -152,17 +175,9 @@ def terminal_run(
         logger.error(f"Missing user context: user_id={user_id}, session_id={session_id}")
         raise RuntimeError("Cannot execute command: user_id and session_id required for terminal pod isolation")
     
-    # Convert args to command string
-    if isinstance(args, list):
-        # Check if this is a bash -c command (common pattern for chaining)
-        if len(args) >= 3 and args[0] == "bash" and args[1] == "-c":
-            # Preserve the bash -c <script> pattern - don't just join with spaces
-            command = f"bash -c {shlex.quote(args[2])}"
-        else:
-            # Join list into shell command
-            command = ' '.join(shlex.quote(str(arg)) for arg in args)
-    else:
-        command = str(args)
+    # The pod runs the argv that carries the token. The log line does not.
+    command = _command_string(args)
+    loggable_command = _command_string(clean_args)
     
     # Get tool executor
     try:
@@ -172,8 +187,6 @@ def terminal_run(
         raise RuntimeError(f"Cannot execute command: tool executor unavailable: {e}") from e
     
     # Setup environment variables if provided
-    # Keep the original user command for safe logging (before env exports are prepended)
-    loggable_command = command
     if env:
         env_setup_commands = []
         for key, value in env.items():
@@ -186,6 +199,11 @@ def terminal_run(
 
     # Redact known sensitive flags from the loggable command
     redacted_command = re.sub(r'(--password\s+)\S+', r'\1[REDACTED]', loggable_command)
+    redacted_command = re.sub(
+        r'(--oauth_access_token(?:=|\s+))\S+',
+        r'\1[REDACTED]',
+        redacted_command,
+    )
 
     # Execute command in terminal pod
     logger.info(f"Executing command in terminal pod for user {user_id}, session {session_id}: {redacted_command[:100]}")
@@ -212,6 +230,35 @@ def terminal_run(
         stdout=stdout,
         stderr=stderr
     )
+
+
+def _command_string(args: Union[str, List[str]]) -> str:
+    if isinstance(args, list):
+        if len(args) >= 3 and args[0] == "bash" and args[1] == "-c":
+            return f"bash -c {shlex.quote(str(args[2]))}"
+        return " ".join(shlex.quote(str(arg)) for arg in args)
+    return str(args)
+
+
+def _apply_oauth_access_token(args: Union[str, List[str]], token: Optional[str]):
+    """Insert --oauth_access_token after the hash, never before it."""
+    if not token:
+        return args
+    flag = f"--oauth_access_token={token}"
+    if isinstance(args, str):
+        if "--oauth_access_token" in args:
+            return args
+        head, _, tail = args.partition(" ")
+        return f"{head} {flag}" if not tail else f"{head} {flag} {tail}"
+    argv = list(args)
+    rendered = [str(a) for a in argv]
+    if any(a == "--oauth_access_token" or a.startswith("--oauth_access_token=") for a in rendered):
+        return argv
+    insert_at = 1
+    if insert_at < len(rendered) and rendered[insert_at].startswith("--project_id"):
+        insert_at += 1
+    argv.insert(insert_at, flag)
+    return argv
 
 
 def _check_guardrails(args: Union[str, List[str]]) -> Optional[CompletedProcess]:

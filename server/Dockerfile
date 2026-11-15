@@ -21,7 +21,8 @@ ENV UV_CACHE_DIR="/tmp/.cache/uv"
 # Set the working directory
 WORKDIR /app 
 
-# Disable HTTP pipelining to prevent CDN hash mismatches
+# Disable HTTP pipelining to prevent CDN hash mismatches.
+# tini is the celery worker's PID 1; this image has no init of its own.
 RUN echo 'Acquire::http::Pipeline-Depth "0";' > /etc/apt/apt.conf.d/99fixhash && \
     apt-get update && apt-get install -y \
     libpq-dev \
@@ -38,6 +39,7 @@ RUN echo 'Acquire::http::Pipeline-Depth "0";' > /etc/apt/apt.conf.d/99fixhash &&
     lsb-release \
     openssh-client \
     dnsutils \
+    tini \
     --no-install-recommends && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
@@ -49,7 +51,7 @@ RUN sh /uv-installer.sh && rm /uv-installer.sh && \
 
 # Add Docker GPG key and repository
 RUN install -m 0755 -d /etc/apt/keyrings && \
-    curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc && \
+    curl -fsSL --proto '=https' --proto-redir '=https' https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc && \
     chmod a+r /etc/apt/keyrings/docker.asc && \
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian $(. /etc/os-release && echo \"$VERSION_CODENAME\") stable" \
         | tee /etc/apt/sources.list.d/docker.list > /dev/null
@@ -71,7 +73,7 @@ RUN ARCH=$(uname -m) && \
     else \
         echo "Unsupported architecture: $ARCH" && exit 1; \
     fi && \
-    wget -q https://releases.hashicorp.com/terraform/1.7.5/terraform_1.7.5_linux_${TERRAFORM_ARCH}.zip && \
+    curl -fsSL --proto '=https' --proto-redir '=https' "https://releases.hashicorp.com/terraform/1.7.5/terraform_1.7.5_linux_${TERRAFORM_ARCH}.zip" -o "terraform_1.7.5_linux_${TERRAFORM_ARCH}.zip" && \
     unzip terraform_1.7.5_linux_${TERRAFORM_ARCH}.zip && \
     mv terraform /usr/local/bin/ && \
     rm terraform_1.7.5_linux_${TERRAFORM_ARCH}.zip
@@ -142,10 +144,10 @@ plugin_cache_may_break_dependency_lock_file = true
 EOF
 
 # Install Google Cloud SDK
-RUN curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg && \
+RUN curl -fsSL --proto '=https' --proto-redir '=https' https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg && \
     echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
         | tee -a /etc/apt/sources.list.d/google-cloud-sdk.list && \
-    apt-get update && apt-get install -y google-cloud-sdk google-cloud-sdk-gke-gcloud-auth-plugin && \
+    apt-get update && apt-get install -y --no-install-recommends google-cloud-cli google-cloud-cli-gke-gcloud-auth-plugin && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Install AWS CLI v2 (multi-arch support)
@@ -157,7 +159,7 @@ RUN ARCH=$(uname -m) && \
     else \
         echo "Unsupported architecture: $ARCH" && exit 1; \
     fi && \
-    curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-${AWS_CLI_ARCH}.zip" -o "awscliv2.zip" && \
+    curl -fsSL --proto '=https' --proto-redir '=https' "https://awscli.amazonaws.com/awscli-exe-linux-${AWS_CLI_ARCH}.zip" -o "awscliv2.zip" && \
     unzip -q awscliv2.zip && \
     ./aws/install > /dev/null 2>&1 && \
     rm -rf awscliv2.zip aws/
@@ -171,10 +173,14 @@ RUN ARCH=$(uname -m) && \
     else \
         echo "Unsupported architecture: $ARCH" && exit 1; \
     fi && \
-    curl -fsSL "https://aka.ms/InstallAzureCLIDeb" -o azure-cli-install.sh && \
+    curl -fsSL --proto '=https' --proto-redir '=https' "https://aka.ms/InstallAzureCLIDeb" -o azure-cli-install.sh && \
     chmod +x azure-cli-install.sh && \
     ./azure-cli-install.sh && \
-    rm azure-cli-install.sh
+    rm azure-cli-install.sh && \
+    # Bake in resource-graph: discovery and the agent both run `az graph query`.
+    # Without this the CLI dynamic-installs it on first use, which fails in
+    # egress-restricted networks and races across concurrent Celery tasks.
+    az extension add --name resource-graph --only-show-errors
 
 # Install OVHcloud CLI (multi-arch support)
 RUN ARCH=$(uname -m) && \
@@ -185,7 +191,7 @@ RUN ARCH=$(uname -m) && \
     else \
         echo "Unsupported architecture: $ARCH" && exit 1; \
     fi && \
-    curl -fsSL "https://github.com/ovh/ovhcloud-cli/releases/download/v0.9.0/ovhcloud-cli_Linux_${OVH_CLI_ARCH}.tar.gz" -o ovhcloud.tar.gz && \
+    curl -fsSL --proto '=https' --proto-redir '=https' "https://github.com/ovh/ovhcloud-cli/releases/download/v0.9.0/ovhcloud-cli_Linux_${OVH_CLI_ARCH}.tar.gz" -o ovhcloud.tar.gz && \
     tar -xzf ovhcloud.tar.gz && \
     mv ovhcloud /usr/local/bin/ && \
     chmod +x /usr/local/bin/ovhcloud && \
@@ -200,19 +206,19 @@ RUN ARCH=$(uname -m) && \
     else \
         echo "Unsupported architecture: $ARCH" && exit 1; \
     fi && \
-    curl -fsSL "https://github.com/scaleway/scaleway-cli/releases/download/v2.48.0/scaleway-cli_2.48.0_linux_${SCW_CLI_ARCH}" -o /usr/local/bin/scw && \
+    curl -fsSL --proto '=https' --proto-redir '=https' "https://github.com/scaleway/scaleway-cli/releases/download/v2.48.0/scaleway-cli_2.48.0_linux_${SCW_CLI_ARCH}" -o /usr/local/bin/scw && \
     chmod +x /usr/local/bin/scw
 
 # Install Tailscale CLI (for local dev SSH to tailnet devices)
-RUN curl -fsSL https://tailscale.com/install.sh | sh
+RUN curl -fsSL --proto '=https' --proto-redir '=https' https://tailscale.com/install.sh | sh
 
 # Install Fly.io CLI (flyctl) for Fly.io connector
 ARG FLYCTL_VERSION=0.4.57
-RUN set -o pipefail && curl -fsSL "https://fly.io/install.sh" | FLYCTL_INSTALL="/usr/local" FLYCTL_VERSION=${FLYCTL_VERSION} sh
+RUN set -o pipefail && curl -fsSL --proto '=https' --proto-redir '=https' "https://fly.io/install.sh" | FLYCTL_INSTALL="/usr/local" FLYCTL_VERSION=${FLYCTL_VERSION} sh
 
 # Install Node.js for MCP servers
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
-    apt-get install -y nodejs && \
+RUN curl -fsSL --proto '=https' --proto-redir '=https' https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y --no-install-recommends nodejs && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Copy GitHub MCP Server binary from build stage
@@ -227,11 +233,30 @@ RUN ARCH=$(uname -m) && \
     else \
         echo "Unsupported architecture: $ARCH" && exit 1; \
     fi && \
-    KUBECTL_VERSION=$(curl -fsSL --retry 3 --retry-delay 2 https://dl.k8s.io/release/stable.txt 2>/dev/null || echo "v1.31.0") && \
-    curl -fsSL --retry 5 --retry-delay 3 \
+    KUBECTL_VERSION=$(curl -fsSL --proto '=https' --proto-redir '=https' --retry 3 --retry-delay 2 https://dl.k8s.io/release/stable.txt 2>/dev/null || echo "v1.31.0") && \
+    curl -fsSL --proto '=https' --proto-redir '=https' --retry 5 --retry-delay 3 \
       "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${KUBECTL_ARCH}/kubectl" \
       -o /usr/local/bin/kubectl && \
     chmod +x /usr/local/bin/kubectl
+
+# kubelogin: Entra-integrated AKS writes a kubeconfig whose exec plugin shells
+# out to `kubelogin`, so kubectl fails outright without it. `-l azurecli` is
+# what makes it reuse the service principal's token instead of the default
+# devicecode flow, which is interactive and cannot work headless.
+RUN ARCH=$(uname -m) && \
+    if [ "$ARCH" = "x86_64" ]; then \
+        KUBELOGIN_ARCH="amd64"; \
+    elif [ "$ARCH" = "aarch64" ]; then \
+        KUBELOGIN_ARCH="arm64"; \
+    else \
+        echo "Unsupported architecture: $ARCH" && exit 1; \
+    fi && \
+    curl -fsSL --proto '=https' --proto-redir '=https' --retry 5 --retry-delay 3 \
+      "https://github.com/Azure/kubelogin/releases/latest/download/kubelogin-linux-${KUBELOGIN_ARCH}.zip" \
+      -o /tmp/kubelogin.zip && \
+    unzip -j -o /tmp/kubelogin.zip "bin/linux_${KUBELOGIN_ARCH}/kubelogin" -d /usr/local/bin && \
+    chmod +x /usr/local/bin/kubelogin && \
+    rm /tmp/kubelogin.zip
 
 # Upgrade pip & install base deps
 RUN --mount=type=cache,target=/root/.cache/pip \

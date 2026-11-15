@@ -12,9 +12,14 @@ interface DatadogWebhookStepProps {
   onCopy: () => void;
   onDisconnect: () => Promise<void>;
   loading: boolean;
+  /** Rendered above the webhook instructions: the connected-org list and add form. */
+  children?: React.ReactNode;
 }
 
-export function DatadogWebhookStep({ status, webhookUrl, copied, onCopy, onDisconnect, loading }: DatadogWebhookStepProps) {
+export function DatadogWebhookStep({ status, webhookUrl, copied, onCopy, onDisconnect, loading, children }: DatadogWebhookStepProps) {
+  const orgCount = status.accounts?.length ?? 1;
+  const isMultiOrg = orgCount > 1;
+
   return (
     <Card>
       <CardHeader>
@@ -22,26 +27,13 @@ export function DatadogWebhookStep({ status, webhookUrl, copied, onCopy, onDisco
         <CardDescription>Send monitor incidents and events directly into Aurora</CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
-        <div className="grid md:grid-cols-3 gap-4">
-          <div className="p-4 border rounded-lg">
-            <p className="text-xs text-muted-foreground uppercase tracking-wide">Datadog Site</p>
-            <p className="text-base font-semibold">{status.site || 'datadoghq.com'}</p>
-          </div>
-          <div className="p-4 border rounded-lg">
-            <p className="text-xs text-muted-foreground uppercase tracking-wide">Service Account</p>
-            <p className="text-base font-semibold">{status.serviceAccountName || 'Not provided'}</p>
-          </div>
-          <div className="p-4 border rounded-lg">
-            <p className="text-xs text-muted-foreground uppercase tracking-wide">Org</p>
-            <p className="text-base font-semibold">{status.org?.name || 'Datadog'}</p>
-          </div>
-        </div>
+        {children}
 
         {webhookUrl && (
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <p className="text-sm font-medium">Webhook URL</p>
-              <Badge variant="outline">Per user</Badge>
+              <Badge variant="outline">Per user &mdash; add to every organization</Badge>
             </div>
             <div className="flex flex-col md:flex-row md:items-center gap-3">
               <code className="flex-1 px-3 py-2 rounded bg-muted text-xs break-all border">{webhookUrl}</code>
@@ -49,16 +41,29 @@ export function DatadogWebhookStep({ status, webhookUrl, copied, onCopy, onDisco
                 {copied ? "Copied" : "Copy URL"}
               </Button>
             </div>
+            <p className="text-xs text-muted-foreground">
+              This URL belongs to your Aurora account, not to a single Datadog organization. Create a webhook
+              pointing at it inside <strong>each</strong> organization you connect, otherwise alerts from the
+              others never reach Aurora.
+            </p>
           </div>
         )}
 
         <div className="space-y-3">
-          <p className="text-sm font-medium">Add to Datadog:</p>
+          <p className="text-sm font-medium">
+            Add to Datadog{isMultiOrg ? ` (repeat in all ${orgCount} organizations)` : ''}:
+          </p>
           <ol className="list-decimal list-inside space-y-2 text-sm text-muted-foreground">
             <li>Go to <strong>Integrations</strong> and search up <strong>Webhooks</strong> integration by Datadog.</li>
             <li>Create a webhook target using the URL above. Optionally set a shared secret for signing.</li>
             <li>In any monitor notification, include <code className="bg-muted px-1 rounded">@webhook-{"<your_webhook_name>"}</code> so Datadog knows where to send alerts.</li>
             <li>Navigate to <strong>Monitors → New Monitor → Metric</strong>, set any test condition (e.g., system.cpu.idle &lt; 100), then in the "Notify your team" section add @webhook-&lt;your_webhook_name&gt; and click <strong>Test notifications</strong> to send a sample alert to Aurora.</li>
+            <li>
+              Switch organization from the bottom-left <strong>Accounts</strong> menu and repeat these steps for
+              every organization connected above. Using the same webhook name in each keeps
+              <code className="bg-muted px-1 rounded mx-1">@webhook-{"<your_webhook_name>"}</code>
+              working everywhere.
+            </li>
           </ol>
         </div>
 
@@ -87,7 +92,7 @@ export function DatadogWebhookStep({ status, webhookUrl, copied, onCopy, onDisco
             Connected since <strong>{status.validatedAt ? new Date(status.validatedAt).toLocaleString() : 'just now'}</strong>
           </div>
           <Button variant="outline" onClick={onDisconnect} disabled={loading}>
-            {loading ? "Disconnecting…" : "Disconnect Datadog"}
+            {loading ? "Disconnecting…" : isMultiOrg ? "Disconnect All Organizations" : "Disconnect Datadog"}
           </Button>
         </div>
       </CardContent>

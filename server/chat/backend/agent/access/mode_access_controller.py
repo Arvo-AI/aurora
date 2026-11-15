@@ -49,13 +49,14 @@ class ModeAccessController:
         "iac_tool",
         "github_commit",
         "send_hpa_vpa_recommendation",
+        "post_slack_message",
+        "post_teams_message",
     })
 
     _POLICY = ReadOnlyPolicy(
         safe_tool_names=(
             "web_search",
             "analyze_zip_file",
-            "rag_index_zip",
         ),
         blocked_tool_prefixes=("mcp_",),  # Block MCP tools by default
         iac_safe_actions=(
@@ -90,6 +91,15 @@ class ModeAccessController:
                 filtered.append(tool)
                 continue
 
+            # Customer-registered MCP servers tag their tools with a read/write
+            # classification, because the blanket `mcp_` block below cannot tell
+            # a lookup from a mutation and the allowlist above only knows
+            # GitHub's tool names. Without this, Ask mode silently dropped every
+            # tool from every custom server.
+            if (getattr(tool, "metadata", None) or {}).get("mcp_read_only"):
+                filtered.append(tool)
+                continue
+
             if any(name.startswith(prefix) for prefix in cls._POLICY.blocked_tool_prefixes):
                 LOGGER.info("ModeAccessController dropped tool %s due to read-only mode prefix match", name)
                 continue
@@ -117,13 +127,18 @@ class ModeAccessController:
         return False, message
 
     @classmethod
-    def ensure_cloud_command_allowed(cls, mode: Optional[str], is_read_only_command: bool, command: str) -> Tuple[bool, str]:
+    def ensure_cloud_command_allowed(cls, mode: Optional[str], is_read_only_command: bool,
+                                     command: str, reason: str = "") -> Tuple[bool, str]:
         if not cls.is_read_only_mode(mode) or is_read_only_command:
             return True, ""
 
+        # *reason* names the offending token so the agent can repair the command
+        # rather than retry it verbatim. Falls back to the generic wording when a
+        # caller has not classified the command.
+        cause = reason or "it modifies infrastructure"
         message = (
-            "Command '%s' modifies infrastructure and is blocked in Ask mode. "
-            "Send the request in Agent mode to proceed." % command
+            "Command '%s' is blocked in Ask mode because %s. "
+            "Send the request in Agent mode to proceed." % (command, cause)
         )
         return False, message
 
@@ -138,6 +153,11 @@ class ModeAccessController:
 
         # Allow safe read-only GitHub MCP tools
         if name in cls.SAFE_GITHUB_MCP_TOOLS:
+            return True
+
+        # Customer MCP is two dispatchers. Per-tool writes are refused in
+        # custom_mcp_tools._visible, which has the tool metadata this check does not.
+        if name in ("mcp_list_tools", "mcp_call_tool"):
             return True
 
         if any(name.startswith(prefix) for prefix in cls._POLICY.blocked_tool_prefixes):

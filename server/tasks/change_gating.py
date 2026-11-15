@@ -16,8 +16,10 @@ Each task:
 4. Runs a full agentic investigation through the existing
    ``run_background_chat`` task — SYNCHRONOUSLY via ``.apply()`` so this
    task owns the whole review lifecycle — in read-only ``mode="ask"``.
-5. Parses the agent's final message as a verdict JSON and posts a review:
-   APPROVE when SAFE, COMMENT with findings when RISKY.
+5. Parses the agent's final message as a verdict JSON and posts a COMMENT
+   review carrying the verdict (SAFE, or RISKY with findings). Aurora never
+   approves PRs — approval stays with human reviewers, so the verdict can
+   never satisfy a required-approval branch protection / merge check.
 
 Everything provider-specific stays behind the adapter
 (``services.change_gating.protocol.PRAdapter``); the shared flow lives in
@@ -370,10 +372,10 @@ def _run_investigation(
             provider="github",
             log_key="investigate_pr",
             post_review_reject_hint=(
-                "common causes: the GitHub App lacks the "
-                "'Pull requests: write' permission (upgrade in App settings, "
-                "org admin must accept), or APPROVE was attempted on a PR "
-                "authored by the App itself."
+                "on 403 the GitHub App likely lacks the 'Pull requests: "
+                "write' permission (upgrade in App settings, org admin must "
+                "accept); on 422 GitHub rejected the review payload (e.g. "
+                "stale commit_id after a force-push, or an oversized body)."
             ),
         )
     finally:
@@ -466,8 +468,8 @@ def _run_bitbucket_investigation(
             provider="bitbucket",
             log_key="investigate_bitbucket_pr",
             post_review_reject_hint=(
-                "common causes: the Bitbucket token lacks write:pullrequest "
-                "scope, or approve was attempted on the token owner's own PR."
+                "on 403 the Bitbucket token likely lacks write:pullrequest "
+                "scope; on 422 Bitbucket rejected the comment payload."
             ),
         )
     finally:
@@ -742,7 +744,7 @@ def _run_investigation_core(
                 # The input rail blocked the (attacker-controllable) PR
                 # title/body. The session's final message is just the block
                 # notice — there was NO investigation, so posting any verdict
-                # (especially an APPROVE) would be wrong. Post nothing.
+                # would be wrong. Post nothing.
                 logger.warning(
                     "change_gating=%s %s session_id=%s status=guardrail_blocked",
                     log_key, log_ctx, session_id,
@@ -843,7 +845,7 @@ def _run_investigation_core(
         anchored, unanchored = anchor_findings(verdict["findings"], hunks)
 
         # Only fetch existing comments when there's something to reconcile:
-        # no anchored findings (SAFE/APPROVE) or no prior Aurora reviews
+        # no anchored findings (SAFE) or no prior Aurora reviews
         # (first review) means live_fingerprints is provably empty, so skip
         # the paginated /comments GET entirely.
         aurora_review_ids = {
@@ -875,17 +877,12 @@ def _run_investigation_core(
             verdict["verdict"], verdict.get("summary", ""), verdict["findings"],
             head_sha, incremental=incremental,
         )
-        # Incremental reviews never APPROVE: they assessed only the latest
-        # commits, so a clean delta must not post a whole-PR green sign-off
-        # while earlier findings may still be open. Only a full-PR review
-        # (first pass / fallback) approves on SAFE.
-        if incremental:
-            event = "COMMENT"
-        else:
-            event = "APPROVE" if verdict["verdict"] == "SAFE" else "COMMENT"
-
         # --------------------------------------------------------------
-        # 11. Post the new review. Inline comments = net-new findings only;
+        # 11. Post the new review — always a COMMENT, never an approval
+        #     (an approval would count toward required-approval branch
+        #     protection / merge checks, letting an LLM verdict stand in
+        #     for human review; adapters cannot approve).
+        #     Inline comments = net-new findings only;
         #     prior comments are never touched (fixed findings go outdated
         #     on their own). In INCREMENTAL mode each review covers a
         #     distinct slice of commits, so prior reviews are a valid
@@ -896,7 +893,7 @@ def _run_investigation_core(
         _gh(
             "post_review",
             lambda: adapter.post_review(
-                pr_number, commit_id=head_sha, event=event, body=body, comments=comments
+                pr_number, commit_id=head_sha, body=body, comments=comments
             ),
         )
 
@@ -921,11 +918,24 @@ def _run_investigation_core(
                 "change_gating=%s %s status=superseded superseded=%d prior_reviews=%d",
                 log_key, log_ctx, superseded, len(prior_aurora_reviews),
             )
-        elif incremental and verdict["verdict"] == "RISKY":
-            # An incremental review found NEW risk: retract any stale whole-PR
-            # APPROVE (from an earlier full review) so the PR does not show a
-            # false "Aurora approved" green check while risk is open. COMMENT
-            # reviews are valid per-slice history and are left intact.
+        elif incremental:
+            # Retract any stale whole-PR APPROVE (posted before Aurora stopped
+            # approving) regardless of this slice's verdict, since the
+            # full-path supersede above doesn't run on incremental reviews.
+            # Best-effort and GitHub-only in practice: retraction happens on
+            # the next review run of the PR (a failed dismissal is retried on
+            # the next push), and Bitbucket never reaches this branch — its
+            # adapter has no incremental path and never surfaces APPROVED, so
+            # legacy Bitbucket approvals must be removed by hand (see the
+            # bitbucket_adapter module docstring). COMMENT reviews are valid
+            # per-slice history, left intact (dismissing skips non-APPROVED
+            # reviews, so this is a no-op when no legacy approval exists).
+            dismiss_message = (
+                "Later changes introduce incident risk — see the latest review."
+                if verdict["verdict"] == "RISKY"
+                else "Aurora reviews are advisory-only and no longer approve — "
+                "see the latest review."
+            )
             dismissed = 0
             for prior_review in prior_aurora_reviews:
                 if prior_review.get("state") != "APPROVED":
@@ -934,7 +944,7 @@ def _run_investigation_core(
                     adapter.dismiss_review(
                         pr_number,
                         prior_review.get("id"),
-                        "Later changes introduce incident risk — see the latest review.",
+                        dismiss_message,
                     )
                     dismissed += 1
                 except Exception as exc:

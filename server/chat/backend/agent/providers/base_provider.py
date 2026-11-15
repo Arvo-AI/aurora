@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 # Gemini model name fragments that indicate thinking support (2.5+, 3+)
 _GEMINI_THINKING_INDICATORS = (
-    "gemini-3", "gemini-2.5",
+    "gemini-4", "gemini-3", "gemini-2.5",
     "2.5-pro", "2.5-flash",
     "3-pro", "3-flash",
 )
@@ -39,6 +39,14 @@ def apply_gemini_thinking_config(config: dict, model_name: str) -> None:
         config: Model configuration dict to update.
         model_name: Native Gemini model name (e.g. "gemini-2.5-pro").
     """
+    name_lower = model_name.lower()
+    if "gemini-4" in name_lower:
+        # Gemini 4 generateContent thought summaries can contain the thought
+        # summarizer's own working (DEV-1755). Suppress their return until a
+        # supported summary path is verified. Internal reasoning stays enabled.
+        config["include_thoughts"] = False
+        return
+
     disable_thinking = os.getenv("GEMINI_DISABLE_THINKING", "").lower() in (
         "true", "1", "yes",
     )
@@ -46,7 +54,6 @@ def apply_gemini_thinking_config(config: dict, model_name: str) -> None:
         logger.info(f"Thinking mode disabled via GEMINI_DISABLE_THINKING for {model_name}")
         return
 
-    name_lower = model_name.lower()
     if "flash-lite" in name_lower:
         return
     is_thinking_model = any(
@@ -69,6 +76,15 @@ class BaseLLMProvider(ABC):
     def __init__(self):
         """Initialize the provider."""
         self.provider_name = self.__class__.__name__.replace("Provider", "").lower()
+
+    def prompt_cache_style(self, model: str) -> Optional[str]:
+        """How ``model`` accepts a cache marker, or None when no marker should be sent.
+
+        OpenAI and Gemini cache a repeated prefix on their own and can reject an
+        explicit marker, so they stay on this default. A provider that needs one
+        overrides this and returns a ``CACHE_STYLE_*`` constant.
+        """
+        return None
 
     @abstractmethod
     def get_chat_model(

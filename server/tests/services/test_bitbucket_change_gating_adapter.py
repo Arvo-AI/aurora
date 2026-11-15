@@ -10,7 +10,8 @@ Pins the provider-normalization contract of ``BitbucketPRAdapter``
   status_code) instead of flowing through as data.
 - ``find_aurora_reviews`` requires marker AND allowlisted author UUID —
   a marker alone (paste attack) never qualifies.
-- SAFE posting keeps the comment when the approve step fails.
+- ``post_review`` posts a marker comment only — approve is never called;
+  dismiss/supersede prepend a note only — unapprove is never called.
 - ``get_compare`` / ``get_compare_diff`` return None (full-PR fallback).
 - ``parse_files_from_diff`` yields GitHub ``list_files``-shaped dicts.
 
@@ -58,7 +59,6 @@ def _bb_pr(state="OPEN", head="abc123", dest="main", draft=False):
         "author": {"nickname": "octocat", "display_name": "Octo Cat"},
         "source": {"commit": {"hash": head}, "branch": {"name": "feature/x"}},
         "destination": {"commit": {"hash": "base456"}, "branch": {"name": dest}},
-        "participants": [],
     }
 
 
@@ -144,63 +144,43 @@ class TestAuroraIdentity:
         aurora = adapter.find_aurora_reviews(reviews)
         assert [r["id"] for r in aurora] == [1]
 
-    def test_last_review_marked_approved_when_aurora_approves(self):
+    def test_reviews_always_commented_never_synthetic_approved(self):
         adapter, read, _ = _adapter()
+        # An approving allowlisted participant on the PR must NOT promote
+        # any synthesized review to APPROVED — the old synthetic-APPROVED
+        # path read participants from get_pull_request; it must stay gone.
+        read.get_pull_request.return_value = {
+            **_bb_pr(),
+            "participants": [{"approved": True, "user": {"uuid": _BOT_UUID}}],
+        }
+        adapter.get_pull_request(7)
         marker_body = encode_marker([], "abc123")
         read.list_pr_comments.return_value = [
             self._comment(1, marker_body, _BOT_UUID),
             self._comment(2, marker_body, _BOT_UUID),
         ]
-        adapter._last_participants = [
-            {"approved": True, "user": {"uuid": _BOT_UUID}},
-        ]
         aurora = adapter.find_aurora_reviews(adapter.list_reviews(7))
-        assert aurora[0]["state"] == "COMMENTED"
-        assert aurora[-1]["state"] == "APPROVED"
-
-    def test_other_users_approval_does_not_mark_aurora(self):
-        adapter, read, _ = _adapter()
-        read.list_pr_comments.return_value = [
-            self._comment(1, encode_marker([], "abc123"), _BOT_UUID),
-        ]
-        adapter._last_participants = [
-            {"approved": True, "user": {"uuid": _OTHER_UUID}},
-        ]
-        aurora = adapter.find_aurora_reviews(adapter.list_reviews(7))
-        assert aurora[-1]["state"] == "COMMENTED"
+        assert [r["state"] for r in aurora] == ["COMMENTED", "COMMENTED"]
 
 
 class TestPosting:
-    def test_safe_posts_comment_and_approves(self):
+    def test_safe_posts_comment_never_approves(self):
         adapter, _, post = _adapter()
         post.add_pr_comment.return_value = {"id": 42}
-        post.approve_pull_request.return_value = {"approved": True}
 
         result = adapter.post_review(
-            7, commit_id="abc123", event="APPROVE", body="SAFE body", comments=[]
+            7, commit_id="abc123", body="SAFE body", comments=[]
         )
 
         assert result["id"] == 42
         post.add_pr_comment.assert_called_once()
-        post.approve_pull_request.assert_called_once()
-
-    def test_safe_keeps_comment_when_approve_fails(self):
-        adapter, _, post = _adapter()
-        post.add_pr_comment.return_value = {"id": 42}
-        post.approve_pull_request.return_value = {
-            "error": True, "status": 400, "message": "You cannot approve your own pull request",
-        }
-        # Must NOT raise — the comment is the review.
-        result = adapter.post_review(
-            7, commit_id="abc123", event="APPROVE", body="SAFE body", comments=[]
-        )
-        assert result["id"] == 42
+        post.approve_pull_request.assert_not_called()
 
     def test_risky_posts_comment_only(self):
         adapter, _, post = _adapter()
         post.add_pr_comment.return_value = {"id": 43}
         adapter.post_review(
-            7, commit_id="abc123", event="COMMENT", body="RISKY body",
+            7, commit_id="abc123", body="RISKY body",
             comments=[{"path": "a.py", "line": 3, "body": "x"}],
         )
         post.add_pr_comment.assert_called_once()
@@ -210,20 +190,18 @@ class TestPosting:
         adapter, _, post = _adapter()
         post.add_pr_comment.return_value = {"error": True, "status": 403, "message": "forbidden"}
         with pytest.raises(BitbucketAPIError):
-            adapter.post_review(7, commit_id="abc", event="COMMENT", body="b", comments=[])
+            adapter.post_review(7, commit_id="abc", body="b", comments=[])
 
-    def test_dismiss_unapproves(self):
+    def test_dismiss_prepends_note_never_unapproves(self):
         adapter, read, post = _adapter()
-        post.unapprove_pull_request.return_value = {"success": True}
-        read.list_pr_comments.return_value = []
+        read.list_pr_comments.return_value = [
+            {"id": 42, "content": {"raw": "old body"}},
+        ]
+        post.update_pr_comment.return_value = {"id": 42}
         adapter.dismiss_review(7, 42, "stale")
-        post.unapprove_pull_request.assert_called_once()
-
-    def test_dismiss_tolerates_404_no_approval(self):
-        adapter, read, post = _adapter()
-        post.unapprove_pull_request.return_value = {"error": True, "status": 404, "message": "gone"}
-        read.list_pr_comments.return_value = []
-        adapter.dismiss_review(7, 42, "stale")  # must not raise
+        post.unapprove_pull_request.assert_not_called()
+        args = post.update_pr_comment.call_args[0]
+        assert args[4].startswith("**stale**")
 
     def test_supersede_prepends_note_and_is_idempotent(self):
         adapter, _, post = _adapter()
@@ -238,14 +216,14 @@ class TestPosting:
         adapter.supersede_review(7, prior_noted, "Superseded by updated review")
         post.update_pr_comment.assert_not_called()
 
-    def test_supersede_approved_also_unapproves(self):
+    def test_supersede_approved_never_unapproves(self):
         adapter, _, post = _adapter()
         post.update_pr_comment.return_value = {"id": 42}
-        post.unapprove_pull_request.return_value = {"success": True}
         adapter.supersede_review(
             7, {"id": 42, "state": "APPROVED", "body": "b"}, "Superseded"
         )
-        post.unapprove_pull_request.assert_called_once()
+        post.unapprove_pull_request.assert_not_called()
+        post.update_pr_comment.assert_called_once()
 
 
 class TestProgressComment:
@@ -290,7 +268,7 @@ class TestMarkerHiding:
         post.add_pr_comment.return_value = {"id": 42}
         marker = encode_marker([], "abc123")
         adapter.post_review(
-            7, commit_id="abc123", event="COMMENT",
+            7, commit_id="abc123",
             body=f"RISKY body\n\n{marker}", comments=[],
         )
         sent_body = post.add_pr_comment.call_args[0][3]

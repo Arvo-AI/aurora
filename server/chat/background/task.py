@@ -22,15 +22,59 @@ from utils.auth.stateless_auth import set_rls_context, get_org_id_for_user
 from connectors.google_chat_connector.client import get_chat_app_client
 from connectors.slack_connector.client import get_slack_client_for_user
 from utils.db.connection_pool import db_pool
+from chat.investigation_timeout import (
+    investigation_soft_timeout_seconds,
+    investigation_stale_after_seconds,
+    investigation_timeout_label,
+    investigation_timeout_seconds,
+)
 from chat.background.visualization_generator import update_visualization
 from chat.backend.constants import MAX_TOOL_OUTPUT_CHARS, INFRASTRUCTURE_TOOLS
+from chat.backend.agent.utils.message_content import extract_text_from_content
 
 
 logger = logging.getLogger(__name__)
 
 
+def _json_safe_result(result: Any) -> Dict[str, Any]:
+    """Coerce a Celery task return value into something the result backend can
+    JSON-serialize.
+
+    The background workflow runs a lot of async streaming; a cancelled task or
+    stray object (e.g. ``asyncio.CancelledError``) can end up embedded in the
+    result (typically inside ``tool_calls``). Celery then dies at result-encoding
+    time with ``EncodeError: Object of type CancelledError is not JSON
+    serializable`` — AFTER the task body ran, which orphans downstream side
+    effects (like the Slack "Thinking…" update). Round-trip through json with a
+    stringifying default so encoding can never fail; on any problem, fall back to
+    a minimal status dict. Never raises.
+    """
+    if not isinstance(result, dict):
+        return {"status": "completed"}
+    try:
+        # str default turns any non-serializable leaf (exceptions, objects) into
+        # its repr instead of blowing up the encoder.
+        return json.loads(json.dumps(result, default=str))
+    except Exception:
+        logger.warning("[BackgroundChat] Result not JSON-serializable; returning minimal status",
+                       exc_info=True)
+        # Preserve the few fields callers/telemetry rely on, coerced to safe types.
+        safe: Dict[str, Any] = {}
+        for key in ("session_id", "status", "error", "guardrail_blocked",
+                    "slack_sent_early", "after_rca_dispatched", "action_notification_sent"):
+            val = result.get(key)
+            try:
+                json.dumps(val)
+                safe[key] = val
+            except Exception:
+                safe[key] = str(val)
+        safe.setdefault("status", "completed")
+        return safe
+
+
+
 # ---------------------------------------------------------------------------
-# Per-worker Agent singleton: avoids recreating PostgreSQLClient, WeaviateClient,
+# Per-worker Agent singleton: avoids recreating PostgreSQLClient
 # and LLMManager on every background chat task (~2s cold-start savings).
 # ---------------------------------------------------------------------------
 _worker_agent = None
@@ -46,12 +90,9 @@ def _get_worker_agent():
             if _worker_agent is None:
                 from chat.backend.agent.agent import Agent
                 from chat.backend.agent.db import PostgreSQLClient
-                from chat.backend.agent.weaviate_client import WeaviateClient
 
                 pg = PostgreSQLClient()
-                wv = WeaviateClient(pg)
                 _worker_agent = Agent(
-                    weaviate_client=wv,
                     postgres_client=pg,
                     websocket_sender=None,
                     event_loop=None,
@@ -59,6 +100,27 @@ def _get_worker_agent():
                 )
                 logger.info("[BackgroundChat] Created per-worker singleton Agent")
     return _worker_agent
+
+
+def _build_slack_progress_reporter(user_id: str, trigger_metadata: Optional[Dict[str, Any]], wf):
+    """Reporter for the Slack placeholder, or None when this turn has no placeholder to edit."""
+    meta = trigger_metadata or {}
+    # slack_button's placeholder says what is executing; a generic note would replace it
+    if meta.get("source") != "slack":
+        return None
+    channel = meta.get("channel")
+    message_ts = meta.get("thinking_message_ts")
+    if not channel or not message_ts:
+        return None
+    if os.environ.get("SLACK_PROGRESS_UPDATES_ENABLED", "true").lower() in ("0", "false", "no"):
+        return None
+    try:
+        from chat.background.slack_progress import SlackProgressReporter
+
+        return SlackProgressReporter(user_id=user_id, channel=channel, message_ts=message_ts, workflow=wf)
+    except Exception:
+        logger.warning("[BackgroundChat] Could not set up Slack progress reporter", exc_info=True)
+        return None
 
 
 def _resolve_permitted_tools(user_id: str) -> Optional[set]:
@@ -78,64 +140,6 @@ def _resolve_permitted_tools(user_id: str) -> Optional[set]:
     except Exception as e:
         logger.warning("[BackgroundChat] Failed to fetch tool permissions: %s", e)
         return None
-
-
-def cancel_rca_for_incident(incident_id: str, user_id: str) -> bool:
-    """Cancel a running RCA for an incident by revoking its Celery task.
-    
-    This is the proper way to stop an RCA when an incident is merged.
-    It uses Celery's task revocation with SIGTERM to gracefully stop the task.
-    
-    Args:
-        incident_id: The incident ID whose RCA should be cancelled
-        user_id: User ID for RLS context
-        
-    Returns:
-        True if a task was found and revoked, False otherwise
-    """
-    try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:CancelRCA]")
-                cursor.execute(
-                    "SELECT rca_celery_task_id, aurora_status FROM incidents WHERE id = %s",
-                    (incident_id,)
-                )
-                row = cursor.fetchone()
-                
-                if not row:
-                    logger.info(f"[RCA-CANCEL] Incident {incident_id} not found")
-                    return False
-                
-                task_id, aurora_status = row[0], row[1]
-                
-                if not task_id:
-                    logger.info(f"[RCA-CANCEL] No Celery task ID found for incident {incident_id}")
-                    return False
-                
-                # Only revoke if RCA is actually running
-                if aurora_status != 'running':
-                    logger.info(
-                        f"[RCA-CANCEL] RCA for incident {incident_id} is not running (status={aurora_status}), skipping revocation"
-                    )
-                    return False
-                
-                # Revoke the task with SIGTERM for graceful shutdown
-                celery_app.control.revoke(task_id, terminate=True, signal='SIGTERM')
-                logger.info(f"[RCA-CANCEL] Revoked Celery task {task_id} for incident {incident_id}")
-                
-                # Clear the task ID from the database
-                cursor.execute(
-                    "UPDATE incidents SET rca_celery_task_id = NULL WHERE id = %s",
-                    (incident_id,)
-                )
-                conn.commit()
-                
-                return True
-                
-    except Exception as e:
-        logger.error(f"[RCA-CANCEL] Failed to cancel RCA for incident {incident_id}: {e}")
-        return False
 
 
 def _extract_tool_calls_for_viz(
@@ -316,7 +320,7 @@ _RATE_LIMIT_WINDOW_SECONDS = 300  # 5 minute window
 _RATE_LIMIT_MAX_REQUESTS = 5  # Max 5 background chats per window
 
 # RCA sources that use rca_context in system prompt
-_RCA_SOURCES = {'grafana', 'datadog', 'netdata', 'splunk', 'slack', 'google_chat', 'pagerduty', 'dynatrace', 'jenkins', 'cloudbees', 'spinnaker', 'newrelic', 'chat', 'opsgenie', 'incidentio', 'jira', 'action'}
+_RCA_SOURCES = {'grafana', 'datadog', 'netdata', 'splunk', 'elastic', 'slack', 'teams', 'google_chat', 'pagerduty', 'dynatrace', 'jenkins', 'cloudbees', 'spinnaker', 'newrelic', 'chat', 'opsgenie', 'incidentio', 'jira', 'servicenow', 'action'}
 
 _GUARDRAIL_BLOCKED_MSG = 'Action blocked by safety guardrails'
 _GUARDRAIL_USER_MSG = (
@@ -325,6 +329,16 @@ _GUARDRAIL_USER_MSG = (
 _ACTION_GUARDRAIL_USER_MSG = (
     "This action was blocked by safety guardrails. "
     "The instructions may need to be rephrased to pass input validation."
+)
+# Last-resort reply when the workflow finished (or crashed) without leaving any
+# assistant text — used only so a chat "Thinking…" placeholder is never orphaned.
+_CHAT_ERROR_FALLBACK = (
+    "Sorry — I hit an error finishing that request. Please try again."
+)
+# OOM and eviction are SIGKILL, so the task finally block never runs. The stall
+# sweep is the only thing left that can replace the "Thinking…" placeholder.
+_WORKER_LOST_REPLY = (
+    "Sorry — this request stopped before I could finish. Please try again."
 )
 
 # Initialize Redis client at module load time - fails if Redis is unavailable
@@ -436,11 +450,17 @@ def _build_rca_context(
     }
 
 
+# Captured at import, after celery_config has loaded dotenv. Celery bakes
+# these into the task and will not re-read the env later.
+_INVESTIGATION_HARD_TIMEOUT = investigation_timeout_seconds()
+_INVESTIGATION_SOFT_TIMEOUT = investigation_soft_timeout_seconds()
+
+
 @celery_app.task(
     bind=True,
     name="chat.background.run_background_chat",
-    time_limit=1800,  # Hard timeout: 30 minutes (task killed)
-    soft_time_limit=1740,  # Soft timeout: 29 minutes (exception raised, 60s grace for cleanup before hard kill)
+    time_limit=_INVESTIGATION_HARD_TIMEOUT,  # Hard kill. Default is one hour.
+    soft_time_limit=_INVESTIGATION_SOFT_TIMEOUT,  # Raises a minute earlier so the incident can be marked failed.
     acks_late=True,
     reject_on_worker_lost=True,
 )
@@ -463,7 +483,7 @@ def run_background_chat(
     - Sets is_background=True to skip confirmations and user questions
     - Saves all messages to the database (same as regular chats)
     - Appears in the frontend chat history
-    - Times out after 30 minutes to prevent hanging indefinitely
+    - Times out at INVESTIGATION_TIMEOUT_SECONDS (default one hour)
 
     Args:
         user_id: The user ID to run the chat for
@@ -492,7 +512,7 @@ def run_background_chat(
     _dedup_acquired = False
     try:
         _dedup_redis = celery_app.backend.client
-        _acquired = _dedup_redis.set(_dedup_key, "1", nx=True, ex=1800)
+        _acquired = _dedup_redis.set(_dedup_key, "1", nx=True, ex=_INVESTIGATION_HARD_TIMEOUT)
         if not _acquired:
             logger.warning(f"[BackgroundChat] DEDUP: Task {self.request.id} already running, skipping duplicate execution")
             return {"session_id": session_id, "status": "deduplicated", "error": None}
@@ -506,6 +526,7 @@ def run_background_chat(
 
     logger.info(f"[BackgroundChat] Starting for user {user_id}, session {session_id}")
     logger.info(f"[BackgroundChat] Trigger: {trigger_metadata}")
+    _remember_reply_target(session_id, user_id, trigger_metadata)
 
     # Eagerly persist the initial user message so it's visible in the UI immediately (opt-in)
     if os.environ.get("DISPLAY__RCA_USER_MSG", "").lower() in ("1", "true", "yes"):
@@ -545,10 +566,30 @@ def run_background_chat(
             logger.warning(f"[BackgroundChat] Failed to eagerly persist user message: {e}")
     
     completed_successfully = False
-    
+    # Tracks whether a chat reply (Slack/Google Chat) has been delivered so the
+    # finally block can guarantee the "Thinking…" placeholder is never orphaned
+    # if the happy-path send is skipped (task crash, cancellation, serialization).
+    _chat_reply_sent = False
+    _access_token = None
+
     try:
-        # Link session and Celery task ID to incident if provided
         is_action_source = (trigger_metadata or {}).get('source') == 'action'
+        # A failed start update has to raise so the error path marks the run failed.
+        _run_id = (trigger_metadata or {}).get("run_id")
+        if _run_id:
+            from services.actions.executor import mark_action_run_started
+            mark_action_run_started(_run_id, user_id)
+        # A Slack sender with no Aurora account keeps this user for credentials
+        # and the session. Connector and memory checks use a general viewer.
+        if (trigger_metadata or {}).get("access_as") == "general_viewer":
+            from utils.auth.connector_access import general_viewer_access, push_connector_access
+            _access_token = push_connector_access(general_viewer_access(user_id))
+            logger.info(
+                "[BackgroundChat] Connector access forced to general viewer for session %s",
+                session_id,
+            )
+
+        # Link session and Celery task ID to incident if provided
 
         if incident_id:
             _should_notify_investigation_started = False
@@ -667,6 +708,19 @@ def run_background_chat(
             except Exception as e:
                 logger.error(f"[BackgroundChat] Failed to link session to incident: {e}")
 
+            # FUTURE (root-cause dedup, build-order step 4 — needs maintainer sign-off
+            # plus shadow-mode precision data before building): pre-investigation
+            # early exit. This is the single choke point covering all RCA
+            # producers, so the gate belongs here, before
+            # notify_investigation_started. Shape: if the incident's
+            # alert_metadata carries a correlation_hint (stamped by
+            # apply_correlation_outcome in live mode) and a future flag allows,
+            # call run_recurrence_check(..., decision_point="before"); on a fold,
+            # set the child to status='analyzed', aurora_status='complete'
+            # (layer-2 requirement) and early-return like the before_llm_call
+            # hook block below. All plumbing already exists: the
+            # recurrence_verdicts.decision_point column, the before-variant
+            # prompt input block, the shared fold_incident, and the hint.
             if _should_notify_investigation_started:
                 try:
                     from utils.notifications.dispatcher import notify_investigation_started
@@ -706,18 +760,26 @@ def run_background_chat(
 
         # Run the async workflow in the sync Celery context
         logger.info(f"[BackgroundChat] Starting workflow execution for session {session_id}, incident {incident_id}")
+        from chat.background.liveness import run_watched
         try:
-            result = asyncio.run(_execute_background_chat(
-                user_id=user_id,
-                session_id=session_id,
-                initial_message=initial_message,
-                trigger_metadata=trigger_metadata,
-                provider_preference=provider_preference,
-                incident_id=incident_id,
-                mode=mode,
-                rail_text=rail_text,
-                send_notifications=send_notifications,
-            ))
+            # The heartbeat tells the cleanup sweep this worker is alive; the
+            # watchdog stops the run if it stops making progress. A stall raises
+            # InvestigationStalled into the error path below.
+            result = run_watched(
+                _execute_background_chat(
+                    user_id=user_id,
+                    session_id=session_id,
+                    initial_message=initial_message,
+                    trigger_metadata=trigger_metadata,
+                    provider_preference=provider_preference,
+                    incident_id=incident_id,
+                    mode=mode,
+                    rail_text=rail_text,
+                    send_notifications=send_notifications,
+                ),
+                session_id,
+                user_id,
+            )
         except Exception as e:
             logger.error(f"[BackgroundChat] Exception in asyncio.run(_execute_background_chat): {e}", exc_info=True)
             raise
@@ -811,6 +873,7 @@ def run_background_chat(
                         incident_id=incident_id,
                         user_id=user_id,
                         session_id=session_id,
+                        announce_completion=send_notifications,
                     )
                 except Exception:
                     logger.exception("[BackgroundChat] Failed to enqueue post-RCA summarization for incident %s", incident_id)
@@ -837,24 +900,42 @@ def run_background_chat(
         
         # Send response back to Slack if this was triggered from Slack
         # Skip if already sent inside _execute_background_chat (early send for lower latency)
-        if trigger_metadata and trigger_metadata.get('source') in ['slack', 'slack_button'] and not result.get('slack_sent_early'):
-            try:
-                slack_fallback = _GUARDRAIL_USER_MSG if result.get("guardrail_blocked") else None
-                _send_response_to_slack(
-                    user_id, session_id, trigger_metadata, fallback_text=slack_fallback,
-                )
-            except Exception as e:
-                logger.error(f"[BackgroundChat] Failed to send response to Slack: {e}", exc_info=True)
+        if trigger_metadata and trigger_metadata.get('source') in ['slack', 'slack_button']:
+            if result.get('slack_sent_early'):
+                _chat_reply_sent = True
+            else:
+                try:
+                    slack_fallback = _GUARDRAIL_USER_MSG if result.get("guardrail_blocked") else None
+                    # Only treat as sent if a message was actually posted — a False
+                    # return (e.g. no assistant text + no fallback) must still let the
+                    # finally-block fallback fire so "Thinking…" isn't orphaned.
+                    _chat_reply_sent = bool(_send_response_to_slack(
+                        user_id, session_id, trigger_metadata, fallback_text=slack_fallback,
+                    ))
+                except Exception as e:
+                    logger.error(f"[BackgroundChat] Failed to send response to Slack: {e}", exc_info=True)
         
         # Send response back to Google Chat if this was triggered from Google Chat
         if trigger_metadata and trigger_metadata.get('source') in ['google_chat', 'google_chat_button']:
             try:
                 gchat_fallback = _GUARDRAIL_USER_MSG if result.get("guardrail_blocked") else None
-                _send_response_to_google_chat(
+                # Only treat as sent when a message was actually posted/updated, so
+                # the finally-block fallback still fires (resolving "Thinking…") if
+                # delivery was skipped (no space / no text / no client).
+                _chat_reply_sent = bool(_send_response_to_google_chat(
                     user_id, session_id, trigger_metadata, fallback_text=gchat_fallback,
-                )
+                ))
             except Exception as e:
                 logger.error(f"[BackgroundChat] Failed to send response to Google Chat: {e}", exc_info=True)
+
+        if trigger_metadata and trigger_metadata.get('source') == 'teams':
+            try:
+                teams_fallback = _GUARDRAIL_USER_MSG if result.get("guardrail_blocked") else None
+                _chat_reply_sent = bool(_send_response_to_teams(
+                    user_id, session_id, trigger_metadata, fallback_text=teams_fallback,
+                ))
+            except Exception as e:
+                logger.error(f"[BackgroundChat] Failed to send response to Teams: {e}", exc_info=True)
         
         if trigger_metadata and trigger_metadata.get('source') == 'action':
             if not result.get("action_notification_sent"):
@@ -877,35 +958,42 @@ def run_background_chat(
 
         logger.info(f"[BackgroundChat] Completed for session {session_id}")
         
-        return result
+        return _json_safe_result(result)
     
     except SoftTimeLimitExceeded:
-        logger.error(f"[BackgroundChat] Timeout after 30 minutes for session {session_id}")
+        timed_out_after = investigation_timeout_label()
+        timeout_error = f"Background chat exceeded {timed_out_after} timeout"
+        logger.error("[BackgroundChat] Timeout after %s for session %s", timed_out_after, session_id)
         _update_session_status(session_id, "failed", user_id=user_id)
         if incident_id and not is_action_source:
             _update_incident_aurora_status(incident_id, "error", user_id=user_id)
-            _mark_inflight_findings_failed(incident_id, user_id, "parent task timed out after 30 minutes")
-            try:
-                from utils.notifications.dispatcher import notify_investigation_failed
-                notify_investigation_failed(user_id, incident_id, error_message="Investigation timed out after 30 minutes")
-            except Exception:
-                logger.debug("[BackgroundChat] Failed to send investigation failed notification after timeout")
+            _mark_inflight_findings_failed(incident_id, user_id, f"parent task timed out after {timed_out_after}")
+            if send_notifications:  # a follow-up chat failing is not the investigation failing
+                try:
+                    from utils.notifications.dispatcher import notify_investigation_failed
+                    notify_investigation_failed(
+                        user_id,
+                        incident_id,
+                        error_message=f"Investigation timed out after {timed_out_after}",
+                    )
+                except Exception:
+                    logger.debug("[BackgroundChat] Failed to send investigation failed notification after timeout")
         if trigger_metadata and trigger_metadata.get('source') == 'action':
             try:
                 from services.actions.executor import update_action_run_status
                 update_action_run_status(run_id=trigger_metadata['run_id'], status='error',
-                                         error_message='Background chat exceeded 30 minute timeout', user_id=user_id)
+                                         error_message=timeout_error, user_id=user_id)
             except Exception:
                 logger.debug("Failed to update action run status after timeout")
             try:
                 from utils.notifications.dispatcher import notify_action_completed
-                notify_action_completed(user_id, trigger_metadata, session_id, status='error', error_message='Background chat exceeded 30 minute timeout')
+                notify_action_completed(user_id, trigger_metadata, session_id, status='error', error_message=timeout_error)
             except Exception:
                 logger.debug("[BackgroundChat] Failed to send action completed notification after timeout")
         return {
             "session_id": session_id,
             "status": "failed",
-            "error": "Background chat exceeded 30 minute timeout",
+            "error": timeout_error,
         }
 
     except Exception as e:
@@ -914,11 +1002,12 @@ def run_background_chat(
         if incident_id and not is_action_source:
             _update_incident_aurora_status(incident_id, "error", user_id=user_id)
             _mark_inflight_findings_failed(incident_id, user_id, f"parent task failed: {e}")
-            try:
-                from utils.notifications.dispatcher import notify_investigation_failed
-                notify_investigation_failed(user_id, incident_id, error_message=str(e))
-            except Exception:
-                logger.debug("[BackgroundChat] Failed to send investigation failed notification")
+            if send_notifications:  # a follow-up chat failing is not the investigation failing
+                try:
+                    from utils.notifications.dispatcher import notify_investigation_failed
+                    notify_investigation_failed(user_id, incident_id, error_message=str(e))
+                except Exception:
+                    logger.debug("[BackgroundChat] Failed to send investigation failed notification")
         if trigger_metadata and trigger_metadata.get('source') == 'action':
             try:
                 from services.actions.executor import update_action_run_status
@@ -938,6 +1027,50 @@ def run_background_chat(
         }
     
     finally:
+        if _access_token is not None:
+            from utils.auth.connector_access import pop_connector_access
+            pop_connector_access(_access_token)
+        # Guarantee the chat "Thinking…" placeholder is always resolved. If the
+        # happy-path send was skipped (task crash, cancellation, result
+        # serialization failure), post a best-effort reply here so a Slack/
+        # Google Chat mention never hangs on "Thinking…" forever.
+        try:
+            src = (trigger_metadata or {}).get("source")
+            # A failed run (an error, a timeout, a stall) may have saved a partial
+            # draft; that is not the answer, so the error is sent instead. A run
+            # that finished but could not post still sends what it saved.
+            _fallback_kwargs = (
+                {"fallback_text": _CHAT_ERROR_FALLBACK} if completed_successfully
+                else {"force_text": _CHAT_ERROR_FALLBACK}
+            )
+            if src in ("slack", "slack_button") and not _chat_reply_sent:
+                logger.warning("[BackgroundChat] Reply not sent on happy path for session %s; "
+                               "sending fallback so Slack isn't stuck on 'Thinking…'", session_id)
+                _send_response_to_slack(
+                    user_id, session_id, trigger_metadata,
+                    **_fallback_kwargs,
+                )
+            elif src in ("google_chat", "google_chat_button") and not _chat_reply_sent:
+                logger.warning("[BackgroundChat] Reply not sent on happy path for session %s; "
+                               "sending fallback so Google Chat isn't stuck on 'Thinking…'", session_id)
+                _send_response_to_google_chat(
+                    user_id, session_id, trigger_metadata,
+                    **_fallback_kwargs,
+                )
+            elif src == "teams" and not _chat_reply_sent:
+                logger.warning(
+                    "[BackgroundChat] Reply not sent on happy path for session %s; "
+                    "sending fallback so Teams isn't stuck on 'Thinking…'",
+                    session_id,
+                )
+                _send_response_to_teams(
+                    user_id, session_id, trigger_metadata,
+                    **_fallback_kwargs,
+                )
+        except Exception as _final_reply_err:
+            logger.error("[BackgroundChat] Fallback chat reply failed for session %s: %s",
+                         session_id, _final_reply_err, exc_info=True)
+
         # Release dedup lock so Celery retries can re-acquire after failure
         if _dedup_acquired and _dedup_redis is not None:
             try:
@@ -988,6 +1121,17 @@ def run_background_chat(
 # ---------------------------------------------------------------------------
 
 _JIRA_TOOL_NAMES = frozenset(('jira_add_comment', 'jira_create_issue'))
+
+
+def _should_file_in_jira(rca_context: Optional[Dict[str, Any]], session_id: str, user_id: str) -> bool:
+    """Whether the post-investigation Jira filing step should run."""
+    if not (rca_context and rca_context.get('integrations', {}).get('jira')):
+        return False
+    # Connected Jira is a context source until the org turns comment-back on.
+    from routes.jira.jira_routes import jira_comment_back_enabled
+    if not jira_comment_back_enabled(user_id):
+        return False
+    return not _session_has_successful_jira_action(session_id, user_id=user_id)
 
 
 def _session_has_successful_jira_action(session_id: str, user_id: str) -> bool:
@@ -1231,7 +1375,9 @@ async def _run_jira_action(
     from chat.backend.agent.llm import ModelConfig
     from main_chatbot import process_workflow_async
 
-    jira_mode = rca_context.get('integrations', {}).get('jira_mode', 'comment_only')
+    from utils.auth.stateless_auth import get_user_preference
+
+    jira_mode = get_user_preference(user_id, "jira_mode", default="comment_only") or "comment_only"
 
     service_name = ""
     if incident_id:
@@ -1342,23 +1488,27 @@ async def _execute_background_chat(
     from chat.backend.agent.db import PostgreSQLClient
     from chat.backend.agent.utils.state import State
     from chat.backend.agent.workflow import Workflow
-    from chat.backend.agent.weaviate_client import WeaviateClient
     from chat.backend.agent.tools.cloud_tools import set_user_context
     from chat.background.background_websocket import BackgroundWebSocket
     from main_chatbot import process_workflow_async
     
     try:
         
-        # Reuse a per-worker Agent to avoid recreating PostgreSQLClient, WeaviateClient,
+        # Reuse a per-worker Agent to avoid recreating PostgreSQLClient
         # and LLMManager on every task (~2s cold-start savings).
         agent = _get_worker_agent()
-        
-        # Create background websocket (no-op, just discards messages)
-        background_ws = BackgroundWebSocket()
         
         # Create workflow for this session
         wf = Workflow(agent, session_id)
         logger.info("[BackgroundChat] Created agent + workflow (singleton reuse)")
+
+        # Slack mentions leave a "Thinking…" placeholder; keep editing it with live
+        # progress so a long investigation doesn't look hung. Other sources get the
+        # plain discarding websocket.
+        progress_reporter = _build_slack_progress_reporter(user_id, trigger_metadata, wf)
+        background_ws = BackgroundWebSocket(
+            on_message=progress_reporter.observe if progress_reporter else None
+        )
         
         # Build RCA context for system prompt (NOT added to user message)
         rca_context = _build_rca_context(
@@ -1374,7 +1524,7 @@ async def _execute_background_chat(
         # Slack/Google Chat messages are user-authored and should NOT be hidden.
         # Action prompts should also be visible to the user in the chat UI.
         source = trigger_metadata.get("source", "") if trigger_metadata else ""
-        is_scaffold = source in _RCA_SOURCES and source not in ('slack', 'google_chat', 'chat', 'action')
+        is_scaffold = source in _RCA_SOURCES and source not in ('slack', 'teams', 'google_chat', 'chat', 'action')
         human_message = HumanMessage(
             content=initial_message,
             additional_kwargs={"is_rca_scaffold": is_scaffold},
@@ -1455,6 +1605,8 @@ async def _execute_background_chat(
             is_hpa_vpa_action=_is_hpa_vpa_action,
             is_pr_review=_is_pr_review,
             rca_context=rca_context,
+            trigger_source=_tm_source or None,
+            trigger_metadata=dict(trigger_metadata) if trigger_metadata else None,
             permitted_tools=_resolve_permitted_tools(user_id),
         )
         logger.info(
@@ -1488,12 +1640,24 @@ async def _execute_background_chat(
         is_action_source = (trigger_metadata or {}).get('source') == 'action'
 
         # Run the workflow - this is the same function used by regular chats
-        await process_workflow_async(wf, state, background_ws, user_id, incident_id=None if is_action_source else incident_id)
-        
-        # CRITICAL: Wait for any ongoing tool calls to complete before marking as done
-        # The workflow stream might complete, but tool calls could still be running
-        if hasattr(wf, '_wait_for_ongoing_tool_calls'):
-            await wf._wait_for_ongoing_tool_calls()
+        progress_task = asyncio.create_task(progress_reporter.run()) if progress_reporter else None
+        try:
+            await process_workflow_async(wf, state, background_ws, user_id, incident_id=None if is_action_source else incident_id)
+
+            # CRITICAL: Wait for any ongoing tool calls to complete before marking as done
+            # The workflow stream might complete, but tool calls could still be running
+            if hasattr(wf, '_wait_for_ongoing_tool_calls'):
+                await wf._wait_for_ongoing_tool_calls()
+        finally:
+            # Must finish before the final answer is written to the same Slack
+            # message, or a late progress edit would overwrite the real response.
+            if progress_reporter and progress_task:
+                progress_reporter.stop()
+                try:
+                    await progress_task
+                except Exception:
+                    logger.debug("[BackgroundChat] Slack progress task ended with error", exc_info=True)
+                logger.info("[BackgroundChat] Slack progress updates sent: %d", progress_reporter.updates_sent)
 
         # Send Slack response immediately — don't wait for post-processing
         _slack_early_sent = False
@@ -1504,9 +1668,8 @@ async def _execute_background_chat(
                 logger.exception("[BackgroundChat] Failed early Slack send")
 
         # --- Phase 2: Jira action ---
-        # Investigation is done. Now deterministically file in Jira.
-        if rca_context and rca_context.get('integrations', {}).get('jira') \
-                and not _session_has_successful_jira_action(session_id, user_id=user_id):
+        # Investigation is done. File in Jira only if the org opted in.
+        if _should_file_in_jira(rca_context, session_id, user_id):
             await _run_jira_action(
                 session_id=session_id,
                 user_id=user_id,
@@ -1560,10 +1723,22 @@ async def _execute_background_chat(
                     incident_id=incident_id,
                     user_id=user_id,
                     session_id=session_id,
+                    announce_completion=send_notifications,
                 )
             except Exception as e:
                 logger.exception("[BackgroundChat] Failed to enqueue post-RCA summarization")
                 _update_incident_aurora_status(incident_id, "complete", user_id=user_id)
+
+            # Save durable learnings from this RCA to org memory
+            try:
+                from services.memory.collector import extract_memories_from_session
+                extract_memories_from_session.delay(
+                    session_id=session_id,
+                    user_id=user_id,
+                    access_as=(trigger_metadata or {}).get("access_as"),
+                )
+            except Exception:
+                logger.debug("[BackgroundChat] Memory save enqueue failed")
 
         # Fallback: rebuild llm_context_history from UI messages if the save was lost.
         llm_context = _ensure_llm_context_history(session_id, user_id)
@@ -1940,21 +2115,7 @@ Respond with ONLY ONE WORD: critical, high, medium, or low"""
                 # Safely extract content from response - handle both AIMessage and dict responses
                 # Also handle Gemini thinking model responses (list with thinking/text blocks)
                 if hasattr(response, 'content'):
-                    content = response.content
-                    if isinstance(content, list):
-                        text_parts = []
-                        for part in content:
-                            if isinstance(part, dict):
-                                part_type = part.get("type", "")
-                                if part_type not in ("thinking", "reasoning"):
-                                    text = part.get("text", "")
-                                    if text:
-                                        text_parts.append(str(text))
-                            elif isinstance(part, str):
-                                text_parts.append(part)
-                        severity_raw = "".join(text_parts).strip().lower()
-                    else:
-                        severity_raw = str(content).strip().lower()
+                    severity_raw = extract_text_from_content(response.content).strip().lower()
                 elif isinstance(response, dict):
                     severity_raw = str(response.get('content', '')).strip().lower()
                 else:
@@ -2013,11 +2174,45 @@ def _update_incident_status(incident_id: str, status: str, user_id: str) -> None
         logger.error(f"[BackgroundChat] Failed to update incident {incident_id} status to '{status}': {e}")
 
 
+_CODE_FENCE = "```"
+
+
+def _close_dangling_code_fence(text: str) -> str:
+    """Close a code block left open by truncation, else Slack eats the rest of the message."""
+    if text.count(_CODE_FENCE) % 2 == 0:
+        return text
+    return text + ("" if text.endswith("\n") else "\n") + _CODE_FENCE
+
+
+def _last_saved_assistant_text(user_id: str, session_id: str, log_prefix: str) -> Optional[str]:
+    """Last bot/assistant message already stored on the session, if any."""
+    with db_pool.get_admin_connection() as conn:
+        with conn.cursor() as cursor:
+            set_rls_context(cursor, conn, user_id, log_prefix=log_prefix)
+            cursor.execute("SELECT messages FROM chat_sessions WHERE id = %s", (session_id,))
+            row = cursor.fetchone()
+            if not row or not row[0]:
+                return None
+            messages = row[0]
+            if isinstance(messages, str):
+                messages = json.loads(messages)
+            if not isinstance(messages, list):
+                return None
+            for msg in reversed(messages):
+                if not isinstance(msg, dict):
+                    continue
+                if msg.get("sender") in ("bot", "assistant"):
+                    text = msg.get("text") or msg.get("content")
+                    return text if isinstance(text, str) and text else None
+    return None
+
+
 def _send_response_to_slack(
     user_id: str,
     session_id: str,
     trigger_metadata: Dict[str, Any],
     fallback_text: Optional[str] = None,
+    force_text: Optional[str] = None,
 ) -> bool:
     """Send Aurora's response back to the Slack channel after background chat completes.
 
@@ -2035,41 +2230,23 @@ def _send_response_to_slack(
         if not channel:
             logger.warning(f"[BackgroundChat] No Slack channel in trigger_metadata for session {session_id}")
             return False
-        
-        # Get the last assistant message from the chat session
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:SlackResponse]")
-                cursor.execute(
-                    "SELECT messages FROM chat_sessions WHERE id = %s",
-                    (session_id,)
+
+        # A killed worker may have saved a partial draft. That is not the answer.
+        if force_text:
+            last_assistant_message = force_text
+        else:
+            last_assistant_message = _last_saved_assistant_text(
+                user_id, session_id, "[BackgroundChat:SlackResponse]",
+            )
+            # Guardrail block may leave no assistant message — use caller-provided fallback
+            if not last_assistant_message and fallback_text:
+                last_assistant_message = fallback_text
+            if not last_assistant_message:
+                logger.warning(
+                    f"[BackgroundChat] No assistant message found in session {session_id}"
                 )
-                row = cursor.fetchone()
-                
-                last_assistant_message = None
-                if row and row[0]:
-                    messages = row[0]
-                    if isinstance(messages, str):
-                        messages = json.loads(messages)
+                return False
 
-                    # Find the last assistant/bot message
-                    for msg in reversed(messages):
-                        if not isinstance(msg, dict):
-                            continue
-                        if msg.get('sender') in ('bot', 'assistant'):
-                            last_assistant_message = msg.get('text') or msg.get('content')
-                            break
-
-                if not last_assistant_message:
-                    # Guardrail block may leave no assistant message — use caller-provided fallback
-                    if fallback_text:
-                        last_assistant_message = fallback_text
-                    else:
-                        logger.warning(
-                            f"[BackgroundChat] No assistant message found in session {session_id}"
-                        )
-                        return False
-        
         # Format the response for Slack (markdown conversion, length limits, etc.)
         formatted_message = format_response_for_slack(last_assistant_message)
         
@@ -2132,8 +2309,21 @@ def _send_response_to_slack(
         
         # Slack messages have a ~3000 char limit for update_message
         SLACK_MSG_LIMIT = 2900
-        if len(formatted_message) > SLACK_MSG_LIMIT:
-            formatted_message = formatted_message[:SLACK_MSG_LIMIT] + "\n\n_...truncated. See full results in Aurora._"
+        # Always point back at the session: the Slack reply is a clipped view, and
+        # this link is the only way to find the run again in the console.
+        frontend_url = os.getenv("FRONTEND_URL", "").rstrip("/")
+        session_link = (
+            f"\n\n<{frontend_url}/chat?sessionId={session_id}|Open the full response in Aurora>"
+            if frontend_url else ""
+        )
+        if len(formatted_message) + len(session_link) > SLACK_MSG_LIMIT:
+            # The link itself says where to go, so the note just marks the cut
+            note = "\n\n_...truncated._" if session_link else "\n\n_...truncated. See full results in Aurora._"
+            # Reserve room for a closing fence up front — the cut may land inside a
+            # code block, and an unclosed fence swallows the note and link as plain text.
+            budget = max(SLACK_MSG_LIMIT - len(session_link) - len(note) - len("\n" + _CODE_FENCE), 0)
+            formatted_message = _close_dangling_code_fence(formatted_message[:budget]) + note
+        formatted_message += session_link
 
         # Update the "Thinking..." message if we have the timestamp, otherwise send a new message
         if thinking_message_ts:
@@ -2157,13 +2347,120 @@ def _send_response_to_slack(
         raise
 
 
+def _send_response_to_teams(
+    user_id: str,
+    session_id: str,
+    trigger_metadata: Dict[str, Any],
+    fallback_text: Optional[str] = None,
+    force_text: Optional[str] = None,
+) -> bool:
+    """Post Aurora's reply back to the Teams channel that triggered the session."""
+    try:
+        from connectors.teams_connector.client import get_teams_client_for_user
+
+        team_id = trigger_metadata.get("team_id")
+        channel_id = trigger_metadata.get("channel_id")
+        reply_to_id = trigger_metadata.get("reply_to_id")
+        # A DM has no team, but can still be answered in its own conversation
+        can_reply_in_conversation = bool(
+            trigger_metadata.get("service_url") and trigger_metadata.get("conversation_id")
+        )
+        if not channel_id or (not team_id and not can_reply_in_conversation):
+            logger.warning("[BackgroundChat] Missing Teams team_id/channel_id for session %s", session_id)
+            return False
+
+        # A killed worker may have saved a partial draft. That is not the answer.
+        if force_text:
+            last_assistant_message = force_text
+        else:
+            last_assistant_message = _last_saved_assistant_text(
+                user_id, session_id, "[BackgroundChat:TeamsResponse]",
+            )
+            if not last_assistant_message:
+                last_assistant_message = fallback_text
+            if not last_assistant_message:
+                return False
+
+        from connectors.teams_connector.bot_client import (
+            send_message_to_team_channel,
+            send_reply_in_conversation,
+            tenant_id_for_aurora_user,
+            update_activity_in_conversation,
+        )
+
+        tenant_id = tenant_id_for_aurora_user(user_id)
+        if not tenant_id:
+            return False
+        from routes.teams.teams_events_helpers import format_response_for_teams
+
+        text = format_response_for_teams(last_assistant_message)
+        if not text:
+            return False
+        service_url = trigger_metadata.get("service_url")
+        conversation_id = trigger_metadata.get("conversation_id")
+        thinking_activity_id = trigger_metadata.get("thinking_activity_id")
+        # Replace the "Thinking…" placeholder when we have its activity id.
+        if service_url and conversation_id and thinking_activity_id:
+            try:
+                update_activity_in_conversation(
+                    service_url=service_url,
+                    conversation_id=conversation_id,
+                    activity_id=thinking_activity_id,
+                    text=text,
+                )
+                _record_teams_reply_delivered(user_id)
+                return True
+            except Exception:
+                logger.warning(
+                    "[BackgroundChat] Teams activity update failed; posting new message",
+                    exc_info=True,
+                )
+        # Prefer in-thread reply on the same Bot Framework conversation (@mention path).
+        if service_url and conversation_id:
+            send_reply_in_conversation(
+                service_url=service_url,
+                conversation_id=conversation_id,
+                text=text,
+                reply_to_id=reply_to_id,
+            )
+        else:
+            # No conversation to reply in, and the mention's id isn't a thread root — post top-level
+            send_message_to_team_channel(
+                tenant_id=tenant_id,
+                team_id=team_id,
+                channel_id=channel_id,
+                text=text,
+                service_url=service_url,
+            )
+        _record_teams_reply_delivered(user_id)
+        return True
+    except Exception as e:
+        logger.error("[BackgroundChat] Error sending response to Teams: %s", e, exc_info=True)
+        return False
+
+
+def _record_teams_reply_delivered(user_id: str) -> None:
+    try:
+        from routes.teams.teams_routes import record_teams_bot_reply_delivered
+
+        record_teams_bot_reply_delivered(user_id)
+    except Exception:
+        logger.warning("Failed to record Teams bot reply timestamp", exc_info=True)
+
+
 def _send_response_to_google_chat(
     user_id: str,
     session_id: str,
     trigger_metadata: Dict[str, Any],
     fallback_text: Optional[str] = None,
-) -> None:
-    """Send Aurora's response back to Google Chat after background chat completes."""
+    force_text: Optional[str] = None,
+) -> bool:
+    """Send Aurora's response back to Google Chat after background chat completes.
+
+    Returns True only when a message was actually posted/updated, False on the
+    early-return paths (no space, no assistant text, no client) so the caller can
+    fall back (resolve the "Thinking…" placeholder) instead of assuming success.
+    """
     try:
         from routes.google_chat.google_chat_events_helpers import format_response_for_google_chat
 
@@ -2174,38 +2471,22 @@ def _send_response_to_google_chat(
 
         if not space_name:
             logger.warning(f"[BackgroundChat] No Google Chat space in trigger_metadata for session {session_id}")
-            return
+            return False
 
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:GoogleChatResponse]")
-                cursor.execute(
-                    "SELECT messages FROM chat_sessions WHERE id = %s",
-                    (session_id,)
+        # A killed worker may have saved a partial draft. That is not the answer.
+        if force_text:
+            last_assistant_message = force_text
+        else:
+            last_assistant_message = _last_saved_assistant_text(
+                user_id, session_id, "[BackgroundChat:GoogleChatResponse]",
+            )
+            if not last_assistant_message and fallback_text:
+                last_assistant_message = fallback_text
+            if not last_assistant_message:
+                logger.warning(
+                    f"[BackgroundChat] No assistant message found in session {session_id}"
                 )
-                row = cursor.fetchone()
-
-                last_assistant_message = None
-                if row and row[0]:
-                    messages = row[0]
-                    if isinstance(messages, str):
-                        messages = json.loads(messages)
-
-                    for msg in reversed(messages):
-                        if not isinstance(msg, dict):
-                            continue
-                        if msg.get('sender') in ('bot', 'assistant'):
-                            last_assistant_message = msg.get('text') or msg.get('content')
-                            break
-
-                if not last_assistant_message:
-                    if fallback_text:
-                        last_assistant_message = fallback_text
-                    else:
-                        logger.warning(
-                            f"[BackgroundChat] No assistant message found in session {session_id}"
-                        )
-                        return
+                return False
 
         formatted_message = format_response_for_google_chat(last_assistant_message)
 
@@ -2231,7 +2512,7 @@ def _send_response_to_google_chat(
         client = get_chat_app_client()
         if not client:
             logger.error(f"[BackgroundChat] Could not get Google Chat client for user {user_id}")
-            return
+            return False
 
         if thinking_message_name:
             client.update_message(
@@ -2244,6 +2525,9 @@ def _send_response_to_google_chat(
                 text=formatted_message,
                 thread_key=thread_key
             )
+
+        # A message was actually posted/updated.
+        return True
 
     except Exception as e:
         logger.error(f"[BackgroundChat] Error sending response to Google Chat: {e}", exc_info=True)
@@ -2350,15 +2634,23 @@ def _record_rca_error(cursor, incident_id: str, user_id: str) -> None:
 def _is_task_dead(task_id: str, last_activity, threshold, cursor=None, incident_id=None) -> bool:
     """Check whether a Celery task is no longer running.
 
-    For STARTED tasks past the threshold, look for evidence the workflow is
-    still progressing before declaring it dead: any running ``execution_steps``
-    tool call OR any running ``rca_findings`` sub-agent counts as a heartbeat.
-    Multi-agent reasoning models can spend several minutes between tool calls
-    on the reasoning step alone, so checking only tool activity false-positives.
+    A live worker writes the session's ``heartbeat_at`` every 30 seconds for as
+    long as the task runs (``chat.background.liveness``), whatever the model or
+    the tools are doing. *last_activity* includes it, so activity newer than
+    *threshold* means the task is running, and that holds through a long model
+    step, where nothing else moves.
+
+    Without a recent beat, the older evidence still counts, for a worker that
+    predates the heartbeat: a running ``execution_steps`` tool call or a running
+    ``rca_findings`` sub-agent.
     """
     result = celery_app.AsyncResult(task_id)
     if result.state in ('FAILURE', 'REVOKED'):
         return True
+    if last_activity and last_activity >= threshold:
+        # Also covers a task that outlives result_expires: its stored state
+        # falls back to PENDING while the worker is still running it.
+        return False
     if result.state == 'PENDING' and result.result is None:
         return True
     if result.state == 'STARTED' and last_activity and last_activity < threshold:
@@ -2381,10 +2673,180 @@ def _is_task_dead(task_id: str, last_activity, threshold, cursor=None, incident_
     return False
 
 
+# A worker beats every 30 seconds (chat.background.liveness), so ten missed
+# beats in a row means it is gone. A session no worker has beaten yet may
+# still be queued behind long investigations, so it keeps the old allowance.
+_DEAD_WORKER_MINUTES = 5
+_NEVER_STARTED_MINUTES = 20
+
+
+def _db_now(cursor) -> datetime:
+    """The database's clock, in the naive form the TIMESTAMP columns use.
+
+    Heartbeats are written with NOW(), so the thresholds compared against them
+    come from the same clock: skew with the worker's clock cannot fake a live
+    or a dead worker.
+    """
+    cursor.execute("SELECT LOCALTIMESTAMP")
+    return cursor.fetchone()[0]
+
+
+# A session whose worker is gone: it stopped beating, or it was never picked up
+# within the queue allowance. Parameters: dead-worker threshold, never-started threshold.
+_WORKER_GONE_SQL = """(
+    (heartbeat_at IS NOT NULL AND GREATEST(heartbeat_at, updated_at) < %s)
+    OR (heartbeat_at IS NULL AND updated_at < %s)
+)"""
+
+
+def _beat_since(cursor, session_id: str, threshold: datetime) -> bool:
+    """Lock the session row and say whether its worker beat since *threshold*.
+
+    The lock holds until the sweep commits, so a beat cannot land between this
+    check and the session being failed: the worker's UPDATE waits, then finds
+    the session no longer in progress.
+    """
+    cursor.execute(
+        "SELECT heartbeat_at >= %s FROM chat_sessions WHERE id = %s FOR UPDATE",
+        (threshold, session_id),
+    )
+    row = cursor.fetchone()
+    return bool(row and row[0])
+
+
+def _revoke_dead_task(task_id: Optional[str]) -> None:
+    """Stop a task the sweep has given up on, if a worker is still running it.
+
+    A dead worker has nothing to stop. A live one stuck in a blocking call is
+    still holding a worker slot, and would otherwise run to the hard time limit
+    and could still post a result after the incident was failed.
+    """
+    if not task_id:
+        return
+    try:
+        celery_app.control.revoke(task_id, terminate=True)
+    except Exception:
+        logger.warning("[BackgroundChat:Cleanup] Could not revoke task %s", task_id, exc_info=True)
+
+
 def _affected_users(cursor):
     """Return user_ids that could have stale work. users table has no RLS."""
     cursor.execute("SELECT DISTINCT id FROM users WHERE org_id IS NOT NULL")
     return [r[0] for r in cursor.fetchall()]
+
+
+# A non-array messages value must not abort the sweep; leave the column alone.
+_ORPHAN_SESSION_UPDATE = """
+    UPDATE chat_sessions
+    SET status = 'failed',
+        updated_at = NOW(),
+        messages = CASE
+            WHEN messages IS NULL OR jsonb_typeof(messages) = 'array' THEN
+                COALESCE(messages, '[]'::jsonb) || jsonb_build_array(
+                    jsonb_build_object(
+                        'sender', 'bot',
+                        'text', %s,
+                        'message_number', jsonb_array_length(COALESCE(messages, '[]'::jsonb)) + 1
+                    )
+                )
+            ELSE messages
+        END
+    WHERE {where}
+    RETURNING id, ui_state
+"""
+
+
+def _trigger_metadata_from_ui_state(ui_state) -> Dict[str, Any]:
+    if isinstance(ui_state, str):
+        try:
+            ui_state = json.loads(ui_state)
+        except (TypeError, ValueError):
+            return {}
+    if not isinstance(ui_state, dict):
+        return {}
+    meta = ui_state.get("triggerMetadata")
+    return meta if isinstance(meta, dict) else {}
+
+
+def _claim_orphaned_sessions(cursor, where: str, params: tuple) -> list:
+    """Fail in-progress sessions and store an error the next page load can show.
+
+    Only rows still in_progress are flipped, so a second sweep does not post
+    the error again.
+    """
+    cursor.execute(
+        _ORPHAN_SESSION_UPDATE.format(where=where),
+        (_WORKER_LOST_REPLY, *params),
+    )
+    return cursor.fetchall()
+
+
+_CHAT_REPLY_SOURCES = frozenset({"slack", "slack_button", "google_chat", "google_chat_button", "teams"})
+
+# Merges into ui_state.triggerMetadata; a non-object value there is replaced.
+_REMEMBER_REPLY_TARGET_SQL = """
+    UPDATE chat_sessions
+    SET ui_state = jsonb_set(
+        CASE WHEN jsonb_typeof(ui_state) = 'object' THEN ui_state ELSE '{}'::jsonb END,
+        '{triggerMetadata}',
+        CASE WHEN jsonb_typeof(ui_state->'triggerMetadata') = 'object'
+             THEN ui_state->'triggerMetadata' ELSE '{}'::jsonb END || %s::jsonb
+    )
+    WHERE id = %s
+"""
+
+
+def _remember_reply_target(session_id: Optional[str], user_id: Optional[str],
+                           trigger_metadata: Optional[Dict[str, Any]]) -> None:
+    """Store where this run's chat reply goes on the session itself.
+
+    The chat handlers create the session before they post the "Thinking…"
+    placeholder, so its id (``thinking_message_ts``, ``thinking_message_name``,
+    ``thinking_activity_id``) only reaches the task. The cleanup sweep can only
+    read the session: without the id it posts a second message and leaves the
+    placeholder hanging when the worker dies.
+    """
+    if not session_id or not user_id or not trigger_metadata:
+        return
+    if trigger_metadata.get("source") not in _CHAT_REPLY_SOURCES:
+        return
+    try:
+        payload = json.dumps(trigger_metadata, default=str)
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                if not set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:ReplyTarget]"):
+                    return
+                cursor.execute(_REMEMBER_REPLY_TARGET_SQL, (payload, session_id))
+            conn.commit()
+    except Exception:
+        # Best effort: the run itself does not depend on it.
+        logger.warning("[BackgroundChat] Could not store the reply target for session %s",
+                       session_id, exc_info=True)
+
+
+def _notify_orphaned_chat_reply(user_id: str, session_id: str, ui_state) -> None:
+    """Replace a Thinking… placeholder the killed worker can no longer update."""
+    meta = _trigger_metadata_from_ui_state(ui_state)
+    src = meta.get("source")
+    try:
+        # Same chats the task finally block covers. SIGKILL skips that block.
+        if src in ("slack", "slack_button"):
+            _send_response_to_slack(
+                user_id, session_id, meta, force_text=_WORKER_LOST_REPLY,
+            )
+        elif src in ("google_chat", "google_chat_button"):
+            _send_response_to_google_chat(
+                user_id, session_id, meta, force_text=_WORKER_LOST_REPLY,
+            )
+        elif src == "teams":
+            _send_response_to_teams(
+                user_id, session_id, meta, force_text=_WORKER_LOST_REPLY,
+            )
+    except Exception:
+        logger.exception(
+            "[BackgroundChat:Cleanup] Failed to post the interrupted reply for session %s",
+            session_id,
+        )
 
 
 def cleanup_orphaned_investigations(threshold_minutes: int = 25) -> int:
@@ -2395,16 +2857,16 @@ def cleanup_orphaned_investigations(threshold_minutes: int = 25) -> int:
     Returns the number of incidents cleaned.
     """
     cleaned = 0
-    threshold = datetime.now() - timedelta(minutes=threshold_minutes)
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
+                threshold = _db_now(cursor) - timedelta(minutes=threshold_minutes)
                 for uid in _affected_users(cursor):
                     if not set_rls_context(cursor, conn, uid, log_prefix="[StartupCleanup]"):
                         continue
                     cursor.execute("""
                         SELECT id, rca_celery_task_id,
-                               COALESCE((SELECT cs.updated_at FROM chat_sessions cs
+                               COALESCE((SELECT GREATEST(cs.heartbeat_at, cs.updated_at) FROM chat_sessions cs
                                          WHERE cs.id::text = i.aurora_chat_session_id::text), i.updated_at)
                         FROM incidents i
                         WHERE aurora_status = 'running' AND updated_at < %s AND user_id = %s
@@ -2423,14 +2885,17 @@ def cleanup_orphaned_investigations(threshold_minutes: int = 25) -> int:
                             _record_rca_error(cursor, str(inc_id), uid)
                             cleaned += 1
                         conn.commit()
-                    cursor.execute("""
-                        UPDATE chat_sessions SET status = 'failed', updated_at = NOW()
-                        WHERE status = 'in_progress' AND updated_at < %s AND user_id = %s
-                        RETURNING id
-                    """, (threshold, uid))
-                    for (sid,) in cursor.fetchall():
+                    # Younger than the window may still be on a live worker.
+                    orphaned_sessions = _claim_orphaned_sessions(
+                        cursor,
+                        "status = 'in_progress' AND GREATEST(heartbeat_at, updated_at) < %s AND user_id = %s",
+                        (threshold, uid),
+                    )
+                    for sid, _ui in orphaned_sessions:
                         _propagate_suggestion_status(str(sid), 'failed')
                     conn.commit()
+                    for sid, ui_state in orphaned_sessions:
+                        _notify_orphaned_chat_reply(uid, str(sid), ui_state)
 
         if cleaned:
             logger.info(f"[StartupCleanup] Marked {cleaned} orphaned investigations as error")
@@ -2444,11 +2909,11 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
     """Cleanup background chat sessions stuck in 'in_progress' and incidents
     whose Celery task is no longer alive. Runs every 5 minutes.
     """
-    stale_threshold = datetime.now() - timedelta(minutes=20)
-    dead_task_threshold = datetime.now() - timedelta(minutes=3)
-    # Per-role timeout caps at 600s; 35 min is safely past any legitimate run.
-    findings_threshold = datetime.now() - timedelta(minutes=35)
+    return _sweep_stale_background_chats()
 
+
+def _sweep_stale_background_chats() -> Dict[str, Any]:
+    """The sweep itself, kept off the task decorator so tests can call it."""
     try:
         with db_pool.get_admin_connection() as conn:
             cleaned_count = 0
@@ -2457,23 +2922,42 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
             stale_findings_count = 0
 
             with conn.cursor() as cursor:
+                db_now = _db_now(cursor)
+                stale_threshold = db_now - timedelta(minutes=_NEVER_STARTED_MINUTES)
+                dead_worker_threshold = db_now - timedelta(minutes=_DEAD_WORKER_MINUTES)
+                dead_task_threshold = db_now - timedelta(minutes=3)
+                # Sub-agent rows are capped at 600s and mark themselves terminal.
+                # 35 min is the net for a row that never got that update, not the parent wall clock.
+                findings_threshold = db_now - timedelta(minutes=35)
+
                 for uid in _affected_users(cursor):
                     if not set_rls_context(cursor, conn, uid, log_prefix="[BackgroundChat:Cleanup]"):
                         continue
 
-                    # --- 1. Stale sessions (>20 min with no update) ---
+                    # --- 1. Stale sessions: the worker stopped beating ---
+                    # A live worker writes heartbeat_at every 30 seconds, so 5 quiet
+                    # minutes means it is gone. A session never beaten may still be
+                    # queued, so it gets the old 20 minutes.
                     cursor.execute("""
-                        SELECT cs.id, i.id as incident_id
+                        SELECT cs.id, i.id as incident_id, i.rca_celery_task_id
                         FROM chat_sessions cs
                         LEFT JOIN incidents i ON i.aurora_chat_session_id = cs.id::uuid
-                        WHERE cs.status = 'in_progress' AND cs.updated_at < %s AND cs.user_id = %s
-                    """, (stale_threshold, uid))
-                    for session_id, incident_id in cursor.fetchall():
-                        cursor.execute("""
-                            UPDATE chat_sessions SET status = 'failed', updated_at = NOW()
-                            WHERE id = %s AND status = 'in_progress' RETURNING id
-                        """, (session_id,))
-                        if not cursor.fetchone():
+                        WHERE cs.status = 'in_progress' AND cs.user_id = %s
+                          AND (
+                              (cs.heartbeat_at IS NOT NULL AND GREATEST(cs.heartbeat_at, cs.updated_at) < %s)
+                              OR (cs.heartbeat_at IS NULL AND cs.updated_at < %s)
+                          )
+                    """, (uid, dead_worker_threshold, stale_threshold))
+                    for session_id, incident_id, stale_task_id in cursor.fetchall():
+                        # The claim repeats the staleness test: Postgres re-evaluates an
+                        # UPDATE's WHERE after locking the row, so a beat that landed since
+                        # the SELECT keeps the session alive.
+                        claimed = _claim_orphaned_sessions(
+                            cursor,
+                            "id = %s AND status = 'in_progress' AND " + _WORKER_GONE_SQL,
+                            (session_id, dead_worker_threshold, stale_threshold),
+                        )
+                        if not claimed:
                             continue
                         cleaned_count += 1
                         _propagate_suggestion_status(str(session_id), 'failed')
@@ -2484,6 +2968,8 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                             )
                             _record_rca_error(cursor, str(incident_id), uid)
                         conn.commit()
+                        _revoke_dead_task(stale_task_id)
+                        _notify_orphaned_chat_reply(uid, str(session_id), claimed[0][1])
                         if incident_id:
                             try:
                                 from utils.notifications.dispatcher import notify_investigation_failed
@@ -2494,7 +2980,7 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                     # --- 2. Dead Celery tasks (task no longer alive in broker) ---
                     cursor.execute("""
                         SELECT i.id, i.rca_celery_task_id, i.aurora_chat_session_id,
-                               COALESCE(cs.updated_at, i.updated_at) as last_activity
+                               GREATEST(cs.heartbeat_at, COALESCE(cs.updated_at, i.updated_at)) as last_activity
                         FROM incidents i
                         LEFT JOIN chat_sessions cs ON cs.id::text = i.aurora_chat_session_id::text
                         WHERE i.aurora_status = 'running' AND i.rca_celery_task_id IS NOT NULL
@@ -2504,6 +2990,10 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                         if not _is_task_dead(task_id, last_activity, dead_task_threshold,
                                              cursor=cursor, incident_id=inc_id):
                             continue
+                        if session_id and _beat_since(cursor, str(session_id), dead_task_threshold):
+                            # The worker beat after the check above: it is alive.
+                            conn.commit()
+                            continue
                         cursor.execute(
                             "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', analyzed_at = COALESCE(analyzed_at, NOW()), rca_celery_task_id = NULL, updated_at = NOW() WHERE id = %s AND aurora_status = 'running' AND status != 'merged' RETURNING id",
                             (inc_id,)
@@ -2511,15 +3001,19 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                         if not cursor.fetchone():
                             conn.commit()
                             continue
+                        claimed_ui = None
                         if session_id:
-                            cursor.execute(
-                                "UPDATE chat_sessions SET status = 'failed', updated_at = NOW() WHERE id = %s AND status = 'in_progress' RETURNING id",
-                                (str(session_id),)
+                            claimed = _claim_orphaned_sessions(
+                                cursor, "id = %s AND status = 'in_progress'", (str(session_id),),
                             )
-                            if cursor.fetchone():
+                            if claimed:
+                                claimed_ui = claimed[0][1]
                                 _propagate_suggestion_status(str(session_id), 'failed')
                         _record_rca_error(cursor, str(inc_id), uid)
                         conn.commit()
+                        _revoke_dead_task(task_id)
+                        if claimed_ui is not None:
+                            _notify_orphaned_chat_reply(uid, str(session_id), claimed_ui)
                         dead_task_count += 1
                         try:
                             from utils.notifications.dispatcher import notify_investigation_failed
@@ -2588,7 +3082,12 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
 
             # --- 5. Stale action runs (per-org, action_runs is RLS-protected) ---
             stale_actions_count = 0
-            stale_action_threshold = datetime.now() - timedelta(minutes=35)
+            # Running rows are stamped at worker start. Pending rows are still
+            # queued, so they keep the old 35-minute allowance instead of a
+            # short investigation limit.
+            now = datetime.now(timezone.utc)
+            running_before = now - timedelta(seconds=investigation_stale_after_seconds())
+            pending_before = now - timedelta(seconds=max(investigation_stale_after_seconds(), 35 * 60))
             with conn.cursor() as cursor:
                 cursor.execute("SELECT DISTINCT org_id FROM users WHERE org_id IS NOT NULL")
                 org_ids = [r[0] for r in cursor.fetchall()]
@@ -2597,8 +3096,9 @@ def cleanup_stale_background_chats() -> Dict[str, Any]:
                     cursor.execute("""
                         UPDATE action_runs SET status = 'error', completed_at = NOW(),
                                error = 'Stale: background chat did not complete'
-                        WHERE status IN ('running', 'pending') AND started_at < %s
-                    """, (stale_action_threshold,))
+                        WHERE (status = 'running' AND started_at < %s)
+                           OR (status = 'pending' AND started_at < %s)
+                    """, (running_before, pending_before))
                     stale_actions_count += cursor.rowcount
                 if stale_actions_count > 0:
                     conn.commit()

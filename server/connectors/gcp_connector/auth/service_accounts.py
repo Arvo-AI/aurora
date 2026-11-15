@@ -71,7 +71,17 @@ READ_ONLY_PROJECT_ROLES = [
     'roles/compute.viewer',
     'roles/container.viewer',
     'roles/storage.objectViewer',
+    # Viewer lists datasets. These two are what a query needs: read rows, create jobs.
+    'roles/bigquery.dataViewer',
+    'roles/bigquery.jobUser',
 ]
+# Bump when READ_ONLY_PROJECT_ROLES gains a permission existing OAuth connects
+# must receive without reconnecting. The sync task stores this on success.
+GCP_READONLY_ROLES_REVISION = 1
+GCP_READONLY_ROLES_REVISION_KEY = "gcp_readonly_roles_revision"
+SYNC_GCP_READONLY_ROLES_TASK = (
+    "connectors.gcp_connector.gcp_post_auth_tasks.sync_gcp_readonly_roles"
+)
 
 
 def ensure_aurora_full_access(
@@ -381,6 +391,9 @@ def _ensure_read_only_runner(
             full_access_sa_email,
         )
 
+    if user_id:
+        _remember_readonly_roles_revision(user_id)
+
     return sa_email
 
 
@@ -395,6 +408,127 @@ def _service_account_exists(iam_service, project_id: str, sa_email: str) -> bool
             return False
         logger.error("Failed to verify service account %s: %s", sa_email, exc)
         raise ValueError(f"Failed to verify service account {sa_email}: {exc}") from exc
+
+
+def _readonly_roles_current(user_id: str) -> bool:
+    from utils.auth.stateless_auth import get_user_preference
+
+    current = get_user_preference(user_id, GCP_READONLY_ROLES_REVISION_KEY, 0)
+    try:
+        return int(current) >= GCP_READONLY_ROLES_REVISION
+    except (TypeError, ValueError):
+        return False
+
+
+def _remember_readonly_roles_revision(user_id: str) -> None:
+    from utils.auth.stateless_auth import store_user_preference
+
+    try:
+        store_user_preference(user_id, GCP_READONLY_ROLES_REVISION_KEY, GCP_READONLY_ROLES_REVISION)
+    except Exception as err:
+        logger.warning(
+            "Failed to store GCP read-only role revision (error_type=%s)",
+            type(err).__name__,
+        )
+
+
+def _service_account_bound(crm_service, project_id: str, member: str) -> bool:
+    """Whether this member already has any binding on the project."""
+    policy = crm_service.projects().getIamPolicy(
+        resource=project_id,
+        body={"options": {"requestedPolicyVersion": 3}},
+    ).execute()
+    for binding in policy.get("bindings") or []:
+        if member in (binding.get("members") or []):
+            return True
+    return False
+
+
+def sync_read_only_roles(user_id: str) -> None:
+    """Grant the current read-only role list on projects the Ask-mode SA already covers.
+
+    Uploaded service-account keys are the customer's identity: record the
+    revision and return. Missing read-only runner: same, Ask mode falls back
+    to the owner account. Does not call ensure_aurora_full_access.
+    """
+    from utils.auth.token_management import get_token_data
+    from connectors.gcp_connector.auth.oauth import get_credentials
+    from connectors.gcp_connector.gcp.projects import get_project_list, select_best_project
+    from connectors.gcp_connector.gcp.iam import set_project_bindings
+
+    if _readonly_roles_current(user_id):
+        return
+
+    token_data = get_token_data(user_id, "gcp")
+    if not token_data or get_gcp_auth_type(token_data) == GCP_AUTH_TYPE_SA:
+        _remember_readonly_roles_revision(user_id)
+        return
+
+    user_creds = get_credentials(token_data)
+    projects = get_project_list(user_creds)
+    if not projects:
+        return
+
+    root_project_id = select_best_project(user_creds, projects, user_id)
+    user_suffix = _get_user_sa_suffix(user_id, "readonly")
+    sa_email = f"aurora-{user_suffix}@{root_project_id}.iam.gserviceaccount.com"
+    iam_service = build("iam", "v1", credentials=user_creds)
+    try:
+        exists = _service_account_exists(iam_service, root_project_id, sa_email)
+    except ValueError:
+        logger.warning("Skipping read-only role sync; could not verify service account")
+        return
+    if not exists:
+        _remember_readonly_roles_revision(user_id)
+        return
+
+    crm_service = build("cloudresourcemanager", "v1", credentials=user_creds)
+    member = f"serviceAccount:{sa_email}"
+    target_ids = {root_project_id}
+    for project in projects:
+        pid = project.get("projectId")
+        if not pid or pid == root_project_id:
+            continue
+        try:
+            if _service_account_bound(crm_service, pid, member):
+                target_ids.add(pid)
+        except Exception:
+            logger.warning("Skipping project %s during read-only role sync", pid)
+
+    root_granted = False
+    for pid in sorted(target_ids):
+        try:
+            set_project_bindings(crm_service, pid, member, READ_ONLY_PROJECT_ROLES)
+            if pid == root_project_id:
+                root_granted = True
+        except Exception as err:
+            logger.error("Failed to sync read-only roles on project %s: %s", pid, err)
+            if pid == root_project_id:
+                return
+    if root_granted:
+        _remember_readonly_roles_revision(user_id)
+
+
+def maybe_schedule_readonly_role_sync(user_id: str) -> None:
+    """Enqueue a role sync when this OAuth user is behind GCP_READONLY_ROLES_REVISION.
+
+    The stored revision stops further enqueues after a successful sync. A failed
+    sync leaves the revision unset, so the next token generation tries again.
+    celery_config imports the task module, which imports this module, so the
+    Celery app is imported here rather than at module load.
+    """
+    if not user_id:
+        return
+    try:
+        if _readonly_roles_current(user_id):
+            return
+        from celery_config import celery_app
+        celery_app.send_task(SYNC_GCP_READONLY_ROLES_TASK, args=[user_id])
+    except Exception as err:
+        logger.warning(
+            "Failed to schedule GCP read-only role sync (error_type=%s)",
+            type(err).__name__,
+        )
 
 
 def generate_sa_access_token(user_id: str, scopes: List[str] = None, 
@@ -416,6 +550,17 @@ def generate_sa_access_token(user_id: str, scopes: List[str] = None,
         scopes = ["https://www.googleapis.com/auth/cloud-platform"]
 
     normalized_mode = (mode or '').strip().lower()
+    from utils.auth.connector_access import credentials_for_user, gcp_token_mode
+    override = gcp_token_mode(
+        credentials_for_user(user_id, "gcp", selected_project_id or ""),
+        normalized_mode,
+    )
+    # No grant: don't mint a token. A read-only grant forces the read-only
+    # service account even when the chat is in Agent mode.
+    if override == "deny":
+        raise ValueError("Your role cannot use this GCP project.")
+    if override:
+        normalized_mode = override
     
     from utils.auth.token_management import get_token_data
     from connectors.gcp_connector.auth.oauth import get_credentials
@@ -430,6 +575,11 @@ def generate_sa_access_token(user_id: str, scopes: List[str] = None,
     # Service account branch: skip the per-user Aurora SA impersonation chain
     # entirely. The uploaded SA key IS the working identity, so we just refresh
     # it and return its own access token bound to the default project.
+    # A read-only grant has no separate identity on an uploaded key.
+    if override == "ask" and get_gcp_auth_type(token_data) == GCP_AUTH_TYPE_SA:
+        raise ValueError(
+            "Your role can only use a read-only GCP identity. An uploaded key cannot be limited to read-only."
+        )
     if get_gcp_auth_type(token_data) == GCP_AUTH_TYPE_SA:
         sa_client_email = token_data.get("client_email")
         try:
@@ -484,6 +634,9 @@ def generate_sa_access_token(user_id: str, scopes: List[str] = None,
             "auth_type": GCP_AUTH_TYPE_SA,
         }
 
+    # OAuth only. An uploaded key is the customer's identity; we do not grant on it.
+    maybe_schedule_readonly_role_sync(user_id)
+
     user_creds = get_credentials(token_data)
     iam_service = build('iam', 'v1', credentials=user_creds)
     
@@ -504,21 +657,32 @@ def generate_sa_access_token(user_id: str, scopes: List[str] = None,
         user_suffix_readonly = _get_user_sa_suffix(user_id, 'readonly')
         user_sa_id_readonly = f"aurora-{user_suffix_readonly}"
         read_only_email = f"{user_sa_id_readonly}@{root_project_id}.iam.gserviceaccount.com"
+        read_only_found = False
         try:
-            if _service_account_exists(iam_service, root_project_id, read_only_email):
-                sa_email = read_only_email
-                logger.info("Using read-only runner service account for user %s", user_id)
-            else:
-                logger.warning(
-                    "Read-only service account %s missing in project %s; falling back to full-access runner",
-                    read_only_email,
-                    root_project_id,
-                )
+            read_only_found = _service_account_exists(iam_service, root_project_id, read_only_email)
         except ValueError as err:
+            # A grant that requires read-only cannot fall back to the modify runner.
+            if override == "ask":
+                raise ValueError(
+                    "Your role can only use the read-only GCP service account, and it could not be verified."
+                ) from err
             logger.warning(
                 "Unable to verify read-only service account for project %s: %s. Falling back to full-access runner.",
                 root_project_id,
                 err,
+            )
+        if read_only_found:
+            sa_email = read_only_email
+            logger.info("Using read-only runner service account for user %s", user_id)
+        elif override == "ask":
+            raise ValueError(
+                "Your role can only use the read-only GCP service account, and it is not set up."
+            )
+        else:
+            logger.warning(
+                "Read-only service account %s missing in project %s; falling back to full-access runner",
+                read_only_email,
+                root_project_id,
             )
     
     # Determine which project to return for queries

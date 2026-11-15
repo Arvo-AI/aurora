@@ -1,12 +1,15 @@
 "use client";
 
 import React, { useState, useRef, useEffect } from "react";
+import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useUser } from "@/hooks/useAuthHooks";
 import { signOut } from "next-auth/react";
 import dynamic from "next/dynamic";
 import { Button } from "@/components/ui/button";
-import { Settings, LogOut } from "lucide-react";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Gauge, LogOut, Plug, Settings, SquarePen, Workflow, Zap } from "lucide-react";
+import { cn } from "@/lib/utils";
 import {
   Tooltip,
   TooltipContent,
@@ -76,10 +79,18 @@ const SidebarStrip = ({
 
   if (isNavExpanded) return null;
 
+  const navItems = [
+    { href: "/chat", label: "New Chat", icon: SquarePen, active: pathname?.startsWith("/chat") },
+    { href: "/incidents", label: "Incidents", icon: Zap, active: pathname?.startsWith("/incidents"), showIndicator: true },
+    { href: "/actions", label: "Actions", icon: Workflow, active: pathname?.startsWith("/actions") },
+    { href: "/monitor", label: "Monitor", icon: Gauge, active: pathname?.startsWith("/monitor") },
+    { href: "/connectors", label: "Connectors", icon: Plug, active: pathname === "/connectors" },
+  ];
+
   return (
     <TooltipProvider>
-      <div className="absolute left-0 top-0 h-full w-16 bg-card border-r border-border flex flex-col items-center justify-between py-4 z-50">
-        <div className="flex flex-col items-center space-y-4">
+      <div className="absolute inset-y-0 left-0 w-16 bg-card border-r border-border flex flex-col items-center pt-4 pb-6 z-50">
+        <div className="flex flex-col items-center gap-6">
           {/* Sidebar toggle button */}
           <Tooltip>
             <TooltipTrigger asChild>
@@ -96,9 +107,38 @@ const SidebarStrip = ({
               <p>Open Sidebar</p>
             </TooltipContent>
           </Tooltip>
+
+          <div className="flex flex-col items-center gap-1">
+            {navItems.map(({ href, label, icon: Icon, active, showIndicator }) => (
+              <Tooltip key={href}>
+                <TooltipTrigger asChild>
+                  <Link
+                    href={href}
+                    aria-label={label}
+                    className={cn(
+                      "relative h-8 w-8 rounded-md flex items-center justify-center transition-colors border border-transparent hover:bg-primary/10 hover:border-border/50",
+                      active
+                        ? "bg-card border-border shadow-sm text-foreground"
+                        : "text-muted-foreground"
+                    )}
+                  >
+                    <Icon size={16} className={showIndicator ? "text-foreground" : undefined} />
+                    {showIndicator && (
+                      <span className="absolute top-1.5 right-1.5 flex h-2 w-2">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-muted-foreground opacity-75" />
+                        <span className="relative inline-flex rounded-full h-2 w-2 bg-muted-foreground" />
+                      </span>
+                    )}
+                  </Link>
+                </TooltipTrigger>
+                <TooltipContent side="right" sideOffset={5}>
+                  <p>{label}</p>
+                </TooltipContent>
+              </Tooltip>
+            ))}
+          </div>
         </div>
         
-        {/* User button at bottom */}
         {user && (
           <div className="relative mt-auto" ref={userMenuRef}>
             <Tooltip>
@@ -106,14 +146,21 @@ const SidebarStrip = ({
                 <Button
                   variant="outline"
                   size="sm"
-                  className="h-10 w-10 rounded-full p-0 shadow-md border border-border bg-card flex items-center justify-center overflow-hidden"
+                  aria-label="User menu"
+                  className="h-8 w-8 shrink-0 rounded-full p-0 shadow-md border border-border bg-card flex items-center justify-center overflow-hidden"
                   onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
                 >
-                  <img 
-                    src={user.imageUrl} 
-                    alt={user.fullName || "User"} 
-                    className="w-full h-full object-cover"
-                  />
+                  <Avatar className="h-8 w-8">
+                    <AvatarImage src={user.imageUrl || undefined} alt="" />
+                    <AvatarFallback className="bg-primary text-primary-foreground text-xs font-medium">
+                      {(user.fullName || user.firstName || user.emailAddresses[0]?.emailAddress || "U")
+                        .split(" ")
+                        .map((name) => name[0])
+                        .join("")
+                        .toUpperCase()
+                        .slice(0, 2)}
+                    </AvatarFallback>
+                  </Avatar>
                 </Button>
               </TooltipTrigger>
               <TooltipContent>
@@ -207,6 +254,7 @@ function AppLayout({
   const pathname = usePathname();
   const router = useRouter();
   const { user, isLoaded } = useUser();
+
   const {
     isChatExpanded,
     setIsChatExpanded,
@@ -271,7 +319,7 @@ function AppLayout({
         isPublicRoute ? (
           <RedirectToApp />
         ) : (
-          <div className="flex h-screen bg-background overflow-hidden">
+          <div className="relative flex h-screen bg-background overflow-hidden">
             <Navigation 
               isChatExpanded={isChatExpanded}
               onChatExpandToggle={handleChatToggle}
@@ -285,7 +333,7 @@ function AppLayout({
               currentChatSessionId={currentChatSessionId}
               onSettingsClick={() => setIsSettingsModalOpen(true)}
             />
-            <main className={`flex-1 flex flex-col ${pathname === "/chat" ? "overflow-hidden" : "overflow-auto"}`} style={isNavExpanded ? { width: 'calc(100% - 224px)' } : { marginLeft: '64px', width: 'calc(100% - 64px)' }}>
+            <main className={`flex-1 min-w-0 flex flex-col ${pathname === "/chat" ? "overflow-hidden" : "overflow-auto"}`}>
               {renderMainContent}
             </main>
             

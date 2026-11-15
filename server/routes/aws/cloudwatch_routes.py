@@ -12,7 +12,6 @@ Webhook URL format: /aws/cloudwatch/webhook/<user_id>
 import base64
 import json
 import logging
-import os
 import re
 import string
 from typing import Tuple
@@ -26,6 +25,7 @@ from cryptography.hazmat.primitives.asymmetric import padding
 
 from routes.aws.cloudwatch_tasks import process_cloudwatch_alarm
 from utils.auth.rbac_decorators import require_permission
+from utils.web.public_url import external_backend_url
 from utils.auth.stateless_auth import validate_user_exists, set_rls_context
 from utils.auth.token_management import store_tokens_in_db, get_token_data
 from utils.db.connection_pool import db_pool
@@ -442,13 +442,7 @@ def get_webhook_url(user_id):
     from utils.secrets.secret_ref_utils import get_token_owner_id
     webhook_owner_id = get_token_owner_id(user_id, "cloudwatch")
 
-    ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")
-    backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "").rstrip("/")
-
-    if ngrok_url and backend_url.startswith("http://localhost"):
-        base_url = ngrok_url
-    else:
-        base_url = backend_url
+    base_url = external_backend_url()
 
     webhook_url = f"{base_url}/aws/cloudwatch/webhook/{webhook_owner_id}"
 

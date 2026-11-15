@@ -8,7 +8,7 @@ from utils.db.connection_pool import db_pool
 from utils.log_sanitizer import sanitize
 from utils.web.limiter_ext import limiter
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import set_rls_context
+from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.ssh.ssh_utils import (
     load_user_private_key_safe,
     parse_ssh_key_id,
@@ -35,6 +35,80 @@ def _validate_required(fields: Dict[str, Any]):
     missing = [k for k, v in fields.items() if not v]
     if missing:
         raise ValueError(f"Missing required field(s): {', '.join(missing)}")
+
+
+def _blank_to_none(value: Any) -> Any:
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped or None
+    return value
+
+
+def _as_int(value: Any) -> Optional[int]:
+    if value is None or value == "":
+        return None
+    return int(value)
+
+
+def target_for_ready_check(
+    stored: Optional[Dict[str, Any]], tested: Dict[str, Any]
+) -> tuple:
+    """Return (stored target to compare, whether to save the tested user).
+
+    A VM saved with no username can take the user this check just used.
+    A stored username that differs stays a mismatch.
+    """
+    if stored is None:
+        return None, False
+    stored_user = _blank_to_none(stored.get("ssh_username"))
+    tested_user = _blank_to_none(tested.get("ssh_username"))
+    # No saved user — this check is the first one, so keep the user it used.
+    if stored_user is None and tested_user:
+        return {**stored, "ssh_username": tested_user}, True
+    return stored, False
+
+
+def connection_fields_changed(existing: Dict[str, Any], proposed: Dict[str, Any]) -> bool:
+    """True when this write points SSH at a different host, key, or user."""
+    casters = {
+        "ip_address": _blank_to_none,
+        "port": _as_int,
+        "ssh_jump_command": _blank_to_none,
+        "ssh_key_id": _as_int,
+        "ssh_username": _blank_to_none,
+    }
+    for field, caster in casters.items():
+        # Omitted fields are left as stored, so they cannot invalidate a check
+        if field not in proposed:
+            continue
+        if caster(existing.get(field)) != caster(proposed[field]):
+            return True
+    return False
+
+
+def _org_for_write(cur, conn, user_id: str, log_prefix: str) -> Optional[str]:
+    """Return the org to stamp on this write, or None when RLS cannot be set."""
+    return set_rls_context(
+        cur,
+        conn,
+        user_id,
+        org_id=get_org_id_from_request(),
+        log_prefix=log_prefix,
+    )
+
+
+def _load_owned_key(user_id: str, ssh_key_id: Any):
+    """Return (key_id, private_key, error). No key id means nothing to load."""
+    # A VM can be saved before a key is chosen
+    if ssh_key_id is None:
+        return None, None, None
+    parsed_id, error_msg = parse_ssh_key_id(ssh_key_id)
+    if error_msg:
+        return None, None, (jsonify({"error": error_msg}), 400)
+    private_key, error_msg = load_user_private_key_safe(user_id, parsed_id)
+    if error_msg:
+        return None, None, (jsonify({"error": error_msg}), 400)
+    return parsed_id, private_key, None
 
 
 def _serialize_vm_row(row: tuple, is_shared: bool = False) -> Dict[str, Any]:
@@ -112,37 +186,44 @@ def create_manual_vm(user_id):
     try:
         _validate_required({"name": name, "ipAddress": ip_address})
         port = _parse_port(data.get("port"), default=22)
-        if ssh_key_id is not None:
-            ssh_key_id, error_msg = parse_ssh_key_id(ssh_key_id)
-            if error_msg:
-                return jsonify({"error": error_msg}), 400
-            _, error_msg = load_user_private_key_safe(user_id, ssh_key_id)
-            if error_msg:
-                return jsonify({"error": error_msg}), 400
+        ssh_key_id, _, key_error = _load_owned_key(user_id, ssh_key_id)
+        if key_error:
+            return key_error
     except ValueError as exc:
         return jsonify({"error": "Invalid input parameters"}), 400
 
     with db_pool.get_user_connection() as conn:
         with conn.cursor() as cur:
-            set_rls_context(cur, conn, user_id, log_prefix="[VMs:create]")
-            # Unique constraint is on (user_id, ip_address, port)
-            # If same IP+port already exists, update the name and config
-            # Reset connection_verified on upsert since credentials may have changed
+            # Stamp org_id on insert; boot backfill only catches rows that missed it
+            org_id = _org_for_write(cur, conn, user_id, "[VMs:create]")
+            if not org_id:
+                return jsonify({"error": "Organization context required"}), 400
+            # Same SSH target keeps connection_verified; a new key, user, or jump host does not
             cur.execute(
                 """
-                INSERT INTO user_manual_vms (user_id, name, ip_address, port, ssh_jump_command, ssh_key_id, ssh_username, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+                INSERT INTO user_manual_vms (user_id, org_id, name, ip_address, port, ssh_jump_command, ssh_key_id, ssh_username, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
                 ON CONFLICT (user_id, ip_address, port) DO UPDATE
                     SET name = EXCLUDED.name,
+                        org_id = EXCLUDED.org_id,
                         ssh_jump_command = EXCLUDED.ssh_jump_command,
                         ssh_key_id = EXCLUDED.ssh_key_id,
                         ssh_username = EXCLUDED.ssh_username,
-                        connection_verified = FALSE,
+                        connection_verified = CASE
+                            WHEN NULLIF(BTRIM(user_manual_vms.ssh_jump_command), '')
+                                 IS DISTINCT FROM NULLIF(BTRIM(EXCLUDED.ssh_jump_command), '')
+                              OR user_manual_vms.ssh_key_id IS DISTINCT FROM EXCLUDED.ssh_key_id
+                              OR NULLIF(BTRIM(user_manual_vms.ssh_username), '')
+                                 IS DISTINCT FROM NULLIF(BTRIM(EXCLUDED.ssh_username), '')
+                            THEN FALSE
+                            ELSE user_manual_vms.connection_verified
+                        END,
                         updated_at = NOW()
                 RETURNING id, name, ip_address, port, ssh_jump_command, ssh_key_id, ssh_username, connection_verified, created_at, updated_at;
                 """,
                 (
                     user_id,
+                    org_id,
                     name,
                     ip_address,
                     port,
@@ -177,19 +258,15 @@ def update_manual_vm(user_id, vm_id: int):
 
     try:
         port_val = _parse_port(port, default=None) if port is not None else None
-        if ssh_key_id is not None:
-            ssh_key_id, error_msg = parse_ssh_key_id(ssh_key_id)
-            if error_msg:
-                return jsonify({"error": error_msg}), 400
-            _, error_msg = load_user_private_key_safe(user_id, ssh_key_id)
-            if error_msg:
-                return jsonify({"error": error_msg}), 400
+        ssh_key_id, _, key_error = _load_owned_key(user_id, ssh_key_id)
+        if key_error:
+            return key_error
     except ValueError as exc:
         return jsonify({"error": "Invalid input parameters"}), 400
 
     updates = []
     params = []
-    reset_connection_verified = False
+    proposed_connection: Dict[str, Any] = {}
 
     if name is not None:
         updates.append(sql.SQL("name = %s"))
@@ -197,11 +274,11 @@ def update_manual_vm(user_id, vm_id: int):
     if ip_address is not None:
         updates.append(sql.SQL("ip_address = %s"))
         params.append(ip_address)
-        reset_connection_verified = True
+        proposed_connection["ip_address"] = ip_address
     if port_val is not None:
         updates.append(sql.SQL("port = %s"))
         params.append(port_val)
-        reset_connection_verified = True
+        proposed_connection["port"] = port_val
     if (
         ssh_jump_command is not None
         or "sshJumpCommand" in data
@@ -209,27 +286,29 @@ def update_manual_vm(user_id, vm_id: int):
     ):
         updates.append(sql.SQL("ssh_jump_command = %s"))
         params.append(ssh_jump_command)
+        proposed_connection["ssh_jump_command"] = ssh_jump_command
     if ssh_key_id is not None or "sshKeyId" in data or "ssh_key_id" in data:
         updates.append(sql.SQL("ssh_key_id = %s"))
         params.append(ssh_key_id)
-        reset_connection_verified = True
+        proposed_connection["ssh_key_id"] = ssh_key_id
     if ssh_username is not None or "sshUsername" in data or "ssh_username" in data:
         updates.append(sql.SQL("ssh_username = %s"))
         params.append(ssh_username)
-        reset_connection_verified = True
+        proposed_connection["ssh_username"] = ssh_username
 
     if not updates:
         return jsonify({"error": "No fields to update"}), 400
 
-    if reset_connection_verified:
-        updates.append(sql.SQL("connection_verified = FALSE"))
-    updates.append(sql.SQL("updated_at = NOW()"))
-
     with db_pool.get_user_connection() as conn:
         with conn.cursor() as cur:
-            set_rls_context(cur, conn, user_id, log_prefix="[VMs:update]")
+            org_id = _org_for_write(cur, conn, user_id, "[VMs:update]")
+            if not org_id:
+                return jsonify({"error": "Organization context required"}), 400
             cur.execute(
-                "SELECT user_id FROM user_manual_vms WHERE id = %s",
+                """
+                SELECT user_id, ip_address, port, ssh_jump_command, ssh_key_id, ssh_username
+                FROM user_manual_vms WHERE id = %s
+                """,
                 (vm_id,),
             )
             existing = cur.fetchone()
@@ -237,6 +316,21 @@ def update_manual_vm(user_id, vm_id: int):
                 return jsonify({"error": "Manual VM not found"}), 404
             if existing[0] != user_id:
                 return jsonify({"error": "Cannot modify a shared VM"}), 403
+
+            stored_connection = {
+                "ip_address": existing[1],
+                "port": existing[2],
+                "ssh_jump_command": existing[3],
+                "ssh_key_id": existing[4],
+                "ssh_username": existing[5],
+            }
+            # Resending the same SSH target must not clear a connection that already worked
+            if connection_fields_changed(stored_connection, proposed_connection):
+                updates.append(sql.SQL("connection_verified = FALSE"))
+            # Stamp org_id on the write so the row is visible without a server restart
+            updates.append(sql.SQL("org_id = %s"))
+            params.append(org_id)
+            updates.append(sql.SQL("updated_at = NOW()"))
 
             query = sql.SQL(
                 """
@@ -262,7 +356,7 @@ def update_manual_vm(user_id, vm_id: int):
 def delete_manual_vm(user_id, vm_id: int):
     with db_pool.get_user_connection() as conn:
         with conn.cursor() as cur:
-            set_rls_context(cur, conn, user_id, log_prefix="[VMs:delete]")
+            _org_for_write(cur, conn, user_id, "[VMs:delete]")
             cur.execute(
                 "SELECT user_id FROM user_manual_vms WHERE id = %s",
                 (vm_id,),
@@ -301,6 +395,7 @@ def check_manual_vm_connection(user_id):
     ).strip() or None
 
     # If vmId provided, load defaults from DB
+    stored_target = None
     if vm_id is not None:
         try:
             vm_id = int(vm_id)
@@ -308,7 +403,7 @@ def check_manual_vm_connection(user_id):
             return jsonify({"error": "vmId must be an integer"}), 400
         with db_pool.get_user_connection() as conn:
             with conn.cursor() as cur:
-                set_rls_context(cur, conn, user_id, log_prefix="[VMs:check-load]")
+                _org_for_write(cur, conn, user_id, "[VMs:check-load]")
                 cur.execute(
                     """
                     SELECT ip_address, port, ssh_jump_command, ssh_key_id, ssh_username, user_id
@@ -323,6 +418,13 @@ def check_manual_vm_connection(user_id):
         if vm_row[5] != user_id:
             return jsonify({"error": "Cannot run connection check on a shared VM"}), 403
 
+        stored_target = {
+            "ip_address": vm_row[0],
+            "port": vm_row[1],
+            "ssh_jump_command": vm_row[2],
+            "ssh_key_id": vm_row[3],
+            "ssh_username": vm_row[4],
+        }
         ip_address = ip_address or vm_row[0]
         port = port or vm_row[1]
         ssh_jump_command = ssh_jump_command or vm_row[2]
@@ -337,12 +439,9 @@ def check_manual_vm_connection(user_id):
             {"ipAddress": ip_address, "username": username, "sshKeyId": ssh_key_id}
         )
         port_val = _parse_port(port, default=22)
-        ssh_key_id, error_msg = parse_ssh_key_id(ssh_key_id)
-        if error_msg:
-            return jsonify({"error": error_msg}), 400
-        private_key, error_msg = load_user_private_key_safe(user_id, ssh_key_id)
-        if error_msg:
-            return jsonify({"error": error_msg}), 400
+        ssh_key_id, private_key, key_error = _load_owned_key(user_id, ssh_key_id)
+        if key_error:
+            return key_error
     except ValueError as exc:
         return jsonify({"error": "Invalid input parameters"}), 400
 
@@ -357,22 +456,99 @@ def check_manual_vm_connection(user_id):
         )
         if not success:
             return jsonify({"success": False, "error": error_msg}), 400
-        if vm_id is not None:
+        tested_target = {
+            "ip_address": ip_address,
+            "port": port_val,
+            "ssh_jump_command": ssh_jump_command,
+            "ssh_key_id": ssh_key_id,
+            "ssh_username": username,
+        }
+        compared, fill_username = target_for_ready_check(stored_target, tested_target)
+        # A one-off user, key, or host must not mark the saved VM Ready
+        matches_stored = compared is not None and not connection_fields_changed(
+            compared, tested_target
+        )
+        verified = False
+        if vm_id is not None and matches_stored:
             try:
                 with db_pool.get_user_connection() as conn:
                     with conn.cursor() as cur:
-                        set_rls_context(cur, conn, user_id, log_prefix="[VMs:check-verify]")
-                        cur.execute(
-                            "UPDATE user_manual_vms SET connection_verified = TRUE, updated_at = NOW() WHERE id = %s AND user_id = %s",
-                            (vm_id, user_id),
+                        org_id = _org_for_write(cur, conn, user_id, "[VMs:check-verify]")
+                        sets = [sql.SQL("connection_verified = TRUE")]
+                        params = []
+                        # A verified row with a null org_id stays hidden until the next boot backfill
+                        if org_id:
+                            sets.append(sql.SQL("org_id = %s"))
+                            params.append(org_id)
+                        # The row had no user. Store the one this check just used.
+                        if fill_username:
+                            sets.append(sql.SQL("ssh_username = %s"))
+                            params.append(username)
+                        sets.append(sql.SQL("updated_at = NOW()"))
+                        params.extend(
+                            (
+                                vm_id,
+                                user_id,
+                                ip_address,
+                                port_val,
+                                ssh_key_id,
+                                ssh_jump_command,
+                                username,
+                            )
                         )
+                        # A blank saved user still matches, so this write can fill it in.
+                        username_match = (
+                            sql.SQL(
+                                """(
+                                    NULLIF(BTRIM(ssh_username), '') IS NULL
+                                    OR NULLIF(BTRIM(ssh_username), '')
+                                       IS NOT DISTINCT FROM NULLIF(BTRIM(%s), '')
+                                )"""
+                            )
+                            if fill_username
+                            else sql.SQL(
+                                """NULLIF(BTRIM(ssh_username), '')
+                                   IS NOT DISTINCT FROM NULLIF(BTRIM(%s), '')"""
+                            )
+                        )
+                        # The WHERE re-checks the saved target in case it changed during the SSH attempt
+                        verify_query = sql.SQL(
+                            """
+                            UPDATE user_manual_vms
+                            SET {sets}
+                            WHERE id = %s AND user_id = %s
+                              AND ip_address IS NOT DISTINCT FROM %s
+                              AND port IS NOT DISTINCT FROM %s
+                              AND ssh_key_id IS NOT DISTINCT FROM %s
+                              AND NULLIF(BTRIM(ssh_jump_command), '')
+                                  IS NOT DISTINCT FROM NULLIF(BTRIM(%s), '')
+                              AND {username_match}
+                            """
+                        ).format(
+                            sets=sql.SQL(", ").join(sets),
+                            username_match=username_match,
+                        )
+                        cur.execute(verify_query, params)
+                        # Zero rows means the saved target changed before this write
+                        wrote = cur.rowcount > 0
                         conn.commit()
-                logger.info(f"Connection verified for VM {sanitize(vm_id)}, user {sanitize(user_id)}")
+                        # A failed commit must not tell the client the VM is Ready
+                        verified = wrote
+                if verified:
+                    logger.info(
+                        "Connection verified for VM %s, user %s",
+                        sanitize(vm_id),
+                        sanitize(user_id),
+                    )
             except Exception as db_exc:
                 logger.error(
                     f"Failed to update connection_verified for VM {sanitize(vm_id)}: {db_exc}"
                 )
-        return jsonify({"success": True, "connectedAs": connected_as})
+        return jsonify({
+            "success": True,
+            "connectedAs": connected_as,
+            "connectionVerified": verified,
+        })
     except Exception as exc:
         logger.error("SSH validation failed unexpectedly: %s", exc, exc_info=True)
         return jsonify(

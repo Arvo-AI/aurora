@@ -13,6 +13,8 @@ from flask import Blueprint, request, jsonify
 import uuid as _uuid
 from datetime import datetime, timedelta, timezone
 
+from services.actions.ownership import reassign_actions_to_admin
+from services.connectors.ownership import reassign_connectors_to_admin
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.enforcer import (
     assign_role_to_user,
@@ -32,7 +34,7 @@ _LOG_PREFIX = "[Admin]"
 
 admin_bp = Blueprint("admin", __name__, url_prefix="/api/admin")
 
-from utils.auth import VALID_ROLES
+from utils.auth import VALID_ROLES, normalize_email
 
 
 @admin_bp.route("/users", methods=["GET"])
@@ -74,7 +76,7 @@ def create_user(user_id):
     their consent).
     """
     data = request.get_json(silent=True) or {}
-    email = (data.get("email") or "").strip().lower()
+    email = normalize_email(data.get("email"))
     password = data.get("password") or ""
     name = (data.get("name") or "").strip()
     role = (data.get("role") or "viewer").strip().lower()
@@ -92,7 +94,15 @@ def create_user(user_id):
         with conn.cursor() as cur:
             set_rls_context(cur, conn, user_id, log_prefix=_LOG_PREFIX)
 
-            cur.execute("SELECT id, email, name, org_id FROM users WHERE email = %s", (email,))
+            # Normalized comparison so "add user" finds an existing mixed-case
+            # account instead of inserting a second row for the same person.
+            # Ordered so a legacy duplicate pair resolves predictably (oldest
+            # first) rather than by arbitrary row order.
+            cur.execute(
+                "SELECT id, email, name, org_id FROM users WHERE LOWER(email) = %s "
+                "ORDER BY created_at ASC LIMIT 1",
+                (email,),
+            )
             existing = cur.fetchone()
 
             # Step 1: Dry-run check used by the 2-step "Add Member" dialog.
@@ -110,16 +120,19 @@ def create_user(user_id):
                 if target_org_id == org_id:
                     return jsonify({"error": "This user is already a member of your organization"}), 409
 
-                # Expire any stale invitations, then check for an active one
+                # Expire any stale invitations, then check for an active one.
+                # Matched on the normalized email: org_routes stores invitations
+                # lowercased, so comparing a legacy mixed-case users.email here
+                # would miss a pending row and then hit the unique constraint.
                 cur.execute(
                     """UPDATE org_invitations SET status = 'expired'
-                       WHERE org_id = %s AND email = %s AND status = 'pending'
+                       WHERE org_id = %s AND LOWER(email) = %s AND status = 'pending'
                          AND expires_at IS NOT NULL AND expires_at <= NOW()""",
-                    (org_id, target_email),
+                    (org_id, email),
                 )
                 cur.execute(
-                    "SELECT id FROM org_invitations WHERE org_id = %s AND email = %s AND status = 'pending'",
-                    (org_id, target_email),
+                    "SELECT id FROM org_invitations WHERE org_id = %s AND LOWER(email) = %s AND status = 'pending'",
+                    (org_id, email),
                 )
                 if cur.fetchone():
                     return jsonify({"error": "An invitation for this user is already pending"}), 409
@@ -127,8 +140,8 @@ def create_user(user_id):
                 # Clear old cancelled/declined/expired rows to avoid unique constraint
                 cur.execute(
                     """DELETE FROM org_invitations
-                       WHERE org_id = %s AND email = %s AND status IN ('cancelled', 'declined', 'expired')""",
-                    (org_id, target_email),
+                       WHERE org_id = %s AND LOWER(email) = %s AND status IN ('cancelled', 'declined', 'expired')""",
+                    (org_id, email),
                 )
 
                 from utils.hooks import get_hook
@@ -147,7 +160,7 @@ def create_user(user_id):
                     """INSERT INTO org_invitations (id, org_id, email, role, invited_by, status, expires_at)
                        VALUES (%s, %s, %s, %s, %s, 'pending', %s)
                        RETURNING id""",
-                    (invitation_id, org_id, target_email, role, user_id, expires_at),
+                    (invitation_id, org_id, email, role, user_id, expires_at),
                 )
                 conn.commit()
 
@@ -198,6 +211,7 @@ def create_user(user_id):
 
         # Assign the new user's role in Casbin (RBAC policy engine)
         new_user_id = row[0]
+        get_hook("after_user_created")(new_user_id, org_id, email, "admin", False)
         try:
             from utils.auth.enforcer import assign_role_to_user
             if org_id:
@@ -360,7 +374,9 @@ def delete_user(user_id, target_user_id):
     conn = connect_to_db_as_user()
     try:
         with conn.cursor() as cur:
-            set_rls_context(cur, conn, user_id, log_prefix=_LOG_PREFIX)
+            # Pin RLS to the request org. The header can differ from users.org_id,
+            # and reassignment filters on that same org_id.
+            set_rls_context(cur, conn, user_id, org_id=org_id, log_prefix=_LOG_PREFIX)
 
             cur.execute(
                 "SELECT id, email FROM users WHERE id = %s AND org_id IS NOT DISTINCT FROM %s",
@@ -372,11 +388,18 @@ def delete_user(user_id, target_user_id):
 
             target_email = target[1]
 
-            # Clear FK references and user-scoped data
+            # Actions run as created_by; connectors are the org's credentials.
+            # Move both before the user row disappears.
+            if org_id:
+                reassign_actions_to_admin(cur, org_id, target_user_id)
+                reassign_connectors_to_admin(cur, org_id, target_user_id)
+
+            # Clear FK references and user-scoped data. Connector rows are
+            # reassigned above — deleting them would drop the org's credentials.
             cur.execute("DELETE FROM org_invitations WHERE invited_by = %s", (target_user_id,))
             cur.execute("UPDATE organizations SET created_by = NULL WHERE created_by = %s", (target_user_id,))
             for tbl in (
-                "user_tokens", "user_connections", "user_manual_vms",
+                "user_manual_vms",
                 "user_preferences", "rca_notification_emails",
             ):
                 cur.execute(f"DELETE FROM {tbl} WHERE user_id = %s", (target_user_id,))

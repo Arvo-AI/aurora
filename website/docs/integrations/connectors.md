@@ -49,7 +49,13 @@ gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
   --member="serviceAccount:$SA" --role="roles/container.viewer"
 gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
   --member="serviceAccount:$SA" --role="roles/compute.viewer"
+gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+  --member="serviceAccount:$SA" --role="roles/bigquery.dataViewer"
+gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+  --member="serviceAccount:$SA" --role="roles/bigquery.jobUser"
 ```
+
+`roles/viewer` lists BigQuery datasets but cannot run queries. `bigquery.dataViewer` reads table data; `bigquery.jobUser` runs query jobs. Together they allow read-only `SELECT` investigations (no DML/DDL).
 
 For full investigation access (running commands in sandboxed pods, checking deployments, etc.), add `roles/editor` or the specific roles your team needs.
 
@@ -229,50 +235,85 @@ Users create this role in their own AWS account:
 
 ### Azure (Microsoft Azure)
 
-Service Principal authentication for Microsoft Azure.
+Service Principal authentication for Microsoft Azure, set up by a script you run in Azure Cloud Shell. Aurora never asks for your Azure password and cannot modify its own permissions.
 
-#### 1. Create App Registration
+The script creates **two** service principals:
 
-1. Go to [Azure Portal > App registrations](https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade)
-2. Click **+ New registration**
-   - Name: `Aurora`
-   - Supported account types: Single tenant (or multi-tenant if needed)
-   - Redirect URI: **Web** > `http://localhost:5080/azure/callback`
-3. After creation, note down:
-   - **Application (client) ID**
-   - **Directory (tenant) ID**
+| Principal | Roles | Used for |
+|-----------|-------|----------|
+| `Aurora-Agent-*` | Contributor, AKS RBAC Writer, Cost Management Reader | Agent mode (remediation) |
+| `Aurora-ReadOnly-*` | Log Analytics Reader, Cost Management Reader, AKS Cluster User, AKS RBAC Reader | Ask mode (investigation only) |
 
-#### 2. Create Client Secret
+Built-in roles only — no custom roles, and no `cluster-admin`. Contributor excludes all `Microsoft.Authorization` writes, so Aurora cannot escalate its own access in either mode.
 
-1. In the app registration, go to **Certificates & secrets**
-2. Click **+ New client secret**
-   - Description: `Aurora`
-   - Expires: Choose appropriate duration
-3. **Copy the secret Value immediately** (it won't be shown again)
+#### What you need before starting
 
-#### 3. Grant API Permissions
+Azure keeps subscription access and directory access separate, and the script needs both:
 
-1. Go to **API permissions** > **+ Add a permission**
-2. Select **Azure Service Management**
-3. Check **user_impersonation**
-4. Click **Grant admin consent for [your tenant]**
+- **Owner** or **User Access Administrator** on the subscriptions you want covered, to assign the roles.
+- Permission to **register applications** in Entra ID, to create the two service principals. Subscription Owner does *not* include this.
 
-#### 4. Assign Role to Subscription
+If your tenant sets *Users can register applications* to **No**, ask an Entra ID admin to either change that setting or grant you the **Application Developer** role. The script checks this and stops before creating anything, so a missing permission costs you nothing but a re-run.
 
-1. Go to [Subscriptions](https://portal.azure.com/#view/Microsoft_Azure_Billing/SubscriptionsBlade)
-2. Select your subscription
-3. Go to **Access control (IAM)** > **+ Add role assignment**
-4. Role: **Reader** (or **Contributor** for write access)
-5. Members: Select your `Aurora` app
-6. Review + assign
+#### 1. Get the script
+
+In Aurora, go to **Integrations > Azure**. Either click **Copy Script** to put the whole script on your clipboard, or **Download Setup Script** to save it as a file.
+
+#### 2. Run it in Cloud Shell
+
+Open [Azure Cloud Shell](https://shell.azure.com) (Bash). If you copied the script, paste it and press Enter — it writes itself to `setup-aurora-access.sh` and runs. If you downloaded it, upload the file and run:
+
+```bash
+bash setup-aurora-access.sh
+```
+
+Cloud Shell already has `az`, `jq`, `python3` and `kubectl`, and you are already authenticated — nothing to install.
+
+By default this covers **every enabled subscription in your current tenant**. To scope to a management group instead, set the management group ID in Aurora before copying the script, or pass it as an argument:
+
+```bash
+bash setup-aurora-access.sh <management-group-name>
+```
+
+Choose the scope **before the first run**. The script only adds role assignments and never removes them, so running it tenant-wide and then re-running it against a management group leaves the tenant-wide grants in place — it does not narrow them. Each run also creates a new pair of service principals; the script tells you when earlier ones exist so you can delete the ones you no longer use.
+
+:::tip Recommended for multiple subscriptions
+With a management group, roles are assigned **once** at the group scope and every subscription beneath it inherits them. Subscriptions you add to the group later are picked up automatically, with no need to re-run the script.
+
+This requires permission to read the management group; if you get an authorization error, ask an owner to grant you **Management Group Reader**, or omit the argument to use per-subscription scope.
+:::
+
+#### 3. Paste the output into Aurora
+
+The script prints a JSON block containing both sets of credentials and the list of subscriptions. Paste it into Aurora to finish connecting.
+
+#### Multiple subscriptions
+
+All enabled subscriptions in scope are connected. During an investigation the agent queries every connected subscription and then narrows to whichever one holds the affected resource. Scope is controlled in Azure — by the roles the script assigns — not in Aurora, so to exclude a subscription, run the script against a management group that omits it.
+
+#### Private AKS clusters
+
+A private AKS cluster has no public API server endpoint, so it is unreachable from Cloud Shell and from Aurora. RBAC alone is not enough. The script detects these and lists them at the end — connect each one with the [kubectl agent](#installing-the-kubectl-agent), which runs in-cluster and dials out to Aurora.
+
+#### Revoking access
+
+Delete both service principals; the command is printed at the end of the script run.
+
+```bash
+az ad sp delete --id <agent-client-id>
+az ad sp delete --id <readonly-client-id>
+```
 
 #### Troubleshooting
 
 | Error | Solution |
 |-------|----------|
-| "No enabled subscription found" | Assign Reader/Contributor role to the app in subscription IAM |
-| "AADSTS50011: Reply URL mismatch" | Verify redirect URI exactly matches in App Registration |
-| "Insufficient privileges" | Grant admin consent for API permissions |
+| "Insufficient privileges to complete the operation" | Your tenant restricts app registration. Ask a Global Administrator to run the script, or to grant you the **Application Developer** role |
+| "AuthorizationFailed" on `managementGroups/read` | You lack RBAC at the management group. Ask an owner for **Management Group Reader**, or omit the argument to use per-subscription scope |
+| "Management group not found or not readable" | Check the name (not the display name), or omit the argument |
+| "No enabled subscriptions found in tenant" | The script only uses subscriptions in the tenant you are currently logged in to, since a service principal exists in a single tenant. Run `az account set --subscription <id>` for the right tenant first |
+| Authentication fails right after setup | Azure role assignments take 1–2 minutes to propagate. Wait, then retry |
+| `kubectl` commands fail on an AKS cluster | The cluster is likely not Entra-integrated, so Azure RBAC roles do not apply to it. Either enable Entra + Azure RBAC on the cluster, or connect it with the Kubernetes connector |
 
 ---
 
@@ -412,6 +453,33 @@ point at wherever the backend is publicly reachable — `<API_URL>`. In the
 default Helm ingress that's the `api.<domain>` host (`ingress.hosts.api`, e.g.
 `api.aurora.example.com`); in local dev it's a tunnel straight to port `5080`.
 Only the **Homepage URL** uses the frontend hostname (`<FRONTEND_URL>`).
+:::
+
+:::note Hosted deployments only — one-click website signup
+If you run a hosted Aurora and want the marketing site's "Install" CTA to
+provision an account straight from the GitHub install screen
+(`HOSTED_SIGNUP_ENABLED=true`, see [Environment](../configuration/environment.md)),
+configure the App additionally as follows:
+
+| Setting | Value |
+|---|---|
+| Callback URLs | Add `<API_URL>/github/app/signup/callback` and make it the **first** entry. Keep `<API_URL>/github/callback` as a later entry. |
+| Request user authorization (OAuth) during installation | **Checked** |
+| Client secret | Generate one and set `GITHUB_APP_CLIENT_SECRET` on the server |
+| Account permissions → Email addresses | Read-only (lets Aurora use the installer's verified primary email; without it the account gets a `@users.noreply.github.com` address) |
+
+With that checkbox on, GitHub **ignores the Setup URL** and sends every
+install — including logged-in users clicking Install inside Aurora — to the
+first Callback URL, which is why the signup callback must be first. It
+recognises in-app installs by their signed state and hands them to the
+regular install handler, so both flows keep working. Self-hosted installs
+should leave all of this alone.
+
+After the GitHub install screen the visitor lands here for a second or two
+while the one-time handoff token is exchanged for a session, then arrives on
+the Connectors page signed in:
+
+![One-click signup landing](/img/one-click-signup-landing.jpg)
 :::
 
 **Repository permissions** (set in Permissions & events tab):
@@ -622,30 +690,119 @@ OAuth 2.0 authentication for Slack workspaces.
 
 #### 2. Add Bot Token Scopes
 
-In **OAuth & Permissions** > **Scopes** > **Bot Token Scopes**, add:
+In **OAuth & Permissions** > **Scopes** > **Bot Token Scopes**, add (these must match `SLACK_SCOPES` in `server/connectors/slack_connector/oauth.py`):
 
 | Scope | Purpose |
 |-------|---------|
-| `chat:write` | Send messages |
-| `channels:read` | List channels |
-| `channels:history` | Read channel messages |
-| `channels:join` | Join channels |
 | `app_mentions:read` | Receive @mentions |
+| `chat:write` | Send messages |
+| `channels:join` | Join public channels |
+| `channels:manage` | Create channels, invite users, set topics |
+| `channels:read` | List public channels |
+| `channels:history` | Read public channel messages |
+| `groups:read` | List private channels |
+| `groups:history` | Read private channel messages |
+| `im:write` | Send direct messages |
+| `im:history` | Read direct messages |
+| `mpim:write` | Send group direct messages |
+| `mpim:history` | Read group direct messages |
 | `users:read` | Get user info |
+| `users:read.email` | Get user email |
 
-#### 3. Get Credentials
+#### 3. Enable Event Subscriptions
+
+In **Event Subscriptions**, toggle **Enable Events** on.
+
+- **Request URL**: `https://your-ngrok-url.ngrok-free.app/slack/events`
+  Slack validates this URL from its own infrastructure, so it must be a publicly
+  reachable HTTPS tunnel (not `localhost`). The server must be running so
+  Slack's one-time `url_verification` challenge succeeds.
+- Under **Subscribe to bot events**, add:
+
+| Event | Purpose |
+|-------|---------|
+| `app_mention` | Aurora replies when @mentioned (required) |
+| `member_joined_channel` | *Instant* activation of channels Aurora is added to, e.g. incident.io channels (optional — the connector page also reconciles membership on load) |
+| `app_home_opened` | Shows the setup checklist and demo button on Aurora's **Home** tab (optional) |
+
+For the Home tab and the welcome DM, also open **App Home** and turn on the
+**Home Tab** and the **Messages Tab**.
+
+Save changes. If the app is already installed, Slack will prompt you to
+**reinstall** so the new events and scopes take effect.
+
+:::tip Private / self-hosted deployments — use Socket Mode instead
+Step 3's Request URL requires Aurora's backend to be reachable from the public
+internet (with valid TLS), because Slack POSTs events to it. If Aurora runs
+somewhere Slack cannot reach — a private VPC/Kubernetes cluster, behind a
+firewall, air-gapped from inbound traffic, or on a laptop — enable
+[Socket Mode](#socket-mode-private--self-hosted) instead. Aurora then opens an
+*outbound* WebSocket to Slack, so no public URL, ingress, or TLS endpoint is
+needed. Note that a dev `ngrok`/`cloudflared` tunnel only *fakes* a public URL
+and is not appropriate for a real private production deployment — Socket Mode
+is.
+:::
+
+#### Socket Mode (private / self-hosted) {#socket-mode-private--self-hosted}
+
+Socket Mode replaces the inbound HTTP webhook with an outbound WebSocket that
+Aurora opens to Slack, so Slack `@mentions` and interactive buttons work even
+when Aurora's backend has no public inbound endpoint. Outbound messages (incident
+alerts, replies) already work over plain HTTPS and are unaffected. This is the
+recommended path when a public webhook URL with valid TLS is not available.
+
+1. In your Slack app, go to **Socket Mode** and toggle **Enable Socket Mode** on.
+2. When prompted, generate an **App-Level Token** with the `connections:write`
+   scope. Copy the token — it starts with `xapp-`.
+3. Keep **Event Subscriptions** enabled and subscribe to the same bot events as
+   above (`app_mention`, optionally `member_joined_channel`). With Socket Mode
+   on, Slack ignores the Request URL, so you do **not** need a public one.
+4. If you use interactive buttons (Aurora's suggestion / right-sizing cards), go
+   to **Interactivity & Shortcuts** and toggle it on. As with events, no Request
+   URL is required under Socket Mode.
+5. Configure Aurora's environment. Setting the app-level token is all that's
+   needed — its presence turns Socket Mode on:
+
+   ```bash
+   SLACK_APP_TOKEN=xapp-...        # app-level token from step 2
+   # SLACK_CLIENT_ID / SLACK_CLIENT_SECRET / SLACK_SIGNING_SECRET stay as-is
+   ```
+
+   - **Docker Compose**: the `slack_socket_mode` service starts automatically and
+     stays idle unless `SLACK_APP_TOKEN` is set.
+   - **Kubernetes (Helm)**: set the app token under `secrets.backend.SLACK_APP_TOKEN`
+     (it's a secret — never put it in `config`). The chart renders the
+     `slack-socket-mode` deployment whenever that token is set. If you supply the
+     token via an **existing secret** instead of inline, set
+     `slackSocketMode.enabled: true` so the listener still renders (the chart
+     can't read inside your secret). It is fixed at a single replica by design.
+     Slack distributes an app's events across its open sockets (and tolerates
+     briefly overlapping connections during restarts), so extra replicas add no
+     throughput here — the listener only acks and hands off to Celery. Scale
+     `celeryWorker` instead if event *processing* is ever the bottleneck.
+6. Restart Aurora. The listener logs `Slack Socket Mode listener connected.` once
+   the outbound WebSocket is established. If the token is set but malformed, the
+   listener exits non-zero instead of idling, so the misconfiguration shows up in
+   pod/container status rather than only in the logs.
+
+#### 4. Get Credentials
 
 In **Basic Information**, copy:
 - **Client ID**
 - **Client Secret**
 - **Signing Secret**
 
-#### 4. Configure Environment
+#### 5. Configure Environment
 
 ```bash
 SLACK_CLIENT_ID=your-slack-client-id
 SLACK_CLIENT_SECRET=your-slack-client-secret
 SLACK_SIGNING_SECRET=your-signing-secret
+
+# Optional — only for private/self-hosted deployments with no public webhook URL
+# (see "Socket Mode" above). Setting this enables Socket Mode; leave empty for
+# HTTP webhooks.
+SLACK_APP_TOKEN=          # xapp-... app-level token
 ```
 
 #### Troubleshooting
@@ -654,6 +811,114 @@ SLACK_SIGNING_SECRET=your-signing-secret
 |-------|----------|
 | "bad_redirect_uri" | Redirect URL must match exactly in Slack App settings |
 | "Slack OAuth credentials not configured" | Set `SLACK_CLIENT_ID` and `SLACK_CLIENT_SECRET` in `.env` |
+| Aurora doesn't reply to @mentions | Enable **Event Subscriptions**, verify the `/slack/events` Request URL, and subscribe to the `app_mention` bot event, then reinstall the app |
+| Channels Aurora is added to aren't auto-registered instantly | Subscribe to the `member_joined_channel` bot event for real-time pickup, then reinstall. Otherwise the connector page reconciles membership on load |
+| Deactivating a channel doesn't remove Aurora from it / a channel stays Active after Aurora is kicked | Membership is the source of truth: deactivating calls `conversations.leave`, and the connector page reconciles membership every time it loads, so a channel Aurora was removed from drops off the Active list automatically |
+| Aurora's backend has no public URL (private VPC/cluster, firewall, air-gapped inbound) | Use [Socket Mode](#socket-mode-private--self-hosted): set `SLACK_APP_TOKEN` (`xapp-...`) and enable Socket Mode in the Slack app |
+| "SLACK_APP_TOKEN does not look like an app-level token" in logs | You supplied a bot/user token (`xoxb-`/`xoxp-`). Socket Mode needs the **App-Level Token** (`xapp-`) with `connections:write`. The listener exits non-zero on this, so the pod/container will show as crashing until it's corrected |
+| Socket Mode listener starts but no events arrive | Confirm Socket Mode is enabled in the Slack app, the app is reinstalled, and the bot events are subscribed |
+| Aurora replies twice to the same `@mention` | Slack retried the event because the listener did not ack within ~3s, so it was delivered (and handled) twice. Check the gap between the arrival and completion log lines — this is an ack-latency problem, not a duplicate-listener one: Slack distributes events across an app's sockets rather than duplicating them |
+
+---
+
+### Microsoft Teams {#microsoft-teams}
+
+Hybrid authentication (similar to [Google Chat](#google-chat)): **Entra OAuth**
+connects Aurora for Graph channel discovery and history. **Bot Framework** handles
+@mentions and **all outbound messages** as the Teams app ("Aurora"), not as the
+user who clicked Connect.
+
+#### 1. Register an Entra application
+
+1. [Azure Portal](https://portal.azure.com) → **Microsoft Entra ID** → **App registrations** → **New registration** (name e.g. `Aurora`).
+2. **Authentication** → **Web** redirect URI:
+   - Production: `https://your-api.example.com/teams/callback`
+   - Local dev: use an HTTPS tunnel (`NGROK_URL` in `.env`, same idea as Slack) — Entra will not accept bare `localhost`.
+3. **Overview** → **Application (client) ID** → `TEAMS_CLIENT_ID` in `.env`.
+4. **Certificates & secrets** → **New client secret** → copy **Value** when created (shown once) → `TEAMS_CLIENT_SECRET` in `.env` (also the Bot Framework app password).
+5. **API permissions** → **Microsoft Graph** → **Delegated** — match `TEAMS_SCOPES` in `server/connectors/teams_connector/oauth.py` (`Team.ReadBasic.All`, `Channel.ReadBasic.All`, `ChannelMessage.Read.All`, `Chat.Read`, `openid`, `profile`, `offline_access`, etc.).
+6. **Grant admin consent** (Entra admin only — e.g. Global Administrator):
+   - On **API permissions**, click **Grant admin consent for [tenant name]** and confirm.
+   - Permissions should show **Granted for [tenant name]**. Without this, every user gets a long consent screen on Connect.
+
+#### 2. Azure Bot + Teams channel (Azure Portal — backend only)
+
+Create a separate **Azure Bot** resource (not the Entra app alone): **Create a resource** → **Azure Bot** → **Creation type: Use existing app registration** → **App ID** = step‑1 **Application (client) ID** → **App tenant ID** = **Microsoft Entra ID** → **Overview** → **Tenant ID** (Directory GUID, not `common`) → create → **Go to resource**.
+
+After create, if the sidebar only shows **Inputs / Outputs / Template**, you are on the **Deployment** page — click **Go to resource** (or search the bot handle and open **Azure Bot**). Then:
+
+1. **Settings → Configuration** — **Messaging endpoint** `https://your-api.example.com/teams/messages` (or tunnel URL + `/teams/messages` locally). Save.
+2. **Channels** — enable **Microsoft Teams** → **Apply**.
+
+Enabling the Teams **channel** on the Azure Bot does **not** add an app under **Teams → Apps**. That requires step 3 in the Developer Portal.
+
+If the bot uses the same app registration as OAuth, set only `TEAMS_CLIENT_ID` (leave `TEAMS_APP_ID` unset). See `server/connectors/teams_connector/README.md` §2.
+
+#### 3. Teams client app ([Developer Portal](https://dev.teams.microsoft.com/) — not Azure)
+
+1. **Apps** → **+ New app** → name it (e.g. Aurora).
+2. **App features** → **Bot** → paste the **Microsoft App ID** manually if needed (same as `TEAMS_CLIENT_ID` / Azure Bot — not the **Basic** tab app ID).
+3. **What can your bot do?** — leave **all unchecked** for Aurora: do **not** enable **Only send notification** (blocks @mentions); file upload and audio/video are unused.
+4. Scopes: **Team** (required); **Personal** / **Group chat** optional → **Save**.
+5. **Distribute** → **Publish to your org** (admin), or **Preview in Teams** / **Download** zip and **Upload a custom app** in Teams if tenant policy allows.
+6. Before sideloading: run **[app package validation](https://dev.teams.microsoft.com/tools/store-validation)** on the zip. If Teams shows *Manifest parsing error message unavailable*, the validator usually reports the real issue (e.g. add `"supportsChannelFeatures": "tier1"` for **Team** scope on manifest 1.25+, set **Full name** in Basic, remove or complete `webApplicationInfo`). Details: `server/connectors/teams_connector/README.md` §3 (Validate the app package).
+
+Users then find the app in **Teams → Apps → Built for your org**. Full steps: `server/connectors/teams_connector/README.md` §3.
+
+#### 4. Install in each team (Teams client)
+
+Until Microsoft finishes validating the app (or an admin publishes it to the org catalog), sideload the package:
+
+[Download the Aurora Teams app](pathname:///downloads/aurora-teams-app.zip)
+
+Teams needs the `.zip` itself. Safari unzips downloads into a folder by default, so download with Chrome or Edge, or turn off **Safari → Settings → General → Open "safe" files after downloading**. If you already have the folder, open it, select `manifest.json`, `color.png` and `outline.png`, and choose **Compress**. Compressing the folder itself puts the manifest one level down, and Teams rejects the package.
+
+1. In Teams: **Apps** → **Manage your apps** → **Upload an app** → **Upload a custom app**.
+2. Select the zip. If upload is blocked, a Teams admin has to allow custom apps (Teams admin center → **Teams apps** → **Setup policies** → **Upload custom apps**).
+3. Add Aurora to the team: Team **···** → **Manage team** → **Apps** → **Install**.
+
+This package is built for Aurora's hosted bot. A self-hosted install has its own Entra app id, so it must build its own package in the [Developer Portal](https://dev.teams.microsoft.com/) (step 3) instead of using this zip.
+
+Once the app is in the org catalog, install it from **Teams → Apps → Built for your org** the same way. Users **@mention** the bot by its display name (e.g. `@Aurora`). Channel chats require an @mention.
+
+#### 5. Configure environment
+
+```bash
+# Entra app registration → Overview → Application (client) ID
+TEAMS_CLIENT_ID=
+
+# Entra → Certificates & secrets → client secret Value (copy when created)
+TEAMS_CLIENT_SECRET=
+
+# TEAMS_APP_ID=   # optional; only if bot uses a different Entra app than OAuth
+
+TEAMS_TENANT_ID=<your Entra tenant GUID>
+
+# Local OAuth redirect via tunnel (optional)
+NGROK_URL=https://your-tunnel.example.com
+```
+
+**`TEAMS_TENANT_ID`** — Entra **Tenant ID** GUID for **Connect** (`login.microsoftonline.com/{value}/...`) and for **single-tenant** Bot Framework outbound tokens when Aurora posts replies to Teams. **Single-tenant** setups (typical self-hosted) must use your tenant GUID — not `common`. Same value as **App tenant ID** on the Azure Bot resource. Restart **aurora-server** and **celery_worker** after changes.
+
+Operator setup (Entra, Azure Bot, manifest, troubleshooting): `server/connectors/teams_connector/README.md` in the Aurora repo.
+
+#### 6. Use Aurora
+
+1. **Connectors** → **Microsoft Teams** → Connect (Entra sign-in) — do this before @mention tests.
+2. Install the Aurora Teams app in each Microsoft Team where the bot should work.
+3. @mention Aurora in a channel (e.g. `@Aurora hello`) — getting-started steps on **Teams → Manage** clear once Aurora receives it.
+4. **Teams → Manage** — refresh/activate channels, set the **incident card** channel, configure **Teams memory** and notification toggles.
+
+#### Troubleshooting
+
+| Issue | What to check |
+|-------|----------------|
+| OAuth redirect error | Entra redirect URI must match `{backend}/teams/callback`; use `NGROK_URL` for local dev |
+| `invalid_request` / `/common` not supported | Single-tenant app: set `TEAMS_TENANT_ID` to your Tenant ID GUID, not `common`; restart server |
+| No reply to @mention | Messaging endpoint reachable, `TEAMS_APP_ID` + secret match bot, Teams app installed |
+| Incident/routing posts fail | Bot installed in target team/channel; not fixable by OAuth alone |
+| Unknown tenant on mention | An admin must Connect Teams in Aurora for that tenant first |
+| Azure Bot done but no app in Teams → Apps | Azure ≠ Teams catalog — create & publish the app in [Developer Portal](https://dev.teams.microsoft.com/) (step 3), not only Azure **Channels** |
 
 ---
 
@@ -782,6 +1047,7 @@ For Atlassian Cloud (`*.atlassian.net`):
 6. Go to **Permissions** and add scopes for the products you want:
    - **Confluence API** > **Add** > **Configure** > click **Edit Scopes** then **Add granular scopes**:
      - `read:page:confluence`
+     - `read:blogpost:confluence`
      - `read:space:confluence`
      - `read:user:confluence`
      - `search:confluence`
@@ -802,8 +1068,6 @@ For Atlassian Cloud (`*.atlassian.net`):
 ##### 2. Configure Environment
 
 ```bash
-NEXT_PUBLIC_ENABLE_CONFLUENCE=true
-NEXT_PUBLIC_ENABLE_JIRA=true
 ATLASSIAN_CLIENT_ID=your-client-id
 ATLASSIAN_CLIENT_SECRET=your-client-secret
 ```
@@ -815,7 +1079,7 @@ ATLASSIAN_CLIENT_SECRET=your-client-secret
 3. Click **Connect with Atlassian**
 4. Authorize Aurora in the Atlassian popup
 5. Connection complete - the site URL is detected automatically
-6. For Jira, choose the agent permission tier (Read Only or Full Access)
+6. For Jira, turn on **Comment back on Jira tickets** if you want Aurora to post after an investigation, then choose **Comment only** or **Create & comment**. This only gates automatic posts — asking Aurora in chat to comment on a ticket works either way
 
 #### Option B: Data Center (PAT)
 
@@ -828,10 +1092,15 @@ For self-hosted Confluence or Jira instances:
 2. Click **Create token**, name: `Aurora`, set expiry as needed
 3. Copy the token
 
-**Jira:**
-1. In Jira, go to your profile > **Personal Access Tokens**
-2. Click **Create token**, name: `Aurora`, set expiry as needed
-3. Copy the token
+**Jira (Data Center / Server 8.14+ only — not Jira Cloud):**
+1. Click your avatar (top right) → **Profile**
+2. In the **left sidebar**, select **Personal access tokens**
+3. Click **Create token**, name: `Aurora`, set expiry as needed
+4. Copy the token immediately (shown once)
+
+:::note Jira Cloud has no PAT
+If you use `*.atlassian.net`, you will not see **Personal access tokens** under Profile. Use **Option A (OAuth)** above instead.
+:::
 
 ##### 2. Connect via Aurora UI
 
@@ -882,6 +1151,7 @@ OAuth 2.0 or API Token authentication.
    - Category: Operations
    - Enable **OAuth 2.0**
    - Redirect URL: `http://localhost:5080/pagerduty/oauth/callback`
+   - Scopes: `openid`, `users.read`, `incidents.read`, `incidents.write`, `services.read`
 3. Copy **Client ID** and **Client Secret**
 
 ```bash
@@ -890,11 +1160,27 @@ PAGERDUTY_CLIENT_ID=your-client-id
 PAGERDUTY_CLIENT_SECRET=your-client-secret
 ```
 
+All five scopes must be registered on the app. PagerDuty silently drops any scope that is not registered, and a token issued without `users.read` fails validation when connecting.
+
 #### Option B: API Token
 
-1. Go to [PagerDuty](https://app.pagerduty.com/) > **Integrations** > **API Access Keys**
-2. Click **Create New API Key**
+Use a **user API token** from a PagerDuty user with write access (Responder or higher). A dedicated "Aurora" user is recommended so notes are attributed clearly.
+
+1. In PagerDuty, go to **User Icon** > **My Profile** > **User Settings** > **API Access**
+2. Click **Create API User Token**
 3. Users enter the token via the Aurora UI
+
+A read-only or account-level key still works for reading incidents and triggering RCA, but cannot post RCA notes back to PagerDuty.
+
+#### Posting RCA notes back to PagerDuty
+
+When enabled, Aurora adds one plain-text note to the originating PagerDuty incident when an investigation completes: the root cause, the impact (when the report has one), a link to the full investigation, and a disclaimer. Recurrences of an earlier incident and re-summaries after a follow-up chat do not post.
+
+- **Where**: the toggle lives on the PagerDuty connector page under **RCA Notes**. It is off by default and org-wide.
+- **Credential requirement**: the toggle can only be turned on when the stored credentials were proven able to write incidents (user token from a user with write access, or an OAuth token granted `incidents.write`). Account-level keys and read-only users are rejected with a reason.
+- **Notes are permanent**: PagerDuty has no API to edit or delete notes. Aurora posts at most one note per incident.
+- **Existing OAuth connections**: connections made before `incidents.write` was requested keep their read-only token. Disconnect and reconnect PagerDuty to grant it.
+- **Rotating to a read-only token** turns the toggle off automatically.
 
 #### Webhook Configuration
 
@@ -909,12 +1195,31 @@ To receive PagerDuty alerts in Aurora:
 
 ---
 
+### ServiceNow
+
+Connect with the instance URL and either Basic auth (an integration user with the `itil` role) or OAuth 2.0 client credentials. Aurora gives you a webhook URL and shared secret; a Business Rule on the Incident table POSTs new incidents to Aurora, which creates an incident and starts an RCA. Aurora can optionally post the root cause back to the incident as one work note.
+
+See the [ServiceNow integration guide](./servicenow.md) for the Business Rule script, RCA settings, and security details.
+
+---
+
 ### Datadog
 
 API Key + Application Key authentication.
 
 :::tip Data Security
 If you need to ensure PII is never sent to Aurora (for GDPR, SOC 2, or other compliance requirements), see the [Datadog PII Filtering guide](../configuration/data-access/datadog.md) after completing the setup below.
+:::
+
+:::info Multiple organizations
+Several Datadog organizations can be connected at once, each needing its own API +
+application key pair. Aurora names each one from the org name Datadog reports and queries
+whichever matches the alert under investigation; a custom label is optional, to override that
+name with something your team recognises.
+
+Where the name cannot be read — a key managing several organizations, or one without the
+`org_management` permission — Aurora falls back to the organization id, then to `default`.
+Set a label in that case so the organizations stay tellable apart.
 :::
 
 #### 1. Create API Key
@@ -940,7 +1245,14 @@ If you need to ensure PII is never sent to Aurora (for GDPR, SOC 2, or other com
 | US5 | `us5.datadoghq.com` |
 | EU | `datadoghq.eu` |
 
-Users enter API keys and site via the Aurora UI.
+Users enter API keys and site via the Aurora UI, with an optional label. Site is recorded per
+organization, so organizations on different Datadog sites can coexist.
+
+#### 4. Connect Additional Organizations
+
+1. Switch organization from the bottom-left **Accounts** menu in Datadog
+2. Repeat steps 1-3 to create a key pair there
+3. In Aurora, use **Add another organization** on the Datadog page and enter the new keys
 
 #### Webhook Configuration
 
@@ -948,6 +1260,13 @@ Users enter API keys and site via the Aurora UI.
 2. Name: `aurora`
 3. URL: `https://your-aurora-domain/datadog/webhook/{user_id}`
 4. In monitors, add `@webhook-aurora` to notifications
+
+:::warning One URL, every organization
+The webhook URL is per Aurora **user**, not per Datadog organization. With several connected,
+create this same webhook inside **each** of them — otherwise Aurora receives none of their
+alerts while still appearing connected. Keeping the name `aurora` everywhere keeps
+`@webhook-aurora` uniform.
+:::
 
 ---
 
@@ -1186,6 +1505,8 @@ Aurora only needs the `search` capability. You can use the built-in **power** ro
 3. Paste the API token
 4. Click **Connect**
 
+Repeat those steps to connect another Splunk. Each instance keeps its own URL and token, and is identified by its host and port. Searches and the agent can target one instance, or query every instance the caller is allowed to use. When connector access is limited by role or team, each Splunk is granted on its own, the same way each AWS account is.
+
 #### What Aurora Queries
 
 Aurora uses the Splunk REST API to:
@@ -1202,6 +1523,107 @@ All calls use Bearer token auth over HTTPS on port 8089.
 | "Authentication failed" | Token may be expired or the user lacks the `search` capability |
 | "Connection refused" | Verify the URL includes port 8089 and is reachable from Aurora |
 | "No results" | Check that the role has the correct indexes in "Indexes searched by default" |
+
+---
+
+### Elastic Cloud
+
+API-key authentication for Elasticsearch + Kibana. Works with **Elastic Cloud Hosted** (Cloud ID), **Elastic Cloud Serverless** (endpoint URLs) and **self-managed** clusters. Aurora is read-only against Elastic: it searches logs, reads Kibana alert documents and lists alerting rules, and it never writes.
+
+#### 1. Create a read-only API key
+
+**Option A (recommended): an admin creates a restricted key.**
+
+1. In Kibana, as an admin, go to **Stack Management > API keys > Create API key**.
+2. Name it `aurora`, turn on **Restrict privileges**, and paste the role descriptor below.
+3. Create the key and copy the **Encoded** value. It is shown once. (An `id:api_key` pair is also accepted.)
+
+**Option B: a dedicated read-only user creates its own key.** The built-in **Viewer** role has no cluster privileges, so a Viewer cannot create API keys on its own. Give the user two roles: **Viewer** plus a small custom role whose only cluster privilege is `manage_own_api_key` (Stack Management > Roles). Sign in as that user, create the key with *Restrict privileges* off, and it inherits the Viewer's read-only access to indices and Kibana.
+
+Role descriptor for Option A:
+
+```json
+{
+  "aurora_read": {
+    "cluster": ["monitor"],
+    "indices": [
+      {
+        "names": ["logs-*", "filebeat-*", "metrics-*", ".alerts-*"],
+        "privileges": ["read", "view_index_metadata"]
+      }
+    ],
+    "applications": [
+      { "application": "kibana-.kibana", "privileges": ["read"], "resources": ["*"] }
+    ]
+  }
+}
+```
+
+- `read` + `view_index_metadata` cover `_search`, `_count`, `_field_caps` and `_resolve/index`.
+- `.alerts-*` is where Kibana stores alert documents; without it `elastic_get_alerts` returns a privilege error.
+- The `kibana-.kibana` **application** privilege is what lets Aurora list Kibana rules. A bare index-only key gets a Kibana 403.
+- Cluster `monitor` is optional but recommended. It enables `GET /` (cluster name and version shown in Aurora) and `_cat/indices` (document counts and index sizes). Without it Aurora validates the key through `_security/_authenticate` and still lists indices, just without stats or version info.
+
+#### 2. Find your endpoint
+
+| Deployment | What to enter |
+|------------|---------------|
+| Elastic Cloud **Hosted** | The **Cloud ID** (Elastic Cloud > Deployments > your deployment > Manage). Aurora derives the Elasticsearch and Kibana URLs from it. |
+| Elastic Cloud **Serverless** | Endpoint URLs: `https://<project>.es.<region>.<csp>.elastic.cloud` and `https://<project>.kb.<region>.<csp>.elastic.cloud`. Serverless projects have no Cloud ID. |
+| **Self-managed** | Your Elasticsearch URL (e.g. `https://es.internal:9200`) and, optionally, the Kibana URL. Set `ELASTIC_SSL_VERIFY=false` or point it at a CA bundle if you use private certificates. |
+
+The Kibana URL is optional. Without it Aurora still searches logs and reads alert documents, but it cannot list Kibana rules or deep-link incidents into Kibana.
+
+#### 3. Connect via Aurora UI
+
+1. Navigate to **Connectors > Elastic Cloud**.
+2. Choose **Cloud ID** or **Endpoint URLs** and fill in the endpoint.
+3. Paste the API key (**Encoded** value).
+4. Optionally set a default index pattern (default `logs-*`).
+5. Click **Connect**. Aurora validates the key against Elasticsearch; Kibana is checked best-effort and never blocks the connection.
+
+#### 4. Send Kibana alerts to Aurora (optional)
+
+Aurora exposes a per-user webhook URL and a secret on the connector page. In Kibana:
+
+1. **Stack Management > Connectors > Create connector > Webhook**. Name it `Aurora`, method `POST`, URL = the webhook URL from Aurora.
+2. Authentication: **Basic**, username `aurora`, password = the webhook secret. (Alternatively add a header `X-Aurora-Webhook-Secret` with the secret as its value.)
+3. Open the rule you want Aurora to see (**Observability > Alerts > Manage rules**) and add an action using the `Aurora` connector.
+4. Set the action frequency to **On status changes** (otherwise Kibana re-sends the alert on every rule interval; Aurora dedupes these, but the extra traffic is unnecessary).
+5. Paste the **action body** template shown in Aurora into the Body field. It maps Kibana's Mustache variables (`rule.name`, `alert.uuid`, `context.reason`, `context.viewInAppUrl`, ...) to the fields Aurora reads.
+6. Add a second action row with the same connector and body and **Run when: Recovered**, so Aurora marks the alert recovered.
+
+The Webhook connector is a **Gold+** feature on self-managed clusters (a Basic license returns a license error). Elastic Cloud subscriptions include it.
+
+**Enable Alert RCA.** Webhook alerts are always stored and visible under **View Alerts**. With the **Enable Alert RCA** switch on the connector page on (the default), each new alert also creates an incident and starts an automatic investigation. Turn it off if your incidents already come from another source such as incident.io and you only want the alerts stored.
+
+#### What Aurora Queries
+
+| Purpose | Endpoint |
+|---------|----------|
+| Validate the connection | `GET /_security/_authenticate` (required), `GET /` (best-effort, needs `monitor`) |
+| List indices, aliases, data streams | `GET /_resolve/index/{pattern}` (+ `GET /_cat/indices` when the key has `monitor`) |
+| Field names and types | `GET /{index}/_field_caps` |
+| Search logs | `POST /{index}/_search` (Query DSL, `size <= 500`) |
+| ES\|QL queries | `POST /_query` |
+| Kibana alerts | `POST /.alerts-*/_search` |
+| Kibana rules | `GET {kibana}/api/alerting/rules/_find` (header `kbn-xsrf: true`) |
+
+All calls send `Authorization: ApiKey <encoded>` to the endpoint you configured (Elastic Cloud is always HTTPS; a self-managed `http://` URL is used as entered). Aurora never calls `_cluster/health`, node or snapshot APIs, so it works unchanged on Serverless.
+
+#### Troubleshooting
+
+| Error | Solution |
+|-------|----------|
+| "Invalid API key" (401) | The key is wrong, expired or invalidated. Re-create it and paste the **Encoded** value. |
+| "API key lacks privileges" (403) on search | Grant `read` and `view_index_metadata` on the index pattern (and on `.alerts-*` for alerts). |
+| "API key lacks Kibana privileges" when listing rules | The key has no Kibana application privilege. Create it as a Viewer, or add the `kibana-.kibana` read privilege. |
+| Index sizes / doc counts / version missing | Expected without cluster `monitor`. Add it to the role descriptor if you want them. |
+| "unauthorized ... manage_own_api_key" when a Viewer creates a key | Viewer cannot create API keys. Use Option A, or add a custom role with `manage_own_api_key` to that user. |
+| Kibana "license" error when saving the Webhook connector | Self-managed Basic license. Start a trial or upgrade; Elastic Cloud includes the connector. |
+| Kibana shows "not verified" after connecting | Aurora could not reach the Kibana URL. Logs and alerts still work; check the URL or network path if you need rule listing. |
+| Alerts arrive but no incident is created | Check that **Enable Alert RCA** on the connector page is on. Recovery events never create incidents. |
+| Kibana action fails with `[401] UNAUTHORIZED` | The webhook secret changed (disconnecting deletes it; reconnecting generates a new one). Copy the current secret from Aurora into the Kibana connector. |
 
 ---
 
@@ -1438,7 +1860,7 @@ Restart Aurora after setting these, then connect via **Connectors** > **Bitbucke
 
 #### Incident Prevention (pre-merge PR review)
 
-Aurora can review pull requests that target the default branch of an enrolled Bitbucket Cloud repository and post an advisory review (a comment, plus an approval when the change looks safe) before merge — the same feature as GitHub Incident Prevention.
+Aurora can review pull requests that target the default branch of an enrolled Bitbucket Cloud repository and post an advisory review comment before merge — the same feature as GitHub Incident Prevention. The Incident Prevention review never approves (or blocks) a PR: approval stays with human reviewers.
 
 Requirements: a connected Bitbucket account (either auth method above), `NEXT_PUBLIC_ENABLE_INCIDENT_PREVENTION=true` (the default) on **both** the server and the Celery worker, and Aurora's API reachable from the public internet (Bitbucket must be able to deliver webhooks to it).
 
@@ -1468,12 +1890,13 @@ Verification is recorded against Aurora's public URL at the time. If that URL ch
 Notes and limits:
 
 - Reviews run only for PRs targeting the repository's **default branch**; drafts are skipped. A draft marked ready **without new commits** is reviewed on the next push.
-- Reviews post as the **connected Bitbucket account** by default. Bitbucket forbids approving your own PR, so a SAFE verdict on a PR authored by the connected account keeps the review comment but skips the approval.
+- Reviews post as the **connected Bitbucket account** by default. Both SAFE and RISKY verdicts post as a review comment only — Aurora never approves the PR.
+- Approvals posted by older Aurora versions (which approved on SAFE verdicts) are **not retracted automatically**: Bitbucket approvals are account-level, so unapproving could strip an approval the connected user made themselves — remove legacy Aurora approvals by hand on any still-open PRs. (On GitHub, Aurora dismisses its own legacy approvals the next time it reviews the PR.)
 - Disabling the toggle (or deselecting/disconnecting the repo) deletes the webhook when Aurora created it via API; manually created hooks must be removed manually.
 
 ##### Optional: dedicated bot account
 
-To have reviews appear as "Aurora" instead of a team member — and to avoid the own-PR approval limit — create a separate Atlassian account:
+To have reviews appear as "Aurora" instead of a team member, create a separate Atlassian account:
 
 1. Create the Atlassian user (e.g. `aurora-bot@yourcompany.com`), invite it to the workspace/repos with **pull request write** access
 2. Create a scoped API token for it with at least `read:pullrequest:bitbucket` and `write:pullrequest:bitbucket`
@@ -1490,7 +1913,7 @@ aws secretsmanager create-secret --name aurora/system/bitbucket-bot/credentials 
   --region "$AWS_SM_REGION"
 ```
 
-Only **posting** (comments/approvals) uses the bot; investigation reads always use the org's connected account. Bot credentials are never exposed to agent tools.
+Only **posting** (review comments) uses the bot; investigation reads always use the org's connected account. Bot credentials are never exposed to agent tools.
 
 #### Troubleshooting
 
@@ -1505,12 +1928,16 @@ Only **posting** (comments/approvals) uses the bot; investigation reads always u
 | Badge stuck on "Awaiting first delivery" | No PR event has arrived yet. Bitbucket sends no test event on save, so push to a PR. If it still does not flip, check **Repository settings → Webhooks → View requests** for the delivery attempts and their response codes |
 | Badge reads "Webhook URL changed" (red) | Aurora's public URL changed since the hook was verified, so the hook now points at an unreachable address. Click the badge for the current URL and update the existing hook in Bitbucket |
 | PRs never get reviewed | Check the webhook in Bitbucket shows recent 2xx deliveries; confirm the PR targets the default branch and is not a draft; confirm the same org secret was pasted into the repo hook |
-| Review comment posted but no approval on SAFE | The posting account authored the PR (Bitbucket forbids self-approval) — configure the dedicated bot account |
+
+---
+
+## Anything Else: Custom MCP Servers
+
+If a system you need has no connector above, you can register your own [MCP](https://modelcontextprotocol.io/) server and Aurora will discover and use its tools. See [Custom MCP Servers](./custom-mcp-servers.md).
 
 ---
 
 ## Credential Storage
-
 All connector credentials are stored securely in HashiCorp Vault:
 
 - Credentials are encrypted at rest

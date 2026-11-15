@@ -2,6 +2,8 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.graph import StateGraph
 from langgraph.graph import START, END
 from chat.backend.agent.utils.safe_memory_saver import SafeMemorySaver
+from chat.backend.agent.utils.message_content import extract_text_from_content
+from chat.backend.agent.utils.usage_normalizer import normalize_usage
 from langchain_core.runnables.config import RunnableConfig
 from langchain_core.messages import AIMessageChunk, AIMessage, SystemMessage
 from chat.backend.agent.agent import Agent
@@ -14,6 +16,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Optional
 from utils.auth.stateless_auth import set_rls_context
+from utils.progress_watch import note_progress
 from utils.security.audit_events import emit_block_event
 from utils.security.audit_events import emit_redaction_event as _emit_redaction
 from utils.security.config import config as _guardrails_config
@@ -33,58 +36,11 @@ RCA_SUMMARY_PREFIX = "[RCA Investigation Summary"
 _USER_MESSAGE_RE = re.compile(r'<user_message>\s*([\s\S]*?)\s*</user_message>')
 
 
-def _extract_text_from_content(content: Any, include_thinking: bool = False) -> str:
-    """
-    Extract text content from message content, handling Gemini thinking model responses.
-    
-    Gemini thinking models return content as a list of blocks with types:
-    - {"type": "thinking", "thinking": "..."} - reasoning/thinking blocks (extracted)
-    - {"type": "text", "text": "..."} - actual text response (extracted)
-    
-    For RCA background chats, thinking blocks contain the investigation progress,
-    so we extract them as part of the thought stream.
-    
-    Args:
-        content: Message content (can be string, list, or other types)
-        
-    Returns:
-        Extracted text as string
-    """
-    if isinstance(content, list):
-        text_parts = []
-        for part in content:
-            if isinstance(part, dict):
-                part_type = part.get("type", "")
-
-                # Extract text from thinking, reasoning, and text blocks.
-                # Anthropic / Gemini thinking blocks: use `thinking` key.
-                # OpenAI Responses-API reasoning blocks: text lives inside
-                #   `summary` as a list of {type:'summary_text', text:'…'}.
-                # Regular text blocks: use `text` key.
-                if part_type in ("thinking", "reasoning") and include_thinking:
-                    thinking_text = part.get("thinking", "")
-                    if thinking_text:
-                        text_parts.append(str(thinking_text))
-                    for s_item in part.get("summary") or []:
-                        if isinstance(s_item, dict):
-                            s_text = s_item.get("text") or s_item.get("summary_text", "")
-                            if s_text:
-                                text_parts.append(str(s_text))
-                elif part_type == "text" or not part_type:
-                    text = part.get("text", "")
-                    if text:
-                        text_parts.append(str(text))
-            elif isinstance(part, str):
-                text_parts.append(part)
-        return "".join(text_parts)
-    return str(content)
-
-
 def _get_input_rail_text(question: Any, message_content: Any) -> str:
     """Return the user-authored text that should be evaluated by input rails."""
     if isinstance(question, str):
         return question
-    return _extract_text_from_content(message_content)
+    return extract_text_from_content(message_content)
 
 
 class Workflow:
@@ -95,8 +51,13 @@ class Workflow:
         self.app = self.get_compiled_workflow()
         self._last_state = None
         self._ui_state = None  # Store UI state to save with messages
+        # Answer text only: background progress also contains thinking and must
+        # never be used to recover a saved reply (which can be posted to Slack).
+        # main_chatbot's cancellation fallback also consumes this buffer.
         self._stream_text_by_id: dict[str, str] = {}
         self._history_prefix_len: int = 0
+        # This turn's capture. Agent.tool_capture_instance is shared across workflows.
+        self.tool_capture = None
 
     async def _wait_for_ongoing_tool_calls(self):
         """Waits briefly for any tool calls that are currently in progress to complete.
@@ -963,10 +924,13 @@ class Workflow:
                 org_id=getattr(input_state, 'org_id', None),
             )
             self.agent.set_tool_capture(tool_capture)
-            
+
             # Set workflow context for tools to access during confirmation
             from chat.backend.agent.tools.cloud_tools import _set_ctx
             _set_ctx("workflow", self)
+
+        # Slack progress reads this object, not the Agent slot a concurrent turn can replace
+        self.tool_capture = tool_capture
         
         # Load existing context if session_id is provided
         if input_state.session_id and input_state.user_id:
@@ -1099,10 +1063,13 @@ class Workflow:
             "request_count": 0,
         }
         _USAGE_UPDATE_INTERVAL = 3  # Yield usage_update every N output chunks
-        
+
         try:
             async for event in self.app.astream_events(input_state, self.config, version="v2"):
                 _event_count += 1
+                # Any event (model chunk, tool start or end) is progress for the
+                # stall watchdog. In memory only; a no-op outside a background run.
+                note_progress()
                 event_type = event.get("event")
                 event_name = event.get("name", "")
                 
@@ -1115,6 +1082,13 @@ class Workflow:
                 if _event_count <= 5:
                     logger.info(f"[WORKFLOW STREAM] Event #{_event_count}: type={event_type}, name={event_name}")
                 
+                # Internal utility LLM calls (memory selector, etc.) run inside the
+                # graph's async context but must never stream tokens to the user.
+                if event_type in ("on_chat_model_start", "on_chat_model_stream", "on_chat_model_end"):
+                    _ev_run_name = (event.get("metadata") or {}).get("run_name") or event.get("name", "")
+                    if _ev_run_name == "memory_selector":
+                        continue
+
                 # Reset per-turn token counter when a new model call starts
                 if event_type == "on_chat_model_start":
                     _model_turn_tokens = 0
@@ -1145,19 +1119,21 @@ class Workflow:
                         # this is safe to call unconditionally.
                         is_background = getattr(input_state, "is_background", False)
                         if hasattr(chunk_obj, 'content') and chunk_obj.content:
-                            content = _extract_text_from_content(chunk_obj.content, include_thinking=is_background)
+                            answer = extract_text_from_content(chunk_obj.content)
+                            chunk_id = getattr(chunk_obj, 'id', None)
+                            if answer and chunk_id:
+                                self._stream_text_by_id[chunk_id] = (
+                                    self._stream_text_by_id.get(chunk_id, "") + answer
+                                )
+                            content = extract_text_from_content(chunk_obj.content, include_thinking=is_background)
 
                         # For background RCA chats, reasoning feeds into incident thoughts
                         if not content and reasoning and is_background:
                             content = reasoning
 
-                        # Only yield if we have actual text content (not reasoning)
+                        # Background progress may include thinking; the recovery
+                        # buffer above deliberately contains only answer text.
                         if content:
-                            chunk_id = getattr(chunk_obj, 'id', None)
-                            if chunk_id:
-                                self._stream_text_by_id[chunk_id] = (
-                                    self._stream_text_by_id.get(chunk_id, "") + content
-                                )
                             _model_turn_tokens += 1
                             yield ("token", content)
                             if _token_count <= 5:
@@ -1200,17 +1176,14 @@ class Workflow:
                         _aux_output = (event.get("data") or {}).get("output")
                         _aux_usage = getattr(_aux_output, "usage_metadata", None) if _aux_output else None
                         if _aux_usage:
-                            input_tokens = _aux_usage.get("input_tokens", 0)
-                            output_tokens = _aux_usage.get("output_tokens", 0)
-                            input_details = _aux_usage.get("input_token_details", {})
-                            cached_input_tokens = (
-                                input_details.get("cache_read", 0)
-                                if isinstance(input_details, dict) else 0
-                            )
+                            _aux_norm = normalize_usage(_aux_usage)
+                            input_tokens = _aux_norm.input_tokens
+                            output_tokens = _aux_norm.output_tokens
                             from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker
                             estimated_cost = LLMUsageTracker.calculate_cost(
                                 input_tokens, output_tokens, input_state.model or "",
-                                cached_input_tokens=cached_input_tokens,
+                                cached_input_tokens=_aux_norm.cache_read_tokens,
+                                cache_write_tokens=_aux_norm.cache_write_tokens,
                             )
                             _session_usage["total_input_tokens"] += input_tokens
                             _session_usage["total_output_tokens"] += output_tokens
@@ -1222,6 +1195,13 @@ class Workflow:
                     chunk_data = event.get("data", {})
                     output = chunk_data.get("output")
                     if output:
+                        # Prefer the complete answer, including when a provider
+                        # streamed thinking but only returned text at model end.
+                        answer = extract_text_from_content(getattr(output, 'content', None))
+                        msg_id = getattr(output, 'id', None)
+                        if answer and msg_id:
+                            self._stream_text_by_id[msg_id] = answer
+
                         # Process tool calls
                         has_tool_calls = getattr(output, 'tool_calls', None)
                         has_raw_tool_calls = getattr(output, 'additional_kwargs', {}).get('tool_calls')
@@ -1237,29 +1217,24 @@ class Workflow:
                             content = ""
                             is_background = getattr(input_state, "is_background", False)
                             if hasattr(output, 'content') and output.content:
-                                content = _extract_text_from_content(output.content, include_thinking=is_background)
+                                content = extract_text_from_content(output.content, include_thinking=is_background)
                             if not content and hasattr(output, 'additional_kwargs'):
                                 reasoning = output.additional_kwargs.get("reasoning_content", "")
                                 if reasoning and is_background:
                                     content = reasoning
                             if content:
                                 logger.info(f"[STREAM FALLBACK] Extracted {len(content)} chars from on_chat_model_end (streaming didn't fire)")
-                                msg_id = getattr(output, 'id', None)
-                                if msg_id:
-                                    self._stream_text_by_id[msg_id] = (
-                                        self._stream_text_by_id.get(msg_id, "") + content
-                                    )
                                 yield ("token", content)
 
                         # Extract provider-reported usage_metadata for accurate tracking
                         usage_meta = getattr(output, 'usage_metadata', None)
                         if usage_meta:
-                            input_tokens = usage_meta.get('input_tokens', 0)
-                            output_tokens = usage_meta.get('output_tokens', 0)
+                            _norm = normalize_usage(usage_meta)
+                            input_tokens = _norm.input_tokens
+                            output_tokens = _norm.output_tokens
                             total_tokens = usage_meta.get('total_tokens', 0)
                             output_details = usage_meta.get('output_token_details', {})
-                            input_details = usage_meta.get('input_token_details', {})
-                            cached_input_tokens = input_details.get('cache_read', 0) if isinstance(input_details, dict) else 0
+                            cached_input_tokens = _norm.cache_read_tokens
                             response_time_ms = int((_time.perf_counter() - _model_turn_start) * 1000) if _model_turn_start else 0
 
                             # Calculate cost from provider-reported counts
@@ -1267,6 +1242,7 @@ class Workflow:
                             estimated_cost = LLMUsageTracker.calculate_cost(
                                 input_tokens, output_tokens, input_state.model or "",
                                 cached_input_tokens=cached_input_tokens,
+                                cache_write_tokens=_norm.cache_write_tokens,
                             )
 
                             # Accumulate session totals
@@ -1348,6 +1324,19 @@ class Workflow:
                     logger.debug(f"[WORKFLOW FINAL] Successfully saved final context for session {session_id} ({len(messages_for_context)} messages)")
                 else:
                     logger.warning(f"[WORKFLOW FINAL] Failed to save final context for session {session_id}")
+
+                # Save durable learnings from this conversation to org memory (non-blocking).
+                # The collector is a new task, so a Slack guest pin does not follow it.
+                try:
+                    from services.memory.collector import extract_memories_from_session
+                    access_as = (getattr(self, "_trigger_metadata", None) or {}).get("access_as")
+                    extract_memories_from_session.delay(
+                        session_id=session_id,
+                        user_id=user_id,
+                        access_as=access_as,
+                    )
+                except Exception:
+                    logger.debug("[WORKFLOW FINAL] Memory save enqueue failed")
 
                 # Append only this turn's new messages to the UI column so RCA
                 # compression (or any future state rewrite) can't truncate the
@@ -1459,7 +1448,7 @@ class Workflow:
                     chunk_builders[msg.id] = builder
 
                 # Accumulate content (handles Gemini thinking model list format)
-                msg_content = _extract_text_from_content(msg.content or "", include_thinking=False)
+                msg_content = extract_text_from_content(msg.content or "", include_thinking=False)
                 builder["content"] += msg_content
 
                 # Process tool calls
@@ -1516,18 +1505,23 @@ class Workflow:
         # Remove duplicates
         final_messages = self._deduplicate_messages(consolidated_messages)
 
-        # Recover text streamed to UI but missing from the final AIMessage
+        # Recover answer text missing from the final AIMessage
         # (cancellation before LangGraph commits the complete response).
         if self._stream_text_by_id:
             for msg in final_messages:
                 if not isinstance(msg, AIMessage):
                     continue
-                current = msg.content if isinstance(msg.content, str) else ""
+                current = extract_text_from_content(msg.content)
                 if current:
                     continue
                 recovered = self._stream_text_by_id.get(getattr(msg, "id", None), "")
                 if recovered:
-                    msg.content = recovered
+                    if isinstance(msg.content, list):
+                        # Keep thought/tool signatures in context for the next
+                        # model call. UI conversion drops the thinking blocks.
+                        msg.content = [*msg.content, {"type": "text", "text": recovered}]
+                    else:
+                        msg.content = recovered
         
         # DEBUG: Log all ToolMessage IDs after deduplication
         for i, msg in enumerate(final_messages):
@@ -1631,13 +1625,13 @@ class Workflow:
                 if isinstance(raw_content, str) and raw_content.startswith(RCA_SUMMARY_PREFIX):
                     continue
                 # Extract text content (handles Gemini thinking model list format)
-                content = _extract_text_from_content(raw_content)
+                content = extract_text_from_content(raw_content)
                 has_tool_calls = (
                     getattr(msg, 'tool_calls', [])
                     or getattr(msg, 'additional_kwargs', {}).get('tool_calls', [])
                 )
                 if not content and has_tool_calls:
-                    content = _extract_text_from_content(raw_content, include_thinking=False)
+                    content = extract_text_from_content(raw_content, include_thinking=False)
                 
                 # Get the AIMessage's run_id for consistency (needed regardless of tool calls)
                 run_id = getattr(msg, 'id', None)

@@ -98,12 +98,34 @@ export function parseCloudExecCommand(
   return { command: inputCommand ?? defaultCommand, phase: 'input' }
 }
 
-export function parseGitHubToolCommand(toolName: string, toolInput: string): string {
+/**
+ * Render a one-line summary for any `mcp_*` tool call.
+ *
+ * Named GitHub cases are recognised explicitly; anything else is a
+ * customer-registered MCP server (`mcp_<label>_<tool>`) and must NOT be
+ * attributed to GitHub, which is what the old catch-all default did -- a
+ * Context7 lookup rendered as "GitHub: context7 query docs".
+ */
+export function parseMcpToolCommand(toolName: string, toolInput: string): string {
+  const generic = () => `MCP: ${toolName.replace(/^mcp_/, "").replace(/_/g, " ")}`
   try {
     // Replace single quotes with double quotes to handle Python's str() output
     const parsableCommand = toolInput.replace(/'/g, '"')
     const parsed = JSON.parse(parsableCommand)
     const args = parsed?.kwargs || parsed || {}
+
+    // Customer MCP servers are reached through two dispatcher tools, so the
+    // LangChain name is always the same -- the server and tool the user cares
+    // about are in the arguments. Handled before the GitHub switch because
+    // "call_tool"/"list_tools" are not GitHub tool names.
+    if (toolName === "mcp_call_tool") {
+      return args.server && args.tool ? `${args.server}: ${args.tool}` : "MCP: call tool"
+    }
+    if (toolName === "mcp_list_tools") {
+      if (args.query) return `MCP: search tools "${args.query}"`
+      if (args.server) return `MCP: list ${args.server} tools`
+      return "MCP: list servers"
+    }
 
     const githubTool = toolName.replace("mcp_", "")
 
@@ -166,11 +188,10 @@ export function parseGitHubToolCommand(toolName: string, toolInput: string): str
       case "context7_get_library_docs":
         return `Context7: get-library-docs ${args.topic ? `"${args.topic}"` : args.context7CompatibleLibraryID || ""}`
       default:
-        return `GitHub: ${githubTool.replace(/_/g, " ")}`
+        return generic()
     }
   } catch (error) {
-    const cleanName = toolName.replace("mcp_", "")
-    return `GitHub: ${cleanName.replace(/_/g, " ")}`
+    return generic()
   }
 }
 
@@ -321,6 +342,52 @@ export function parseCorootCommand(toolName: string, toolInput: string): string 
     default: {
       const clean = toolName.replace("coroot_", "").replace(/_/g, " ")
       return `Coroot: ${clean}${window}`
+    }
+  }
+}
+
+export function parseRabbitMQCommand(toolName: string, toolInput: string): string {
+  const args = (() => {
+    try {
+      const parsed = JSON.parse(toolInput)
+      return parsed?.kwargs || parsed || {}
+    } catch {
+      return {}
+    }
+  })()
+  const asText = (value: unknown): string => {
+    if (typeof value === "string") return value
+    if (typeof value === "number" || typeof value === "boolean") return String(value)
+    return ""
+  }
+  const vhost = asText(args.vhost)
+  const where = vhost ? ` (${vhost})` : ""
+
+  switch (toolName) {
+    case "rabbitmq_get_overview":
+      return "RabbitMQ: Cluster overview"
+    case "rabbitmq_list_nodes":
+      return "RabbitMQ: Nodes"
+    case "rabbitmq_list_queues": {
+      const match = asText(args.name)
+      const matching = match ? ` matching ${match}` : ""
+      return `RabbitMQ: Queues${matching}${where}`
+    }
+    case "rabbitmq_get_queue":
+      return `RabbitMQ: Queue ${asText(args.name) || "?"}${where}`
+    case "rabbitmq_list_exchanges":
+      return `RabbitMQ: Exchanges${where}`
+    case "rabbitmq_list_bindings":
+      return `RabbitMQ: Bindings for ${asText(args.queue) || "?"}${where}`
+    case "rabbitmq_list_connections":
+      return `RabbitMQ: Connections${where}`
+    case "rabbitmq_list_consumers":
+      return `RabbitMQ: Consumers${where}`
+    case "rabbitmq_health_checks":
+      return "RabbitMQ: Health checks"
+    default: {
+      const clean = toolName.replace("rabbitmq_", "").replace(/_/g, " ")
+      return `RabbitMQ: ${clean}`
     }
   }
 }
@@ -501,6 +568,53 @@ export function parseNewRelicCommand(toolInput: string): string {
   }
 }
 
+export function parseElasticCommand(toolName: string, toolInput: string): string {
+  const fallback = toolName.replace(/^elastic_/, "").replace(/_/g, " ")
+  try {
+    let parsed: Record<string, unknown> | null = null
+    try {
+      parsed = JSON.parse(toolInput)
+    } catch {
+      parsed = JSON.parse(toolInput.replace(/'/g, '"'))
+    }
+    const args = ((parsed as Record<string, unknown>)?.kwargs || parsed || {}) as Record<string, unknown>
+    const index = (args.index as string) || ""
+    const timeRange = (args.time_range as string) || ""
+    const window = timeRange ? ` (last ${timeRange})` : ""
+
+    switch (toolName) {
+      case "elastic_list_indices": {
+        const pattern = (args.pattern as string) || "*"
+        return `Elastic: List indices matching ${pattern}`
+      }
+      case "elastic_get_fields": {
+        const prefix = (args.prefix as string) || ""
+        const prefixNote = prefix ? ` (${prefix}*)` : ""
+        return `Elastic: Get fields for ${index || "logs-*"}${prefixNote}`
+      }
+      case "elastic_search_logs": {
+        const query = (args.query as string) || "*"
+        return `Elastic: Search ${index || "logs-*"} for "${query}"${window}`
+      }
+      case "elastic_esql": {
+        const query = ((args.query as string) || "").replace(/\s+/g, " ").trim()
+        const short = query.length > 80 ? `${query.slice(0, 77)}…` : query
+        return `Elastic: ES|QL ${short}${window}`
+      }
+      case "elastic_get_alerts": {
+        const status = (args.status as string) || "active"
+        const hoursValue = typeof args.hours === "number" || typeof args.hours === "string" ? String(args.hours) : ""
+        const hours = hoursValue ? ` (last ${hoursValue}h)` : ""
+        return `Elastic: Get ${status} Kibana alerts${hours}`
+      }
+      default:
+        return `Elastic: ${fallback}`
+    }
+  } catch {
+    return `Elastic: ${fallback}`
+  }
+}
+
 export function parseCloudflareCommand(toolName: string, toolInput: string): string {
   const args = (() => {
     try {
@@ -560,6 +674,11 @@ export function parseSlackCommand(toolName: string, toolInput: string): string {
     return "Slack: List channels"
   }
 
+  if (toolName === "list_slack_users") {
+    const name = typeof args.name === "string" ? args.name.trim() : ""
+    return name ? `Slack: Find users (${name})` : "Slack: Find users"
+  }
+
   if (toolName === "get_channel_history") {
     const parts: string[] = []
     if (args.channel_id) parts.push(`#${args.channel_id}`)
@@ -579,4 +698,95 @@ export function parseSlackCommand(toolName: string, toolInput: string): string {
   }
 
   return `Slack: ${toolName.replace(/slack_?/g, "").replace(/_/g, " ")}`
+}
+
+function parseToolJson(raw: string): Record<string, unknown> | null {
+  const trimmed = raw.trim()
+  // Tool args and results are JSON objects. Arrays and plain text are not.
+  if (!trimmed.startsWith("{")) return null
+  try {
+    const parsed = JSON.parse(trimmed)
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null
+  } catch {
+    try {
+      const parsed = JSON.parse(trimmed.replace(/'/g, '"'))
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? parsed as Record<string, unknown>
+        : null
+    } catch {
+      return null
+    }
+  }
+}
+
+function splunkInstanceName(accountId: string, serverName?: string): string {
+  if (serverName && serverName !== accountId) {
+    return `${serverName} (${accountId})`
+  }
+  return accountId
+}
+
+/** Which Splunk a tool call hit. Prefer the result, then the requested account. */
+export function splunkInstanceLabel(toolInput: string, toolOutput?: string): string {
+  const output = toolOutput ? parseToolJson(toolOutput) : null
+  const instances = output?.instances
+  // Fan-out and single-target results both list the instances that were called.
+  if (Array.isArray(instances) && instances.length > 0) {
+    return instances
+      .map((item) => {
+        if (!item || typeof item !== "object") return ""
+        const row = item as Record<string, unknown>
+        const accountId = typeof row.account_id === "string" ? row.account_id : ""
+        const serverName = typeof row.server_name === "string" ? row.server_name : ""
+        return accountId ? splunkInstanceName(accountId, serverName) : ""
+      })
+      .filter(Boolean)
+      .join(", ")
+  }
+  const byAccount = output?.results_by_account
+  if (byAccount && typeof byAccount === "object" && !Array.isArray(byAccount)) {
+    return Object.entries(byAccount as Record<string, unknown>)
+      .map(([accountId, item]) => {
+        const serverName = item && typeof item === "object"
+          ? String((item as Record<string, unknown>).server_name || "")
+          : ""
+        return splunkInstanceName(accountId, serverName)
+      })
+      .join(", ")
+  }
+  const outputAccount = typeof output?.account_id === "string" ? output.account_id : ""
+  const outputServer = typeof output?.server_name === "string" ? output.server_name : ""
+  if (outputAccount) return splunkInstanceName(outputAccount, outputServer)
+
+  const parsed = parseToolJson(toolInput)
+  const args = (parsed?.kwargs && typeof parsed.kwargs === "object"
+    ? parsed.kwargs
+    : parsed) as Record<string, unknown> | null
+  const requested = typeof args?.account_id === "string" ? args.account_id : ""
+  // No account yet — the call is fanning out across every granted instance.
+  return requested || "all connected instances"
+}
+
+export function parseSplunkCommand(toolName: string, toolInput: string, toolOutput?: string): string {
+  const parsed = parseToolJson(toolInput)
+  const args = (parsed?.kwargs && typeof parsed.kwargs === "object"
+    ? parsed.kwargs
+    : parsed || {}) as Record<string, unknown>
+  const on = `on ${splunkInstanceLabel(toolInput, toolOutput)}`
+
+  if (toolName === "search_splunk") {
+    const query = String(args.query || "").replace(/\s+/g, " ").trim()
+    const short = query.length > 80 ? `${query.slice(0, 77)}…` : query
+    return short ? `Splunk: Search ${on} — ${short}` : `Splunk: Search ${on}`
+  }
+  if (toolName === "list_splunk_indexes") {
+    return `Splunk: List indexes ${on}`
+  }
+  if (toolName === "list_splunk_sourcetypes") {
+    const index = typeof args.index === "string" && args.index ? ` in ${args.index}` : ""
+    return `Splunk: List sourcetypes${index} ${on}`
+  }
+  return `Splunk: ${toolName.replace(/_/g, " ")} ${on}`
 }

@@ -18,6 +18,7 @@ from typing import Any, Dict
 import requests
 from flask import Blueprint, jsonify
 
+from routes.datadog.datadog_routes import account_label
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import (
     get_org_id_for_user,
@@ -31,6 +32,7 @@ logger = logging.getLogger(__name__)
 _LOG_PREFIX = "[ConnectorStatus]"
 
 from utils.splunk_config import SPLUNK_SSL_VERIFY
+from utils.elastic_config import ELASTIC_SSL_VERIFY
 
 connector_status_bp = Blueprint("connector_status", __name__)
 
@@ -62,24 +64,44 @@ def _check_grafana(user_id: str, org_id: str) -> Dict[str, Any]:
 
 
 def _check_datadog(creds: Dict[str, Any]) -> Dict[str, Any]:
-    api_key = creds.get("api_key")
-    app_key = creds.get("app_key")
-    if not api_key or not app_key:
+    # Several Datadog orgs can be connected, stored as a list under "accounts"
+    # with the primary mirrored at the top level. Report connected when ANY org
+    # validates: keying off the primary alone would render "not connected" on one
+    # revoked key while other orgs are still connected and queryable.
+    accounts = creds.get("accounts")
+    if not isinstance(accounts, list) or not accounts:
+        accounts = [creds]
+
+    results = []
+    for account in accounts:
+        if not isinstance(account, dict):
+            continue
+        api_key = account.get("api_key")
+        app_key = account.get("app_key")
+        label = account_label(account)
+        site = account.get("site", "datadoghq.com")
+        if not api_key or not app_key:
+            results.append({"label": label, "site": site, "connected": False})
+            continue
+        base_url = account.get("base_url", "https://api.datadoghq.com")
+        try:
+            r = requests.get(
+                f"{base_url}/api/v1/validate",
+                headers={"DD-API-KEY": api_key, "DD-APPLICATION-KEY": app_key},
+                timeout=HTTP_TIMEOUT,
+            )
+            connected = bool(r.json().get("valid"))
+        except Exception:
+            connected = False
+        results.append({"label": label, "site": site, "connected": connected})
+
+    if not results:
         return {"connected": False}
-    site = creds.get("site", "datadoghq.com")
-    base_url = creds.get("base_url", "https://api.datadoghq.com")
-    try:
-        r = requests.get(
-            f"{base_url}/api/v1/validate",
-            headers={"DD-API-KEY": api_key, "DD-APPLICATION-KEY": app_key},
-            timeout=HTTP_TIMEOUT,
-        )
-        data = r.json()
-        if data.get("valid"):
-            return {"connected": True, "site": site}
-        return {"connected": False}
-    except Exception:
-        return {"connected": False}
+
+    status = {"connected": any(r["connected"] for r in results), "site": results[0]["site"]}
+    if len(results) > 1:
+        status["accounts"] = results
+    return status
 
 
 def _check_ci_provider(creds: Dict[str, Any]) -> Dict[str, Any]:
@@ -110,11 +132,22 @@ def _check_ci_provider(creds: Dict[str, Any]) -> Dict[str, Any]:
         return {"connected": False}
 
 
-def _check_splunk(creds: Dict[str, Any]) -> Dict[str, Any]:
-    api_token = creds.get("api_token")
-    base_url = creds.get("base_url")
-    if not api_token or not base_url:
-        return {"connected": False}
+def _splunk_candidates(creds: Dict[str, Any]) -> list:
+    """Every stored instance. A blob from before multi-account has just the top level."""
+    accounts = creds.get("accounts")
+    candidates = []
+    if isinstance(accounts, list):
+        for item in accounts:
+            if isinstance(item, dict) and item.get("api_token") and item.get("base_url"):
+                candidates.append(item)
+    if not candidates and creds.get("api_token") and creds.get("base_url"):
+        candidates.append(creds)
+    return candidates
+
+
+def _probe_splunk(item: Dict[str, Any]):
+    api_token = item.get("api_token")
+    base_url = item.get("base_url")
     try:
         r = requests.get(
             f"{base_url}/services/server/info?output_mode=json",
@@ -123,7 +156,62 @@ def _check_splunk(creds: Dict[str, Any]) -> Dict[str, Any]:
             verify=SPLUNK_SSL_VERIFY,
         )
         r.raise_for_status()
-        return {"connected": True, "baseUrl": base_url}
+        return base_url
+    except Exception:
+        return None
+
+
+def _check_splunk(creds: Dict[str, Any]) -> Dict[str, Any]:
+    candidates = _splunk_candidates(creds)
+    if not candidates:
+        return {"connected": False}
+    # Probe together so one dead instance does not add its timeout to the others.
+    workers = min(4, len(candidates))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        urls = list(pool.map(_probe_splunk, candidates))
+    # A revoked token on one instance must not flip the card off while another works.
+    for base_url in urls:
+        if base_url:
+            return {"connected": True, "baseUrl": base_url, "accountCount": len(candidates)}
+    return {"connected": False, "accountCount": len(candidates)}
+
+
+def _check_elastic(creds: Dict[str, Any]) -> Dict[str, Any]:
+    api_key = creds.get("api_key")
+    es_url = creds.get("elasticsearch_url")
+    if not api_key or not es_url:
+        return {"connected": False}
+    headers = {"Authorization": f"ApiKey {api_key}"}
+    try:
+        # _authenticate works with any valid key; GET / needs cluster 'monitor'.
+        r = requests.get(
+            f"{es_url.rstrip('/')}/_security/_authenticate",
+            headers=headers, timeout=HTTP_TIMEOUT, verify=ELASTIC_SSL_VERIFY, allow_redirects=False,
+        )
+        if r.status_code in (403, 404):
+            r = requests.get(
+                f"{es_url.rstrip('/')}/",
+                headers=headers, timeout=HTTP_TIMEOUT, verify=ELASTIC_SSL_VERIFY, allow_redirects=False,
+            )
+        r.raise_for_status()
+        info: Dict[str, Any] = {}
+        try:
+            probe = requests.get(
+                f"{es_url.rstrip('/')}/",
+                headers=headers, timeout=HTTP_TIMEOUT, verify=ELASTIC_SSL_VERIFY, allow_redirects=False,
+            )
+            if probe.ok and probe.content:
+                info = probe.json()
+        except Exception:
+            info = {}
+        return {
+            "connected": True,
+            "elasticsearchUrl": es_url,
+            "kibanaUrl": creds.get("kibana_url"),
+            "deploymentType": creds.get("deployment_type"),
+            "clusterName": info.get("cluster_name") or creds.get("cluster_name"),
+            "version": (info.get("version") or {}).get("number") or creds.get("version"),
+        }
     except Exception:
         return {"connected": False}
 
@@ -145,6 +233,32 @@ def _check_coroot(creds: Dict[str, Any]) -> Dict[str, Any]:
         r = session.get(f"{url}/api/projects", timeout=HTTP_TIMEOUT)
         r.raise_for_status()
         return {"connected": True, "url": url}
+    except Exception:
+        return {"connected": False}
+
+
+def _check_rabbitmq(creds: Dict[str, Any]) -> Dict[str, Any]:
+    """Mirrors /rabbitmq/status — validates with the management whoami endpoint."""
+    url = creds.get("url")
+    username = creds.get("username")
+    password = creds.get("password")
+    if not url or not username or not password:
+        return {"connected": False}
+    try:
+        from connectors.rabbitmq_connector.client import RabbitMQClient
+
+        client = RabbitMQClient(
+            url=url,
+            username=username,
+            password=password,
+            # The batch status call gives up at LIVE_CHECK_TIMEOUT.
+            timeout=4,
+        )
+        try:
+            who = client.whoami()
+        finally:
+            client.close()
+        return {"connected": True, "url": url, "username": who.get("name") or username}
     except Exception:
         return {"connected": False}
 
@@ -257,6 +371,21 @@ def _check_slack(creds: Dict[str, Any]) -> Dict[str, Any]:
         if r.status_code == 200 and r.json().get("ok"):
             return {"connected": True}
         return {"connected": False}
+    except Exception:
+        return {"connected": False}
+
+
+def _check_teams(creds: Dict[str, Any]) -> Dict[str, Any]:
+    from connectors.teams_connector.client import get_teams_client_for_user
+
+    user_id = creds.get("_user_id")
+    # Stored access tokens last ~1h, so go through the client that refreshes them
+    client = get_teams_client_for_user(user_id) if user_id else None
+    if not client:
+        return {"connected": False}
+    try:
+        client.get_me()
+        return {"connected": True}
     except Exception:
         return {"connected": False}
 
@@ -517,6 +646,19 @@ def _check_spinnaker(creds: Dict[str, Any]) -> Dict[str, Any]:
         return {"connected": False}
 
 
+def _check_servicenow(creds: Dict[str, Any]) -> Dict[str, Any]:
+    """Mirrors /servicenow status — one incident read with the stored credentials."""
+    from routes.servicenow.servicenow_client import ServiceNowClient
+
+    try:
+        client = ServiceNowClient.from_credentials(creds)
+        client.timeout = HTTP_TIMEOUT  # the batch probe answers in seconds, not SERVICENOW_TIMEOUT
+        client.test_connection()
+        return {"connected": True, "authType": creds.get("auth_type", "basic")}
+    except Exception:
+        return {"connected": False}
+
+
 def _check_pagerduty(creds: Dict[str, Any]) -> Dict[str, Any]:
     """Mirrors /pagerduty status — validates with live API call + OAuth refresh."""
     from routes.pagerduty.pagerduty_helpers import PagerDutyClient, PagerDutyAPIError, validate_token
@@ -737,6 +879,26 @@ def _check_sentry(creds: Dict[str, Any]) -> Dict[str, Any]:
         return {"connected": False}
 
 
+def _check_mcp(creds: Dict[str, Any]) -> Dict[str, Any]:
+    """Local read of the registered MCP server list -- no network calls.
+
+    Validating would mean handshaking into customer networks on every status
+    poll. Registration already proved each server reachable, and ``refresh``
+    re-validates on demand.
+    """
+    servers = [
+        s for s in (creds.get("servers") or [])
+        if isinstance(s, dict) and s.get("label") and s.get("url")
+    ]
+    if not servers:
+        return {"connected": False}
+    return {
+        "connected": True,
+        "serverCount": len(servers),
+        "toolCount": sum(len(s.get("tools") or []) for s in servers),
+    }
+
+
 def _check_gitlab(creds: Dict[str, Any]) -> Dict[str, Any]:
     """Mirrors /gitlab/status — validates via GitLab user API."""
     access_token = creds.get("access_token")
@@ -767,10 +929,13 @@ PROVIDER_CHECKERS = {
     "jenkins": _check_ci_provider,
     "cloudbees": _check_ci_provider,
     "splunk": _check_splunk,
+    "elastic": _check_elastic,
     "coroot": _check_coroot,
+    "rabbitmq": _check_rabbitmq,
     "confluence": _check_confluence,
     "jira": _check_jira,
     "slack": _check_slack,
+    "teams": _check_teams,
     "google_chat": _check_google_chat,
     "github": _check_github,
     "gitlab": _check_gitlab,
@@ -782,6 +947,7 @@ PROVIDER_CHECKERS = {
     "notion": _check_notion,
     "spinnaker": _check_spinnaker,
     "pagerduty": _check_pagerduty,
+    "servicenow": _check_servicenow,
     "opsgenie":      _check_opsgenie,
     "dynatrace": _check_dynatrace,
     "bigpanda": _check_bigpanda,
@@ -790,6 +956,7 @@ PROVIDER_CHECKERS = {
     # Credential-existence checks (no live API endpoint to validate against)
     "netdata": _check_netdata,
     "newrelic": _check_newrelic,
+    "mcp": _check_mcp,
     "gcp": _check_gcp_credentials,
     "aws": _check_credentials_only,
     "azure": _check_credentials_only,

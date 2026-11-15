@@ -39,6 +39,7 @@ _BENIGN_SRE_COMMANDS = [
     "systemctl status nginx",
     "journalctl -u nginx --no-pager -n 50",
     "ssh user@host 'ls'",
+    "ssh -i ~/.ssh/id_provider_vm -o BatchMode=yes admin@198.51.100.1 'df -h'",
     "pip install requests==2.31.0",
     "npm install",
     "cat README.md",

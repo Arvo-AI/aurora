@@ -10,8 +10,38 @@ The mapper supports bidirectional translation and automatic provider detection.
 
 from typing import Dict, Optional, Tuple
 
+# Ids that appear three or more times in MODEL_MAPPINGS below — once as the canonical
+# key and again as the OpenRouter alias target of their dotted/dashed/vertex variants.
+# Named here so the literal is defined in a single place.
+_OR_GEMINI_4_ARGON = "google/gemini-4-argon"
+_NATIVE_GEMINI_4_ARGON = "gemini-4-argon"
+_OR_GEMINI_3_8_FLASH = "google/gemini-3.8-flash"
+_NATIVE_GEMINI_3_8_FLASH = "gemini-3.8-flash"
+_OR_CLAUDE_OPUS_5_5 = "anthropic/claude-opus-5.5"
+_OR_CLAUDE_FABLE_5_1 = "anthropic/claude-fable-5.1"
+
 # Model name mappings from OpenRouter format to native provider formats
 MODEL_MAPPINGS = {
+    "openai/gpt-6-astra": {
+        "openrouter": "openai/gpt-6-astra",
+        "openai": "gpt-6-astra",
+        "provider": "openai",
+    },
+    "openai/gpt-5.6-sol": {
+        "openrouter": "openai/gpt-5.6-sol",
+        "openai": "gpt-5.6-sol",
+        "provider": "openai",
+    },
+    "openai/gpt-5.6-terra": {
+        "openrouter": "openai/gpt-5.6-terra",
+        "openai": "gpt-5.6-terra",
+        "provider": "openai",
+    },
+    "openai/gpt-5.6-luna": {
+        "openrouter": "openai/gpt-5.6-luna",
+        "openai": "gpt-5.6-luna",
+        "provider": "openai",
+    },
     "openai/gpt-5.5": {
         "openrouter": "openai/gpt-5.5",
         "openai": "gpt-5.5",
@@ -44,6 +74,17 @@ MODEL_MAPPINGS = {
         "anthropic": "claude-opus-4-5",
         "provider": "anthropic",
     },
+    _OR_GEMINI_4_ARGON: {
+        "openrouter": _OR_GEMINI_4_ARGON,
+        "google": _NATIVE_GEMINI_4_ARGON,
+        "vertex": _NATIVE_GEMINI_4_ARGON,
+        "provider": "google",
+    },
+    "vertex/gemini-4-argon": {
+        "openrouter": _OR_GEMINI_4_ARGON,
+        "vertex": _NATIVE_GEMINI_4_ARGON,
+        "provider": "vertex",
+    },
     "google/gemini-3.1-pro-preview": {
         "openrouter": "google/gemini-3.1-pro-preview",
         "google": "gemini-3.1-pro-preview",
@@ -53,6 +94,17 @@ MODEL_MAPPINGS = {
     "vertex/gemini-3.1-pro-preview": {
         "openrouter": "google/gemini-3.1-pro-preview",
         "vertex": "gemini-3.1-pro-preview",
+        "provider": "vertex",
+    },
+    _OR_GEMINI_3_8_FLASH: {
+        "openrouter": _OR_GEMINI_3_8_FLASH,
+        "google": _NATIVE_GEMINI_3_8_FLASH,
+        "vertex": _NATIVE_GEMINI_3_8_FLASH,
+        "provider": "google",
+    },
+    "vertex/gemini-3.8-flash": {
+        "openrouter": _OR_GEMINI_3_8_FLASH,
+        "vertex": _NATIVE_GEMINI_3_8_FLASH,
         "provider": "vertex",
     },
     "google/gemini-3.6-flash": {
@@ -120,6 +172,36 @@ MODEL_MAPPINGS = {
         "anthropic": "claude-sonnet-4-6",
         "provider": "anthropic",
     },
+    _OR_CLAUDE_OPUS_5_5: {
+        "openrouter": _OR_CLAUDE_OPUS_5_5,
+        "anthropic": "claude-opus-5-5",
+        "provider": "anthropic",
+    },
+    "anthropic/claude-opus-5-5": {
+        "openrouter": _OR_CLAUDE_OPUS_5_5,
+        "anthropic": "claude-opus-5-5",
+        "provider": "anthropic",
+    },
+    "anthropic/claude-sonnet-5": {
+        "openrouter": "anthropic/claude-sonnet-5",
+        "anthropic": "claude-sonnet-5",
+        "provider": "anthropic",
+    },
+    _OR_CLAUDE_FABLE_5_1: {
+        "openrouter": _OR_CLAUDE_FABLE_5_1,
+        "anthropic": "claude-fable-5-1",
+        "provider": "anthropic",
+    },
+    "anthropic/claude-fable-5-1": {
+        "openrouter": _OR_CLAUDE_FABLE_5_1,
+        "anthropic": "claude-fable-5-1",
+        "provider": "anthropic",
+    },
+    "anthropic/claude-fable-5": {
+        "openrouter": "anthropic/claude-fable-5",
+        "anthropic": "claude-fable-5",
+        "provider": "anthropic",
+    },
     "anthropic/claude-opus-4.7": {
         "openrouter": "anthropic/claude-opus-4.7",
         "anthropic": "claude-opus-4-7",
@@ -133,6 +215,16 @@ MODEL_MAPPINGS = {
     "anthropic/claude-opus-4-6": {
         "openrouter": "anthropic/claude-opus-4.6",
         "anthropic": "claude-opus-4-6",
+        "provider": "anthropic",
+    },
+    "anthropic/claude-haiku-5.5": {
+        "openrouter": "anthropic/claude-haiku-5.5",
+        "anthropic": "claude-haiku-5-5",
+        "provider": "anthropic",
+    },
+    "anthropic/claude-haiku-5-5": {
+        "openrouter": "anthropic/claude-haiku-5.5",
+        "anthropic": "claude-haiku-5-5",
         "provider": "anthropic",
     },
     "anthropic/claude-haiku-4.5": {

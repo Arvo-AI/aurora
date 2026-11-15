@@ -106,7 +106,12 @@ def build_provider_context_segment(
                 )
             elif provider == "azure":
                 parts.append(
-                    "- Fetch the Azure subscription before writing Terraform: cloud_exec('azure', \"account show --query 'id' -o tsv\"). Use the concrete subscription ID in code.\n"
+                    "- **MULTI-SUBSCRIPTION AZURE**: You may have multiple Azure subscriptions connected.\n"
+                    "  1. Your FIRST cloud_exec('azure', ...) call (without account_id) automatically queries ALL subscriptions in parallel and returns `results_by_subscription`.\n"
+                    "  2. Review the per-subscription results to identify which subscription(s) are relevant.\n"
+                    "  3. For ALL subsequent calls, pass `account_id='<SUBSCRIPTION_ID>'` to target only that subscription. Example: cloud_exec('azure', 'vm list', account_id='00000000-0000-0000-0000-000000000000')\n"
+                    "  4. NEVER keep querying all subscriptions after you've identified the relevant one -- it wastes time and adds noise.\n"
+                    "- Fetch the Azure subscription before writing Terraform: cloud_exec('azure', \"account show --query 'id' -o tsv\", account_id='<SUBSCRIPTION_ID>'). Use the concrete subscription ID in code.\n"
                 )
     # Provider-specific reference guides are now in skill files.
     # The agent loads them on-demand via load_skill().

@@ -1,0 +1,1399 @@
+"""Azure multi-subscription support (DEV-1499).
+
+Covers the logic that silently breaks without a test: per-subscription command
+pinning, login/relogin handling, and Resource Graph paging. The read-only command
+classifier lives in `tests/security/test_read_only_classifier.py`.
+"""
+import json
+import logging
+import os
+import re
+import shlex
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import types
+import typing
+
+import pytest
+
+
+def _read(path):
+    """Read a source file, closing the handle deterministically."""
+    with open(path, encoding="utf-8") as fh:
+        return fh.read()
+
+
+def _load(fn_names, path):
+    """Exec named top-level functions out of a module without importing it.
+
+    cloud_exec_tool pulls in the whole agent/DB stack at import time, which is
+    not available in unit tests.
+    """
+    src = _read(path)
+    ns = {"shlex": shlex}
+    for fn in fn_names:
+        match = re.search(r"^def " + fn + r"\(.*?(?=^def )", src, re.S | re.M)
+        assert match, f"{fn} not found in {path}"
+        exec(match.group(0), ns)
+    return ns
+
+
+CLOUD_EXEC = "chat/backend/agent/tools/cloud_exec_tool.py"
+SETUP_SCRIPT = "connectors/azure_connector/setup-aurora-access.sh"
+SUBSCRIPTIONS_MOD = "connectors/azure_connector/subscriptions.py"
+
+
+@pytest.fixture(scope="module")
+def helpers():
+    from utils.cloud import azure_login_cache
+    ns = _load(
+        ["_apply_azure_subscription", "_is_azure_cli_command", "_azure_can_fan_out"],
+        CLOUD_EXEC,
+    )
+    ns["azure_login_cache"] = azure_login_cache
+    return ns
+
+
+@pytest.mark.parametrize("command,expected", [
+    ("vm list", "az vm list --subscription SUB1"),
+    ("az vm list", "az vm list --subscription SUB1"),
+    # An explicit subscription from the agent must win.
+    ("az vm list --subscription OTHER", "az vm list --subscription OTHER"),
+    # Resource Graph takes --subscriptions (plural) and is scoped by the caller.
+    ('az graph query -q "Resources"', 'az graph query -q "Resources"'),
+    # Tenant-level `az account` subcommands reject --subscription and answer the
+    # same for every subscription.
+    ("az account list -o table", "az account list -o table"),
+    ("account list", "az account list"),
+    ("az account tenant list", "az account tenant list"),
+    ("az account management-group list", "az account management-group list"),
+    # The rest are pinned; unpinned they would answer for the default subscription N times.
+    ("az account show", "az account show --subscription SUB1"),
+    ("az account get-access-token", "az account get-access-token --subscription SUB1"),
+    # `az account lock` reads the active subscription and rejects the flag: pinned,
+    # az fails loudly rather than mislabelling the default subscription's locks.
+    ("az account lock list", "az account lock list --subscription SUB1"),
+])
+def test_apply_azure_subscription(helpers, command, expected):
+    assert helpers["_apply_azure_subscription"](command, "SUB1") == expected
+
+
+@pytest.mark.parametrize("command,is_az", [
+    ("az vm list", True),
+    ("vm list", True),
+    ("kubectl get pods", False),
+    ("helm list", False),
+    ("terraform plan", False),
+])
+def test_only_az_commands_fan_out(helpers, command, is_az):
+    """kubectl inherits context from `aks get-credentials`, so it must not fan out."""
+    assert helpers["_is_azure_cli_command"](command) is is_az
+
+
+def test_get_credentials_never_fans_out(helpers):
+    """Parallel `aks get-credentials` would race on the shared kubeconfig."""
+    assert helpers["_azure_can_fan_out"]("az vm list") is True
+    assert helpers["_azure_can_fan_out"](
+        "az aks get-credentials --name c --resource-group r") is False
+
+
+@pytest.mark.parametrize("command", [
+    "az account clear",
+    "az account set --subscription x",
+    "az login --service-principal",
+    "az logout",
+    "az config set core.output=json",
+])
+def test_cli_state_commands_never_fan_out(helpers, command):
+    """Every worker shares one config dir; a CLI-state command would rewrite it under the others."""
+    assert helpers["_azure_can_fan_out"](command) is False
+
+
+def test_resource_graph_query_is_ordered():
+    """skip-token paging returns duplicates and gaps without a stable sort."""
+    from services.discovery.providers.azure_asset_discovery import RESOURCE_GRAPH_QUERY
+    assert "order by id asc" in RESOURCE_GRAPH_QUERY
+
+
+def test_resource_graph_follows_skip_tokens(monkeypatch):
+    """Tenants over the 1000-record page cap must not silently truncate."""
+    from services.discovery.providers import azure_asset_discovery as mod
+
+    pages = [
+        {"data": [{"id": "1"}], "skip_token": "tok1"},
+        {"data": [{"id": "2"}], "skip_token": None},
+    ]
+    calls = []
+
+    def fake_run(cmd):
+        calls.append(cmd)
+        return pages[len(calls) - 1]
+
+    monkeypatch.setattr(mod, "_az_login", lambda creds: None)
+    monkeypatch.setattr(mod, "_run_graph_query", fake_run)
+
+    out = mod._query_resource_graph({"subscription_id": "S1"}, ["S1"])
+    assert [r["id"] for r in out] == ["1", "2"]
+    assert "--skip-token" in calls[1], "second page did not pass a skip token"
+    assert "tok1" in calls[1], "second page used the wrong skip token"
+
+
+def test_resource_graph_truncation_fails_closed(monkeypatch):
+    """Hitting the page cap must raise, not publish a partial inventory.
+
+    Returning the collected rows would make discovery write a partial inventory and
+    report success, so anything diffing against previous state reads the missing
+    resources as deleted.
+    """
+    from services.discovery.providers import azure_asset_discovery as mod
+
+    calls = []
+
+    def never_ends(cmd):
+        calls.append(cmd)
+        return {"data": [{"id": str(len(calls))}], "skipToken": f"tok{len(calls)}"}
+
+    monkeypatch.setattr(mod, "_az_login", lambda creds: None)
+    monkeypatch.setattr(mod, "_run_graph_query", never_ends)
+
+    with pytest.raises(mod.ResourceGraphTruncatedError):
+        mod._query_resource_graph({}, ["S1"])
+    assert len(calls) == mod._MAX_PAGES, "paging was not bounded by the page cap"
+
+
+def test_discover_reports_truncation_instead_of_partial_nodes(monkeypatch):
+    """discover() must surface truncation as an error, not silent partial success."""
+    from services.discovery.providers import azure_asset_discovery as mod
+
+    monkeypatch.setattr(mod, "_query_resource_graph",
+                        lambda *a, **k: (_ for _ in ()).throw(mod.ResourceGraphTruncatedError("capped")))
+    monkeypatch.setattr(mod, "get_all_user_connections", lambda *a, **k: [{"account_id": "S1"}])
+
+    out = mod.discover("u", {"subscription_id": "S1"})
+    assert out["nodes"] == [], "partial inventory was published despite truncation"
+    assert out["errors"], "truncation was not reported to the caller"
+
+
+def test_resource_graph_batches_subscriptions(monkeypatch):
+    from services.discovery.providers import azure_asset_discovery as mod
+
+    calls = []
+    monkeypatch.setattr(mod, "_az_login", lambda creds: None)
+    monkeypatch.setattr(mod, "_run_graph_query", lambda cmd: calls.append(cmd) or {"data": []})
+
+    subs = [f"S{i}" for i in range(mod._SUBSCRIPTION_BATCH_SIZE * 2 + 1)]
+    mod._query_resource_graph({}, subs)
+    assert len(calls) == 3  # two full batches plus the remainder
+
+
+def test_read_only_mode_fails_closed_without_distinct_identity():
+    """Azure has no session-policy equivalent, so the read-only SP is the boundary."""
+    from utils.auth.cloud_auth import _resolve_azure_credentials, READ_ONLY_MODE
+
+    full_access = {"tenant_id": "T", "client_id": "full", "client_secret": "s",
+                   "subscription_id": "S1"}
+
+    # Agent mode uses the full-access identity.
+    assert _resolve_azure_credentials(full_access, "agent", "u")["client_id"] == "full"
+
+    # Ask mode must refuse rather than fall back to the write-capable identity.
+    with pytest.raises(ValueError, match="read-only"):
+        _resolve_azure_credentials(full_access, READ_ONLY_MODE, "u")
+
+    with_ro = dict(full_access, read_only={"client_id": "ro", "client_secret": "s2"})
+    resolved = _resolve_azure_credentials(with_ro, READ_ONLY_MODE, "u")
+    assert resolved["client_id"] == "ro"
+    assert resolved["tenant_id"] == "T"       # inherited
+    assert resolved["subscription_id"] == "S1"
+
+
+# ---------------------------------------------------------------------------
+# Fan-out across many subscriptions.
+#
+# _cloud_exec_azure_multi_subscription is real concurrency with on-disk state,
+# so it is exercised with real threads and real temp directories. Only the two
+# boundaries are faked: credential setup and subprocess execution.
+# ---------------------------------------------------------------------------
+
+class _NoLoginCache:
+    """Login cache switched off: the fan-out keeps its own private directory."""
+
+    @staticmethod
+    def attach(env, command):
+        return None
+
+    @staticmethod
+    def is_cached_dir(path):
+        return False
+
+
+def _load_fanout(run_command, config_dirs, fail_setup=False, mode="agent", login_cache=_NoLoginCache):
+    """Exec the real fan-out function with faked module-level dependencies."""
+    src = _read(CLOUD_EXEC)
+    ns = {"shlex": shlex, "re": re, "json": __import__("json"), "time": __import__("time"),
+          "contextvars": __import__("contextvars"),
+          # Identity stub: the helper only decides *which* message to show (see
+          # tests/secrets/test_vault_backend_availability.py). These tests are
+          # about the fan-out failing closed, so keep the fallback text.
+          "_credential_setup_error": lambda fallback: fallback,
+          "Optional": typing.Optional, "logger": __import__("logging").getLogger("test")}
+
+    # The fan-out calls the Ask-mode gate, which now lives in its own module.
+    from utils.security.read_only_classifier import describe_rejection, is_read_only_command
+    ns["is_read_only_command"] = is_read_only_command
+    ns["describe_rejection"] = describe_rejection
+    # The extracted function calls ask_mode_permits. This harness has no org,
+    # so the classifier is the permit.
+    ns["ask_mode_permits"] = lambda _user_id, command: is_read_only_command(command)
+
+    for fn in ["_apply_azure_subscription",
+               "_run_azure_on_subscription", "_fan_out_azure",
+               "_subscriptions_needing_relogin", "_azure_login_ok",
+               "_retry_stale_subscriptions", "_cloud_exec_azure_multi_subscription"]:
+        match = re.search(r"^def " + fn + r"\(.*?(?=^def )", src, re.S | re.M)
+        ns_src = match.group(0)
+        exec(ns_src, ns)
+
+    def fake_setup(user_id, sub_id):
+        # The fan-out authenticates once for the whole tenant, so it is called with
+        # sub_id=None and must NOT allocate a dir per subscription.
+        if fail_setup:
+            return False, None, None, None, None
+        cfg = tempfile.mkdtemp(prefix="aurora-az-test-")
+        config_dirs.append(cfg)
+        # argv list, matching setup_azure_environment_isolated's real contract. A
+        # string here would let a regression back into shlex-parsing the secret pass.
+        env = {"AZURE_CONFIG_DIR": cfg, "AZURE_TENANT_ID": "tenant",
+               "AZURE_CLIENT_ID": "client", "AZURE_CLIENT_SECRET": "s3c ret"}
+        return True, sub_id, "service_principal", env, [
+            "az", "login", "--service-principal", "--password", "s3c ret", "--output", "none",
+        ]
+
+    class Result:
+        def __init__(self, rc, out, err):
+            self.returncode, self.stdout, self.stderr = rc, out, err
+
+    ns.update({
+        "setup_azure_environment_isolated": fake_setup,
+        "azure_login_cache": login_cache,
+        "terminal_run": run_command,
+        "get_command_timeout": lambda c, t: t or 60,
+        "get_mode_from_context": lambda: mode,
+        "ModeAccessController": type("M", (), {
+            # Mirrors the real signature, including the rejection reason the gate
+            # now interpolates into its message.
+            "ensure_cloud_command_allowed": staticmethod(
+                lambda m, ro, c, reason="": (True, "") if m == "agent" or ro
+                else (False, "blocked because %s" % (reason or "it modifies infrastructure")))
+        }),
+        "_Result": Result,
+    })
+    return ns["_cloud_exec_azure_multi_subscription"], Result
+
+
+def test_fanout_authenticates_once_and_pins_every_subscription():
+    """The whole point of the single-login fan-out: one `az login`, one config dir.
+
+    All connected subscriptions share the same service principal, so re-running
+    `az login` per subscription (the old behaviour) was pure waste: 2N subprocesses
+    and N temp dirs for what one tenant login covers. This locks in N+1 subprocesses
+    and a single shared config dir, while still pinning every command to its own
+    subscription so concurrent workers never contend on the active-subscription state.
+    """
+    import json as _json
+    config_dirs = []
+    seen_dirs, seen_cmds, lock = [], [], threading.Lock()
+    seen_argvs = []
+
+    def run_command(argv, **kw):
+        env = kw["env"]
+        with lock:
+            seen_dirs.append(env["AZURE_CONFIG_DIR"])
+            seen_argvs.append(list(argv))
+            # argv is a list, so join to inspect it. The single auth login lands
+            # here too, alongside every per-subscription command.
+            seen_cmds.append(" ".join(argv))
+        time.sleep(0.01)  # widen the window for a real race
+        return type("R", (), {"returncode": 0, "stdout": "[]", "stderr": ""})()
+
+    fanout, _ = _load_fanout(run_command, config_dirs)
+    conns = [{"account_id": f"sub-{i:02d}"} for i in range(30)]
+    out = _json.loads(fanout("u", conns, "vm list"))
+
+    assert out["success"] is True
+    assert len(out["results_by_subscription"]) == 30, "every subscription must report"
+    # Single login for the whole tenant, not one per subscription.
+    assert len(config_dirs) == 1, "fan-out authenticated more than once"
+    auth_argvs = [a for a in seen_argvs if "login" in a]
+    assert len(auth_argvs) == 1, "expected exactly one `az login` for the whole fan-out"
+    # Every worker reused the one shared, already-authenticated config dir.
+    assert set(seen_dirs) == set(config_dirs), "workers did not reuse the shared config dir"
+    # Every command was still pinned to its own subscription.
+    for i in range(30):
+        assert any(f"--subscription sub-{i:02d}" in c for c in seen_cmds), \
+            f"sub-{i:02d} command was not pinned to its subscription"
+    # No invocation may go through a shell. Interpolating the client secret into a
+    # command string and handing it to `bash -lc` would let a secret containing a
+    # shell metacharacter break out of its argument.
+    for argv_str in seen_cmds:
+        assert not argv_str.startswith("bash -lc"), \
+            "command was executed through a shell; secret interpolation is exploitable"
+    # The secret must reach az byte-for-byte. The stub's secret contains a space, so
+    # any re-lexing of the auth argv (e.g. shlex.split on a joined string) truncates
+    # it and this fails.
+    for argv in auth_argvs:
+        assert argv[argv.index("--password") + 1] == "s3c ret", \
+            "client secret was re-parsed and corrupted before reaching az"
+
+
+def test_fanout_cleans_up_its_shared_temp_dir():
+    """The one shared config dir must be removed after every worker finishes."""
+    config_dirs = []
+
+    def run_command(argv, **kw):
+        return type("R", (), {"returncode": 0, "stdout": "ok", "stderr": ""})()
+
+    fanout, _ = _load_fanout(run_command, config_dirs)
+    fanout("u", [{"account_id": f"s{i}"} for i in range(8)], "vm list")
+
+    assert len(config_dirs) == 1, "fan-out must allocate exactly one shared config dir"
+    assert not [d for d in config_dirs if os.path.exists(d)], "temp dir leaked"
+
+
+def test_fanout_isolates_per_subscription_failures():
+    """One bad subscription must not fail the whole investigation."""
+    import json as _json
+    config_dirs = []
+
+    def run_command(argv, **kw):
+        # The single login succeeds; only the sub-bad command returns an error.
+        if "login" in argv:
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+        cmd = " ".join(argv)
+        if "sub-bad" in cmd:
+            return type("R", (), {
+                "returncode": 1, "stdout": "",
+                "stderr": "(SubscriptionNotFound) The subscription could not be found."})()
+        return type("R", (), {"returncode": 0, "stdout": '{"ok":true}', "stderr": ""})()
+
+    fanout, _ = _load_fanout(run_command, config_dirs)
+    conns = [{"account_id": s} for s in ("sub-ok", "sub-bad")]
+    out = _json.loads(fanout("u", conns, "vm list"))
+    res = out["results_by_subscription"]
+
+    assert out["success"] is False           # aggregate reflects the failure
+    assert res["sub-ok"]["success"] is True  # but the good one still returned data
+    assert "SubscriptionNotFound" in res["sub-bad"]["output"]
+
+
+def test_fanout_fails_closed_when_shared_login_fails():
+    """If the single up-front authentication fails, no command may run."""
+    import json as _json
+
+    def run_command(argv, **kw):
+        raise AssertionError("no command may run when authentication failed")
+
+    fanout, _ = _load_fanout(run_command, [], fail_setup=True)
+    out = _json.loads(fanout("u", [{"account_id": "s1"}], "vm list"))
+    assert out["success"] is False
+    assert "Failed to authenticate" in out["error"]
+    assert out["multi_subscription"] is True
+
+
+@pytest.fixture
+def login_cache(tmp_path, monkeypatch):
+    """The real login cache, rooted in a throwaway directory."""
+    from utils.cloud import azure_login_cache
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setenv("FLASK_SECRET_KEY", "test-key")
+    monkeypatch.setenv("ENABLE_POD_ISOLATION", "false")  # unset means on, which disables the cache
+    monkeypatch.setattr(azure_login_cache, "_last_sweep", 0.0)
+    return azure_login_cache
+
+
+def test_warm_fanout_spawns_no_login_and_keeps_the_cached_directory(login_cache):
+    """With a cached login the whole fan-out is N commands and zero logins."""
+    import json as _json
+    seen, lock = [], threading.Lock()
+
+    def run_command(argv, **kw):
+        with lock:
+            seen.append((list(argv), kw["env"]["AZURE_CONFIG_DIR"]))
+        return type("R", (), {"returncode": 0, "stdout": "[]", "stderr": ""})()
+
+    private_dirs = []
+    fanout, _ = _load_fanout(run_command, private_dirs, login_cache=login_cache)
+    conns = [{"account_id": f"sub-{i}"} for i in range(6)]
+
+    assert _json.loads(fanout("u", conns, "vm list"))["success"] is True
+    cold_logins = [a for a, _d in seen if "login" in a]
+    assert len(cold_logins) == 1, "a cold cache still logs in exactly once"
+
+    seen.clear()
+    assert _json.loads(fanout("u", conns, "vm list"))["success"] is True
+
+    assert not [a for a, _d in seen if "login" in a], "a warm fan-out must not log in"
+    assert len(seen) == 6
+    dirs = {d for _a, d in seen}
+    assert len(dirs) == 1
+    assert login_cache.is_cached_dir(next(iter(dirs)))
+    assert os.path.isdir(next(iter(dirs))), "the fan-out must not delete a shared login"
+    assert not [d for d in private_dirs if os.path.exists(d)], "unused private dirs leaked"
+    for i in range(6):
+        assert any(f"--subscription sub-{i}" in " ".join(a) for a, _d in seen)
+
+
+def test_fanout_recovers_from_a_dead_cached_login_with_one_relogin(login_cache):
+    """A swept or replaced login fails every subscription at once; heal it once."""
+    import json as _json
+    state = {"logged_in": False, "logins": 0, "commands": 0}
+    lock = threading.Lock()
+
+    def run_command(argv, **kw):
+        with lock:
+            if "login" in argv:
+                state["logins"] += 1
+                state["logged_in"] = True
+                return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            state["commands"] += 1
+            if not state["logged_in"]:
+                return type("R", (), {"returncode": 1, "stdout": "",
+                                      "stderr": "ERROR: Please run 'az login' to setup account."})()
+        return type("R", (), {"returncode": 0, "stdout": "[]", "stderr": ""})()
+
+    fanout, _ = _load_fanout(run_command, [], login_cache=login_cache)
+    conns = [{"account_id": f"sub-{i}"} for i in range(5)]
+    fanout("u", conns, "vm list")
+    assert state["logins"] == 1
+
+    # The directory's login dies behind the cache's back (az state wiped, marker intact).
+    state.update(logged_in=False, commands=0)
+    out = _json.loads(fanout("u", conns, "vm list"))
+
+    assert out["success"] is True, "every subscription must succeed after the relogin"
+    assert state["logins"] == 2, "one relogin for the whole fan-out, not one per subscription"
+    assert state["commands"] == 10, "only the failed subscriptions are re-run, once"
+
+
+def test_fanout_reports_auth_failure_when_login_raises(login_cache):
+    """A login that raises must fail the fan-out cleanly, not escape it."""
+    import json as _json
+
+    def run_command(argv, **kw):
+        if "login" in argv:
+            raise OSError("no space left on device")
+        raise AssertionError("no command may run without a login")
+
+    fanout, _ = _load_fanout(run_command, [], login_cache=login_cache)
+    out = _json.loads(fanout("u", [{"account_id": "s1"}, {"account_id": "s2"}], "vm list"))
+
+    assert out["success"] is False
+    assert out["error"] == "Azure authentication failed"
+    assert out["multi_subscription"] is True
+
+
+def test_fanout_keeps_first_pass_results_when_relogin_raises(login_cache):
+    """A relogin that raises must not throw away the subscriptions that succeeded."""
+    import json as _json
+    state = {"logins": 0}
+    lock = threading.Lock()
+
+    def run_command(argv, **kw):
+        with lock:
+            if "login" in argv:
+                state["logins"] += 1
+                if state["logins"] > 1:
+                    raise OSError("lock file unwritable")
+                return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            if "--subscription sub-0" in " ".join(argv):
+                return type("R", (), {"returncode": 1, "stdout": "",
+                                      "stderr": "ERROR: Please run 'az login' to setup account."})()
+        return type("R", (), {"returncode": 0, "stdout": "[]", "stderr": ""})()
+
+    fanout, _ = _load_fanout(run_command, [], login_cache=login_cache)
+    conns = [{"account_id": f"sub-{i}"} for i in range(3)]
+    out = _json.loads(fanout("u", conns, "vm list"))
+
+    assert state["logins"] == 2, "one cold login plus the relogin attempt"
+    results = out["results_by_subscription"]
+    assert results["sub-0"]["success"] is False
+    assert results["sub-1"]["success"] is True
+    assert results["sub-2"]["success"] is True
+    assert out["success"] is False
+
+
+def test_cloud_exec_never_deletes_a_cached_login_directory():
+    """cloud_exec's converging cleanup must skip the shared directory.
+
+    Deleting it would silently turn every command back into login-plus-command and
+    pull the login out from under other requests mid-flight.
+    """
+    src = _read(CLOUD_EXEC)
+    cleanup = src[src.rindex("finally:"):]
+    assert "is_cached_dir" in cleanup
+    assert "rmtree" in cleanup
+    assert cleanup.index("is_cached_dir") < cleanup.index("rmtree")
+
+
+def test_fanout_blocks_write_commands_in_ask_mode():
+    """Read-only gating must apply to the fan-out path, not just single-sub."""
+    import json as _json
+
+    def run_command(argv, **kw):
+        raise AssertionError("must not execute a write command in ask mode")
+
+    fanout, _ = _load_fanout(run_command, [], mode="ask")
+    out = _json.loads(fanout("u", [{"account_id": "s1"}], "group delete --name x"))
+    assert "error" in out, "write command was not rejected in ask mode"
+    assert out["multi_subscription"] is True, "result lost its multi-subscription marker"
+
+
+def test_setup_azure_environment_allocates_a_distinct_config_dir_each_call():
+    """The real fix: `az login` writes to AZURE_CONFIG_DIR, so it cannot be shared.
+
+    This exercises setup_azure_environment_isolated itself rather than a stub,
+    because that is where the directory is actually allocated.
+    """
+    src = _read(CLOUD_EXEC)
+    match = re.search(r"^def setup_azure_environment_isolated\(.*?(?=^def )", src, re.S | re.M)
+    ns = {
+        "os": os, "tempfile": tempfile,
+        "logger": __import__("logging").getLogger("test"),
+        "_ISOLATED_HOME": "/tmp/aurora-home",
+        "get_mode_from_context": lambda: "agent",
+        "generate_azure_access_token": lambda uid, sub, mode=None: {
+            "access_token": "t", "subscription_id": sub or "S1", "tenant_id": "T",
+            "client_id": "cid", "client_secret": "sec",
+        },
+    }
+    exec(match.group(0), ns)
+    setup = ns["setup_azure_environment_isolated"]
+
+    dirs = []
+    try:
+        for sub in ("sub-a", "sub-b", "sub-c"):
+            ok, _s, _m, env, auth_cmd = setup("u", sub)
+            assert ok
+            dirs.append(env["AZURE_CONFIG_DIR"])
+            assert os.path.isdir(env["AZURE_CONFIG_DIR"])
+            # The secret must never appear anywhere but the auth command itself.
+            assert env["AZURE_CLIENT_SECRET"] == "sec"
+        assert len(set(dirs)) == 3, "AZURE_CONFIG_DIR must be unique per invocation"
+        assert f"{ns['_ISOLATED_HOME']}/.azure" not in dirs, "must not use the shared dir"
+    finally:
+        for d in dirs:
+            __import__("shutil").rmtree(d, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# Management-group subscription enumeration.
+#
+# Assignments at MG scope only inherit to descendants, so reporting
+# tenant-wide subscription ids here would store ids Aurora has no rights on.
+# The Azure response nests child management groups, and a flat filter would
+# silently drop every subscription below the first level.
+# ---------------------------------------------------------------------------
+
+def test_resource_graph_repeated_token_fails_closed(monkeypatch):
+    """A repeated skip token means paging stalled, so it must not read as completion.
+
+    Returning the rows collected so far would publish a partial inventory as a success,
+    which is the same hazard the page cap guards against.
+    """
+    from services.discovery.providers import azure_asset_discovery as mod
+
+    calls = []
+
+    def stalled(cmd):
+        calls.append(cmd)
+        # Same token every time: the service is not advancing.
+        return {"data": [{"id": str(len(calls))}], "skipToken": "stuck"}
+
+    monkeypatch.setattr(mod, "_az_login", lambda creds: None)
+    monkeypatch.setattr(mod, "_run_graph_query", stalled)
+
+    with pytest.raises(mod.ResourceGraphTruncatedError):
+        mod._query_resource_graph({}, ["S1"])
+    # Must fail on the repeat, not grind through every page first.
+    assert len(calls) == 2, f"expected to stop on the repeated token, made {len(calls)} calls"
+
+
+def test_partial_sp_creation_is_rolled_back():
+    """A half-created pair must not survive as an orphaned identity.
+
+    If the agent principal is created and the read-only one fails, the agent's secret
+    was never printed, so it cannot be used but still exists in the directory. The
+    denial message also cannot claim nothing was created on that path.
+    """
+    src = _read(SETUP_SCRIPT)
+    match = re.search(r'if ! RO_SP=.*?\nfi', src, re.S)
+    assert match, "read-only creation is unguarded; a failure leaves an orphaned agent SP"
+    body = match.group(0)
+    assert "az ad app delete" in body, "agent principal is not rolled back"
+    assert "$AGENT_ID" in body, "rollback does not target the principal just created"
+    # The denial text must not contradict the rollback that may follow it.
+    assert "Nothing was created" not in src, \
+        "denial still claims nothing was created, which is false on the rollback path"
+
+
+def test_retired_subscription_post_is_gone():
+    """The retired toggle endpoint and its client proxy must both be removed."""
+    assert "azure_subscriptions_post" not in _read(AZURE_ROUTES), \
+        "retired POST handler still registered"
+
+    proxy = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "../../../client/src/app/api/azure-subscriptions/route.ts",
+    )
+    if not os.path.exists(proxy):
+        pytest.skip("client/ not present in this checkout")
+    src = _read(proxy)
+    assert "export async function POST" not in src, "client can still POST a subscription selection"
+    assert "export async function GET" in src, "GET proxy was removed; the list would stop loading"
+
+
+def test_discovery_cleans_up_azure_config_dir():
+    """AZURE_CONFIG_DIR is a per-call mkdtemp, so discovery must remove it.
+
+    cloud_exec cleans up its own in a finally; discovery previously removed only
+    _gcloud_tmpdir, leaking one directory per run.
+    """
+    src = _read("services/discovery/discovery_service.py")
+    assert "AZURE_CONFIG_DIR" in src, "discovery never removes the Azure config dir"
+    # Cleanup must be in a finally, or an exception mid-pipeline still leaks.
+    wrapper = re.search(r"def run_discovery_for_user\(.*?(?=\ndef )", src, re.S)
+    assert wrapper, "run_discovery_for_user not found"
+    assert "finally:" in wrapper.group(0), "cleanup is not in a finally; a raise leaks the dir"
+    assert "rmtree" in wrapper.group(0), "cleanup does not actually remove anything"
+
+
+def test_app_registration_denial_is_translated():
+    """The Entra denial must name the real remedy, not look like an RBAC problem.
+
+    Subscription Owner grants no directory permissions, so an operator who is Owner on
+    every subscription still cannot create the app registrations when the tenant sets
+    "Users can register applications" to No. Azure reports that as a bare "Insufficient
+    privileges", which sends operators looking at subscription roles.
+    """
+    src = _read(SETUP_SCRIPT)
+    body = re.search(r"create_sp\(\) \{.*?\n\}", src, re.S)
+    assert body, "create_sp wrapper not found; create-for-rbac is unguarded again"
+    body = body.group(0)
+
+    assert "Insufficient privileges" in body, "the Entra denial string is not matched"
+    assert "Authorization_RequestDenied" in body, "the Graph variant is not matched"
+    assert "Users can register applications" in body, "no tenant-setting remedy given"
+    assert "Application Developer" in body, "no directory-role remedy given"
+    # 2>&1 would fold az's deprecation notices into the JSON that jq parses next.
+    # Strip comments first: the line explaining this very hazard mentions 2>&1.
+    code = "\n".join(l for l in body.splitlines() if not l.lstrip().startswith("#"))
+    assert "2>&1" not in code, "stderr merged into stdout; success-path JSON can be corrupted"
+
+
+def test_no_mutation_before_app_registration():
+    """"Nothing was created" must be true: every earlier az call is a read.
+
+    The denial message tells the operator nothing was created, so a future mutation
+    added above this point would turn that into a lie and leave orphaned state.
+    """
+    src = _read(SETUP_SCRIPT)
+    head = src.split("create_sp()")[0]
+    mutating = re.findall(
+        r"az (?:ad (?:sp|app) create\S*|role assignment create|aks (?:create|update)|group create)",
+        head,
+    )
+    assert not mutating, f"mutation before the app-registration guard: {mutating}"
+
+
+def _walk_mg(payload):
+    """Run the walker embedded in setup-aurora-access.sh against a payload."""
+    src = _read(SETUP_SCRIPT)
+    body = re.search(r"list_mg_subscriptions\(\) \{.*?\n\}", src, re.S).group(0)
+    snippet = re.search(r"python3 -c '(.*?)'\n", body, re.S).group(1)
+    out = subprocess.run(
+        [sys.executable, "-c", snippet],
+        input=json.dumps(payload), capture_output=True, text=True, timeout=30,
+    )
+    assert out.returncode == 0, out.stderr
+    return [line for line in out.stdout.split("\n") if line]
+
+
+def _sub(name):
+    return {"name": name, "type": "/subscriptions", "children": None}
+
+
+def _mg(name, children):
+    return {"name": name, "type": "Microsoft.Management/managementGroups",
+            "children": children}
+
+
+def test_mg_walker_finds_nested_subscriptions():
+    # Verified against real Azure: a subscription in a child MG still inherits
+    # roles assigned at the grandparent, so it must be reported.
+    payload = _mg("root", [_sub("flat"), _mg("child", [_sub("nested")]),
+                           _mg("mid", [_mg("deep", [_sub("deeper")])])])
+    assert sorted(_walk_mg(payload)) == ["deeper", "flat", "nested"]
+
+
+def test_mg_walker_handles_empty_and_malformed():
+    assert _walk_mg(_mg("root", [])) == []
+    assert _walk_mg({"name": "root"}) == []          # children key absent
+    assert _walk_mg(_mg("root", [_mg("empty", None)])) == []
+
+
+# ---------------------------------------------------------------------------
+# Ask mode must refuse credential reads.
+#
+# These pass a verb check ("list", "show") and mutate nothing, but return keys,
+# secrets or connection strings, so allowing them would let Ask mode exfiltrate
+# standing credentials. There is no second allowlist gate behind this function.
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Disconnect must mark connections inactive even without a secret_ref column.
+#
+# secret_ref is optional across schemas, but in PostgreSQL a failed SELECT
+# aborts the entire transaction, so the UPDATE that follows was silently
+# skipped and Azure kept reporting as connected after a disconnect. The probe
+# has to be wrapped in a savepoint.
+# ---------------------------------------------------------------------------
+
+def test_disconnect_marks_inactive_when_secret_ref_column_missing(monkeypatch):
+    import utils.db.connection_utils as cu
+
+    executed = []
+
+    class Cursor:
+        aborted = False
+
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def fetchone(self): return self._row
+
+        def execute(self, sql, params=None):
+            stmt = sql.strip().split("\n")[0]
+            executed.append(stmt)
+            # Mimic Postgres: the failed probe poisons the transaction, and every
+            # later statement fails until the savepoint is rolled back.
+            if sql.startswith("ROLLBACK TO SAVEPOINT"):
+                Cursor.aborted = False
+                return
+            if sql.startswith(("SAVEPOINT", "RELEASE SAVEPOINT")):
+                return
+            if Cursor.aborted:
+                raise RuntimeError("current transaction is aborted")
+            if "secret_ref" in sql:
+                Cursor.aborted = True
+                raise RuntimeError('column "secret_ref" does not exist')
+            self._row = ("arn",) if sql.startswith("SELECT role_arn") else None
+
+    conn = type("Conn", (), {
+        "cursor": lambda self: Cursor(),
+        "commit": lambda self: executed.append("COMMIT"),
+        "rollback": lambda self: executed.append("ROLLBACK"),
+        "close": lambda self: None,
+    })()
+
+    monkeypatch.setattr(cu, "connect_to_db_as_admin", lambda: conn)
+    monkeypatch.setattr(cu, "set_rls_context", lambda *a, **k: "org")
+
+    # Real user ids are UUIDs; org_read_predicate validates them to keep
+    # non-UUID input out of the query params.
+    assert cu.delete_connection_secret(USER_A, "azure", "sub-1") is True
+    assert any("ROLLBACK TO SAVEPOINT" in s for s in executed), "probe must be rolled back, not left aborted"
+    assert any(s.startswith("UPDATE user_connections") for s in executed), "UPDATE must still run"
+    assert "COMMIT" in executed
+
+
+# --- UI display of multiple subscriptions (DEV-1499) -------------------------
+# Two live render paths named only the default subscription, so a user with two
+# connected subscriptions saw "Subscription 1" and no sign of the second.
+
+AZURE_ROUTES = "routes/azure/azure_routes.py"
+
+
+def test_fetch_data_returns_subscription_count():
+    """The connect banner branches on subscription_count, which fetch_data omitted.
+
+    Without it the count is always falsy, so the UI always took the singular
+    branch and named just the default subscription. Asserting on the jsonify
+    payload, not just the local: computing the count but not returning it is
+    exactly the bug.
+    """
+    src = _read(AZURE_ROUTES)
+    match = re.search(r"^def fetch_data\(.*?(?=^@azure_bp)", src, re.S | re.M)
+    assert match, "fetch_data not found"
+    body = match.group(0)
+    assert "get_all_user_connections" in body, "count must come from user_connections, not the token row"
+    payloads = re.findall(r"return jsonify\(\{(.*?)\}\)", body, re.S)
+    assert payloads, "fetch_data must return a jsonify payload"
+    assert any("subscription_count" in p for p in payloads), \
+        "subscription_count must be in the response body, not just computed locally"
+
+
+def test_subscription_list_resolves_real_names():
+    """Every subscription needs its real name; the list used to show raw GUIDs.
+
+    Previously: name = default_name if sub_id == default_id else sub_id, so only
+    the default was named and the rest rendered as bare subscription GUIDs.
+    """
+    src = _read(AZURE_ROUTES)
+    # Anchor on the next decorator or end-of-file: this is now the last function in
+    # the file, since the retired POST handler below it was deleted.
+    match = re.search(r"^def azure_subscriptions_get\(.*?(?=^@azure_bp|\Z)", src, re.S | re.M)
+    assert match, "azure_subscriptions_get not found"
+    body = match.group(0)
+    assert "default_name if sub_id == default_id else sub_id" not in body, \
+        "non-default subscriptions must not fall back to showing their GUID as the name"
+    assert "fetch_subscriptions" in body, "names must be resolved from ARM"
+    assert "names.get(sub_id, sub_id)" in body, "GUID stays only as a last-resort fallback"
+
+
+# --- Guardrail context must survive the fan-out ------------------------------
+# ThreadPoolExecutor workers start with an EMPTY contextvars context. The safety
+# judge reads user_id/session_id/state from contextvars, so without an explicit
+# copy every fanned-out command was blocked: "missing user context", exit 126.
+
+def test_fan_out_propagates_contextvars_to_workers():
+    """A bare pool.submit loses context; copy_context().run keeps it.
+
+    Models the real failure rather than the real stack: the guardrail reads a
+    contextvar, and the worker must see the value the caller set.
+    """
+    import concurrent.futures
+    import contextvars as cv
+
+    var = cv.ContextVar("user_id", default=None)
+    var.set("user-123")
+
+    def worker():
+        return var.get()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        # The bug: plain submit runs with a fresh, empty context.
+        assert pool.submit(worker).result() is None, \
+            "bare submit unexpectedly saw the caller context; model is invalid"
+        # The fix: copy the context per task.
+        assert pool.submit(cv.copy_context().run, worker).result() == "user-123"
+
+
+def test_both_fan_outs_copy_context():
+    """Both providers must copy context; a bare submit reintroduces exit-126 blocks."""
+    src = _read(CLOUD_EXEC)
+    # Azure submits from its _fan_out_azure helper rather than the entry function.
+    for fn in ("_cloud_exec_aws_multi_account", "_fan_out_azure"):
+        match = re.search(r"^def " + fn + r"\(.*?(?=^def )", src, re.S | re.M)
+        assert match, f"{fn} not found"
+        submits = re.findall(r"pool\.submit\(\s*([^,]+)", match.group(0))
+        assert submits, f"{fn} has no pool.submit"
+        for first_arg in submits:
+            assert "copy_context" in first_arg, \
+                f"{fn} submits {first_arg.strip()!r} directly instead of via " \
+                "contextvars.copy_context().run; guardrails will fail closed"
+
+
+# --- Org-scoped writes on user_connections -----------------------------------
+# Reads match (user_id OR org_id) but the unique constraint is per-user, so a
+# teammate's disconnect/toggle used to match zero rows (disconnect silently
+# no-oped) or insert a competing row (toggle shadowed, sub stayed active).
+# Affects every provider in user_connections: azure, aws, ovh.
+
+def _conn_utils_with_fake_db(monkeypatch, rows):
+    """Wire connection_utils to an in-memory user_connections stand-in."""
+    import utils.db.connection_utils as cu
+
+    class Cursor:
+        def __init__(self):
+            self._result = None
+            self.rowcount = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def execute(self, sql, params=()):
+            s = " ".join(sql.split())
+            self.rowcount = 0
+            self._result = None
+            if s.startswith("SAVEPOINT") or s.startswith("RELEASE") or s.startswith("ROLLBACK TO"):
+                return
+            # Org predicate carries two ids; user-only carries one.
+            org_scoped = "user_id = %s OR org_id = %s" in s
+            ids = params[:2] if org_scoped else params[:1]
+            if s.startswith("UPDATE user_connections SET status = 'inactive'"):
+                ids = params[1:3] if org_scoped else params[1:2]
+            if s.startswith("UPDATE user_connections SET role_arn"):
+                ids = params[7:9] if org_scoped else params[7:8]
+
+            def visible(r):
+                return r["user_id"] in ids or (org_scoped and r["org_id"] in ids)
+
+            if s.startswith("SELECT role_arn"):
+                hit = [r for r in rows if visible(r) and r["status"] == "active"]
+                self._result = ("arn",) if hit else None
+            elif s.startswith("SELECT secret_ref"):
+                self._result = None
+            elif s.startswith("UPDATE user_connections SET status = 'inactive'"):
+                for r in rows:
+                    if visible(r):
+                        r["status"] = "inactive"
+                        self.rowcount += 1
+            elif s.startswith("UPDATE user_connections SET role_arn"):
+                for r in rows:
+                    if visible(r):
+                        r["status"] = params[5]
+                        self.rowcount += 1
+            elif s.startswith("INSERT INTO user_connections"):
+                rows.append({"user_id": params[0], "org_id": params[1], "status": params[9]})
+                self.rowcount = 1
+
+        def fetchone(self):
+            return self._result
+
+    conn = type("Conn", (), {
+        "cursor": lambda self: Cursor(),
+        "commit": lambda self: None,
+        "rollback": lambda self: None,
+        "close": lambda self: None,
+    })()
+    monkeypatch.setattr(cu, "connect_to_db_as_admin", lambda: conn)
+    monkeypatch.setattr(cu, "set_rls_context", lambda *a, **k: ORG)
+    monkeypatch.setattr(cu, "_resolve_org_id", lambda uid: ORG)
+    return cu
+
+
+ORG = "20ee6a53-a776-4578-8d2c-dfc1afb2fc8c"
+USER_A = "533757ff-de70-4700-a285-7dee94bd93b8"
+USER_B = "00000000-0000-0000-0000-0000000000bb"
+
+
+def test_azure_disconnect_clears_credential_cache():
+    """Disconnect must drop cached credentials, not just the DB rows.
+
+    azure_cached_auth caches the SP's client_secret in-process and in Redis with a
+    TTL, so leaving it behind keeps a revoked credential usable until it expires and
+    lets a reconnect inside that window be served stale credentials. GCP already does
+    this via clear_gcp_cache_for_user; Azure had no equivalent.
+    """
+    from chat.backend.agent.tools.auth import azure_cached_auth as mod
+
+    assert hasattr(mod, "clear_azure_cache_for_user"), "no Azure cache-clear function"
+
+    # Local cache must be emptied for this user and left alone for others.
+    mod._local_cache.clear()
+    mod._local_cache["cloud_exec:azure_setup:v1:u1:sub-a:agent"] = (9e9, {"client_secret": "s"})
+    mod._local_cache["cloud_exec:azure_setup:v1:u1:sub-b:readonly"] = (9e9, {"client_secret": "s"})
+    mod._local_cache["cloud_exec:azure_setup:v1:u2:sub-c:agent"] = (9e9, {"client_secret": "s"})
+    mod.clear_azure_cache_for_user("u1")
+
+    left = list(mod._local_cache)
+    assert left == ["cloud_exec:azure_setup:v1:u2:sub-c:agent"], \
+        f"expected only u2's entry to survive, got {left}"
+
+    # And disconnect must actually call it. Assert on the call, not the name: the
+    # import line also contains it, so a substring check passes even if the call
+    # is deleted.
+    src = _read("routes/account_management.py")
+    branch = re.search(r'if provider_lc == "azure":.*?(?=\n        # Clean up)', src, re.S)
+    assert branch, "azure disconnect branch not found"
+    assert re.search(r"clear_azure_cache_for_user\(\s*user_id\s*\)", branch.group(0)), \
+        "disconnect leaves cached Azure credentials in place"
+
+
+def test_disconnect_detects_listing_failure(monkeypatch):
+    """A failed subscription listing must not read as "nothing to disconnect".
+
+    get_all_user_connections swallows DB errors and returns [] by default, which is
+    indistinguishable from having no subscriptions: the loop is skipped, deletion_ok
+    stays True, and disconnect reports success while rows are still active. The
+    disconnect path must therefore opt into raise_on_error.
+    """
+    src = _read("routes/account_management.py")
+    match = re.search(r'if provider_lc == "azure":.*?(?=\n        # Clean up)', src, re.S)
+    assert match, "azure disconnect branch not found"
+    body = match.group(0)
+    assert "raise_on_error=True" in body, \
+        "listing failure is silently treated as an empty list"
+    assert "deletion_ok = False" in body, \
+        "a failed listing does not mark the disconnect as failed"
+
+
+def test_get_all_user_connections_supports_raise_on_error():
+    """The flag must actually re-raise, otherwise the guard above is decorative."""
+    import utils.db.connection_utils as cu
+    import inspect
+
+    sig = inspect.signature(cu.get_all_user_connections)
+    assert "raise_on_error" in sig.parameters, "raise_on_error parameter missing"
+    assert sig.parameters["raise_on_error"].default is False, \
+        "raise_on_error must default to False so existing callers keep swallowing"
+    src = inspect.getsource(cu.get_all_user_connections)
+    assert re.search(r"if raise_on_error:\s*\n\s*raise", src), \
+        "raise_on_error does not re-raise"
+
+
+def test_teammate_can_disconnect_org_shared_connection(monkeypatch):
+    """B disconnecting an account A connected must actually deactivate it."""
+    rows = [{"user_id": USER_A, "org_id": ORG, "status": "active"}]
+    cu = _conn_utils_with_fake_db(monkeypatch, rows)
+
+    assert cu.delete_connection_secret(USER_B, "azure", "sub-1") is True, \
+        "teammate disconnect returned False; the row was not matched"
+    assert rows[0]["status"] == "inactive", "A's connection was left active after B disconnected"
+
+
+def test_teammate_write_does_not_create_shadow_row(monkeypatch):
+    """B writing an account A connected must update A's row, not insert a competing one.
+
+    The Azure subscription toggle that first exposed this is retired, but the same
+    path runs on reconnect and for aws/ovh, and a duplicate row would make
+    cloud_exec fan out to the same account twice.
+    """
+    rows = [{"user_id": USER_A, "org_id": ORG, "status": "active"}]
+    cu = _conn_utils_with_fake_db(monkeypatch, rows)
+
+    assert cu.save_connection_metadata(USER_B, "azure", "sub-1", status="inactive") is True
+    assert len(rows) == 1, f"expected the existing row to be updated, got {len(rows)} rows (shadow row inserted)"
+    assert rows[0]["status"] == "inactive", "write did not take effect on the org-shared row"
+
+
+def test_save_connection_metadata_still_inserts_when_absent(monkeypatch):
+    """The update-first path must not break first-time connects."""
+    rows = []
+    cu = _conn_utils_with_fake_db(monkeypatch, rows)
+
+    assert cu.save_connection_metadata(USER_A, "azure", "sub-1") is True
+    assert len(rows) == 1, "first connect did not insert exactly one row"
+    assert rows[0]["status"] == "active", "inserted row was not active"
+
+
+# --- Retired per-subscription toggle -----------------------------------------
+# The toggle looked like an access boundary but was not one: the service
+# principal keeps its Azure role assignments, and any cloud_exec call passing an
+# explicit subscription id skipped the status filter entirely. Scope now lives
+# where Azure enforces it (setup-aurora-access.sh with a management group).
+
+def test_subscription_post_writes_nothing():
+    """No route may persist a subscription selection.
+
+    Replaces an earlier check that the POST returned 410; the handler is now deleted
+    outright, so Flask answers 405 from the GET-only rule. What still matters is that
+    nothing in this file writes connection metadata from a request body.
+    """
+    src = _read(AZURE_ROUTES)
+    assert "azure_subscriptions_post" not in src, "retired POST handler is back"
+    assert "save_connection_metadata" not in src, \
+        "a route writes connection metadata again; scope belongs to the setup script"
+    assert 'route("/api/azure-subscriptions", methods=["POST"])' not in src, \
+        "a POST was registered on the subscriptions rule again"
+
+
+def test_azure_ui_has_no_subscription_toggle():
+    """The Azure connector UI must not render a per-subscription switch.
+
+    Resolved relative to this file, not the cwd: the server container mounts only
+    server/ at /app, so a cwd-relative path silently misses and the check passes
+    vacuously. Skips explicitly when client/ is genuinely absent.
+    """
+    component = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "../../../client/src/components/azure-provider-integration.tsx",
+    )
+    if not os.path.exists(component):
+        pytest.skip("client/ not present in this checkout")
+    src = _read(component)
+    assert "showToggle={false}" in src, "Azure subscription toggle is rendered again"
+    assert "saveProjects" not in src, "UI still posts a subscription selection"
+
+
+# --- Login reconciles removals -----------------------------------------------
+
+def test_subscription_listing_follows_nextlink():
+    """A truncated list would make login deactivate valid subscriptions.
+
+    Login now deactivates any persisted subscription absent from this list, so if
+    ARM paginates and only page one is read, every subscription past the first page
+    is marked inactive and silently drops out of fan-out.
+    """
+    src = _read(SUBSCRIPTIONS_MOD)
+    match = re.search(r"^def fetch_subscriptions\(.*?(?=^def |\Z)", src, re.S | re.M)
+    assert match, "fetch_subscriptions not found"
+    ns = {"requests": None, "logging": logging}
+
+    pages = [
+        {"value": [{"subscriptionId": "s0", "state": "Enabled"},
+                   {"subscriptionId": "s1", "state": "Enabled"}],
+         "nextLink": "https://management.azure.com/next"},
+        {"value": [{"subscriptionId": "s2", "state": "Enabled"}]},
+    ]
+    seen_urls = []
+
+    class _Resp:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self._payload
+
+    def _get(url, **_kw):
+        seen_urls.append(url)
+        return _Resp(pages[len(seen_urls) - 1])
+
+    ns["requests"] = typing.cast(typing.Any, types.SimpleNamespace(get=_get))
+    exec(match.group(0), ns)
+
+    out = ns["fetch_subscriptions"]("token")
+    assert [s["subscriptionId"] for s in out] == ["s0", "s1", "s2"], \
+        "nextLink was not followed; subscription list is truncated"
+    assert seen_urls[1].endswith("/next"), "second request did not use nextLink"
+
+
+def test_subscription_listing_fails_closed_at_page_cap():
+    """Hitting the page cap must not return a partial list.
+
+    azure_login deactivates persisted subscriptions absent from this list, so a
+    truncated list would deactivate valid subscriptions. The raise is caught by
+    fetch_subscriptions' own handler and becomes [], which login's empty-list guard
+    rejects before any reconciliation runs.
+    """
+    src = _read(SUBSCRIPTIONS_MOD)
+    match = re.search(r"^def fetch_subscriptions\(.*?(?=^def |\Z)", src, re.S | re.M)
+    calls = []
+
+    class _Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            # Always another page: the cap is the only thing that can stop this.
+            return {"value": [{"subscriptionId": f"s{len(calls)}", "state": "Enabled"}],
+                    "nextLink": "https://management.azure.com/next"}
+
+    def _get(url, **_kw):
+        calls.append(url)
+        return _Resp()
+
+    ns = {"requests": typing.cast(typing.Any, types.SimpleNamespace(get=_get)), "logging": logging}
+    exec(match.group(0), ns)
+
+    assert ns["fetch_subscriptions"]("token") == [], \
+        "page cap returned a partial list; login would deactivate the missing subscriptions"
+    assert len(calls) == 50, f"paging was not bounded at 50 pages (made {len(calls)} calls)"
+
+
+def test_subscription_listing_returns_empty_on_failure():
+    """Failure must yield [], which trips login's existing 'no subscriptions' 400.
+
+    Returning a partial list here instead would let the reconcile in azure_login
+    deactivate subscriptions just because ARM was briefly unreachable.
+    """
+    src = _read(SUBSCRIPTIONS_MOD)
+    match = re.search(r"^def fetch_subscriptions\(.*?(?=^def |\Z)", src, re.S | re.M)
+
+    def _boom(_url, **_kw):
+        raise RuntimeError("ARM unreachable")
+
+    ns = {"requests": typing.cast(typing.Any, types.SimpleNamespace(get=_boom)), "logging": logging}
+    exec(match.group(0), ns)
+    assert ns["fetch_subscriptions"]("token") == []
+
+
+def test_login_deactivates_subscriptions_that_lost_access():
+    """Login is the only writer of these rows, so it must reconcile removals."""
+    src = _read("connectors/azure_connector/auth.py")
+    match = re.search(r"enabled_ids\s*=.*?(?=\n            logging\.info)", src, re.S)
+    assert match, "login does not compute the enabled-subscription set"
+    body = match.group(0)
+    assert "delete_connection_secret" in body, \
+        "login never deactivates subscriptions that are no longer accessible"
+    assert "not in enabled_ids" in body, \
+        "deactivation is not keyed on absence from the current enabled set"
+
+
+# --- one safety check per fanned-out command ----------------------------------
+
+def _guarded_runner(ran):
+    """terminal_run stand-in that runs the executor's real guardrail check.
+
+    The real terminal_run skips that check for trusted calls (the az login) and
+    turns a block into exit 126; this does the same.
+    """
+    from utils.terminal.terminal_run import _check_guardrails
+
+    def run_command(argv, **kw):
+        if not kw.get("trusted"):
+            blocked = _check_guardrails(argv)
+            if blocked is not None:
+                return type("R", (), {"returncode": 126, "stdout": "", "stderr": blocked.stderr})()
+            ran.append(list(argv))
+        return type("R", (), {"returncode": 0, "stdout": "[]", "stderr": ""})()
+
+    return run_command
+
+
+def _count_full_checks(monkeypatch, blocked=False):
+    """Count the executor's signature + judge calls (utils.security.command_safety.evaluate_command)."""
+    calls, lock = [], threading.Lock()
+
+    def evaluate_command(cmd, **_kwargs):
+        with lock:
+            calls.append(cmd)
+        return types.SimpleNamespace(blocked=blocked, reason="blocked by test")
+
+    monkeypatch.setattr("utils.security.command_safety.evaluate_command", evaluate_command)
+    return calls
+
+
+def test_fanout_does_not_judge_a_gate_approved_command_again(monkeypatch):
+    """The gate judged `az vm list` once. Each worker adds --subscription, which
+    used to change the hash and send every subscription back to the judge."""
+    import json as _json
+    from utils.auth import command_gate
+
+    full_checks = _count_full_checks(monkeypatch)
+    ran, config_dirs = [], []
+    fanout, _ = _load_fanout(_guarded_runner(ran), config_dirs)
+    conns = [{"account_id": f"sub-{i}"} for i in range(4)]
+    gated = "az vm list"
+    command_gate._guardrails_approved_command.set(command_gate._hash(gated))
+    try:
+        out = _json.loads(fanout("u", conns, "vm list", gated_command=gated))
+        # Worker contexts are copies: the caller still holds the gate's own approval.
+        assert command_gate.guardrails_approved_hash() == command_gate._hash(gated)
+    finally:
+        command_gate._guardrails_approved_command.set(None)
+
+    assert out["success"] is True
+    assert len(ran) == 4 and all("--subscription" in argv for argv in ran)
+    assert full_checks == [], "a gate-approved command was judged again in the fan-out"
+
+
+def test_fanout_without_a_gate_approval_keeps_the_full_check_per_subscription(monkeypatch):
+    import json as _json
+
+    full_checks = _count_full_checks(monkeypatch)
+    ran, config_dirs = [], []
+    fanout, _ = _load_fanout(_guarded_runner(ran), config_dirs)
+    conns = [{"account_id": f"sub-{i}"} for i in range(3)]
+
+    out = _json.loads(fanout("u", conns, "vm list", gated_command="az vm list"))
+
+    assert out["success"] is True
+    assert sorted(full_checks) == sorted(f"az vm list --subscription sub-{i}" for i in range(3))
+
+
+def test_fanout_does_not_carry_an_approval_onto_a_command_the_signature_matcher_flags(monkeypatch):
+    """Quote-splitting hides `rm -rf /` from a check of the raw string. The argv
+    each worker runs has it back together, so every worker keeps the full check."""
+    import json as _json
+    from utils.auth import command_gate
+    from utils.security.signature_match import check_signature
+
+    command = "vm run-command invoke --scripts 'r''m -rf /'"
+    gated = "az " + command
+    assert check_signature(gated).matched is False
+    full_checks = _count_full_checks(monkeypatch, blocked=True)
+    ran, config_dirs = [], []
+    # Agent mode: this test is about the guardrail, not the Ask-mode classifier.
+    fanout, _ = _load_fanout(_guarded_runner(ran), config_dirs, mode="agent")
+    conns = [{"account_id": "sub-a"}, {"account_id": "sub-b"}]
+    command_gate._guardrails_approved_command.set(command_gate._hash(gated))
+    try:
+        out = _json.loads(fanout("u", conns, command, gated_command=gated))
+    finally:
+        command_gate._guardrails_approved_command.set(None)
+
+    assert ran == [], "a signature-flagged command ran on a carried approval"
+    assert len(full_checks) == 2
+    assert out["success"] is False
+    assert all(r["return_code"] == 126 for r in out["results_by_subscription"].values())
+
+
+def _load_aws_fanout(run_command):
+    """Exec the real AWS multi-account fan-out with faked module-level dependencies."""
+    src = _read(CLOUD_EXEC)
+    match = re.search(r"^def _cloud_exec_aws_multi_account\(.*?(?=^def )", src, re.S | re.M)
+    assert match, "_cloud_exec_aws_multi_account not found"
+    ns = {
+        "shlex": shlex, "json": json, "time": time, "contextvars": __import__("contextvars"),
+        "Optional": typing.Optional, "logger": logging.getLogger("test"),
+        "get_mode_from_context": lambda: "agent",
+        "ModeAccessController": type("M", (), {
+            "ensure_cloud_command_allowed": staticmethod(lambda m, ro, c, reason="": (True, "")),
+        }),
+        "ask_mode_permits": lambda _user_id, _command: True,
+        "describe_rejection": lambda _command: "",
+        "setup_aws_environment_isolated": lambda user_id, selected_region=None, target_account_id=None: (
+            True, selected_region, "assume_role", {"AWS_ACCESS_KEY_ID": "test"},
+        ),
+        "get_command_timeout": lambda c, t: t or 60,
+        "terminal_run": run_command,
+    }
+    exec(match.group(0), ns)
+    return ns["_cloud_exec_aws_multi_account"]
+
+
+def test_aws_fanout_does_not_judge_a_gate_approved_command_again(monkeypatch):
+    from utils.auth import command_gate
+
+    full_checks = _count_full_checks(monkeypatch)
+    ran = []
+    fanout = _load_aws_fanout(_guarded_runner(ran))
+    conns = [{"account_id": "111111111111", "region": "us-east-1"},
+             {"account_id": "222222222222", "region": "eu-west-1"}]
+    gated = "aws ec2 describe-instances"
+    command_gate._guardrails_approved_command.set(command_gate._hash(gated))
+    try:
+        out = json.loads(fanout("u", conns, "ec2 describe-instances", gated_command=gated))
+    finally:
+        command_gate._guardrails_approved_command.set(None)
+
+    assert out["success"] is True and out["accounts_queried"] == 2
+    assert sorted(argv[argv.index("--region") + 1] for argv in ran) == ["eu-west-1", "us-east-1"]
+    assert full_checks == [], "a gate-approved command was judged again in the fan-out"
+
+
+def test_aws_fanout_keeps_the_full_check_when_the_worker_runs_another_program(monkeypatch):
+    """`aws_completer` starts with "aws", so the worker runs it bare while the
+    gate judged `aws aws_completer`. The judge never read what runs, so every
+    account's executor check has to run."""
+    from utils.auth import command_gate
+
+    full_checks = _count_full_checks(monkeypatch)
+    ran = []
+    fanout = _load_aws_fanout(_guarded_runner(ran))
+    conns = [{"account_id": "111111111111", "region": "us-east-1"},
+             {"account_id": "222222222222", "region": "eu-west-1"}]
+    gated = "aws aws_completer"
+    command_gate._guardrails_approved_command.set(command_gate._hash(gated))
+    try:
+        json.loads(fanout("u", conns, "aws_completer", gated_command=gated))
+    finally:
+        command_gate._guardrails_approved_command.set(None)
+
+    assert {argv[0] for argv in ran} == {"aws_completer"}
+    assert sorted(full_checks) == [
+        "aws_completer --region eu-west-1",
+        "aws_completer --region us-east-1",
+    ]
+
+
+def test_aws_fanout_without_a_gate_approval_keeps_the_full_check_per_account(monkeypatch):
+    full_checks = _count_full_checks(monkeypatch)
+    ran = []
+    fanout = _load_aws_fanout(_guarded_runner(ran))
+    conns = [{"account_id": "111111111111", "region": "us-east-1"},
+             {"account_id": "222222222222", "region": "eu-west-1"}]
+
+    out = json.loads(fanout("u", conns, "ec2 describe-instances"))
+
+    assert out["success"] is True
+    assert len(full_checks) == 2

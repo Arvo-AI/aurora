@@ -4,7 +4,6 @@ Handles incoming messages with @Aurora mentions.
 """
 
 import logging
-import re
 import json
 import os
 from flask import Blueprint, request, jsonify
@@ -12,17 +11,30 @@ from connectors.slack_connector.client import get_slack_client_for_user, SlackCl
 from utils.db.connection_pool import db_pool
 from routes.slack.slack_events_helpers import (
     verify_slack_signature,
-    get_user_id_from_slack_user,
     get_user_id_from_slack_team,
     get_thread_messages,
     get_channel_context_with_threads,
     get_session_from_thread,
-    send_message_to_aurora
+    send_message_to_aurora,
+    format_asked_by,
+    mention_bot_ids,
+    strip_bot_mentions,
+    describe_slack_sender,
+    classify_slack_sender,
+    org_allows_unregistered_slack,
+    aurora_user_for_slack_sender,
 )
 from utils.secrets.secret_ref_utils import get_user_token_data
 from chat.background.task import run_background_chat
 from utils.auth.stateless_auth import set_rls_context
 from utils.log_sanitizer import sanitize
+from routes.slack.slack_onboarding import (
+    DEMO_ACTION_ID,
+    LINK_ACTION_PREFIX,
+    is_demo_request,
+    publish_home_task,
+    run_demo_incident_task,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,231 +62,354 @@ _GITHUB_CLOSE_TIMEOUT = 5
 _HPA_VPA_VIEW_PR_PREFIX = "hpa_vpa_view_pr_"
 
 
+def _handle_member_joined(event: dict, team_id: str | None) -> None:
+    """Register a channel when Aurora itself is added to it.
+
+    member_joined_channel fires for *every* user joining *any* channel, so we
+    act only when the joiner is Aurora's own bot user. Best-effort and fully
+    swallowed — a Slack webhook must always return 200 quickly.
+    """
+    try:
+        joined_user = event.get('user')
+        channel_id = event.get('channel')
+        if not joined_user or not channel_id or not team_id:
+            return
+
+        # Resolve the Aurora account that owns this workspace's Slack connection.
+        aurora_user_id = get_user_id_from_slack_team(team_id)
+        if not aurora_user_id:
+            return
+
+        # Only react to Aurora's OWN join. If we stored the bot user id, match on
+        # it directly (a positive identity confirmation). Older installs without
+        # it fall back to a membership check, which can't distinguish Aurora
+        # joining from a human joining a channel Aurora is already in — harmless
+        # now that registration is idempotent under membership-as-truth.
+        bot_user_id = (get_user_token_data(aurora_user_id, "slack") or {}).get("bot_user_id")
+        if bot_user_id:
+            # Not Aurora's join — ignore.
+            if joined_user != bot_user_id:
+                return
+        else:
+            client = get_slack_client_for_user(aurora_user_id)
+            info = client.get_channel_info(channel_id) if client else None
+            if not info or not info.get("is_member"):
+                logger.debug("member_joined_channel: bot not a member of %s; skipping",
+                             sanitize(channel_id))
+                return
+
+        from routes.slack.slack_channels import register_single_channel
+        register_single_channel(aurora_user_id, channel_id, team_id=team_id)
+    except Exception:
+        logger.warning("Error handling member_joined_channel", exc_info=True)
+
+
+def process_event_callback(data: dict) -> None:
+    """Process a Slack ``event_callback`` payload.
+
+    Transport-agnostic core shared by the HTTP Events API webhook
+    (:func:`slack_events`) and the Socket Mode listener
+    (``services.slack.socket_mode``). Callers are responsible for
+    authenticating the payload first — the webhook verifies the Slack
+    signature, Socket Mode trusts the app-token-authenticated WebSocket. This
+    function never raises: a Slack delivery must always be acknowledged.
+    """
+    try:
+        if data.get('type') != 'event_callback':
+            return
+
+        event = data.get('event', {})
+        event_type = event.get('type')
+
+        # Handle app_mention events (when someone @mentions Aurora)
+        if event_type == 'app_mention':
+            # Extract event details first
+            channel = event.get('channel')
+            ts = event.get('ts')  # Current message timestamp
+            thread_ts = event.get('thread_ts') or event.get('ts')  # Parent thread timestamp
+            slack_user_id = event.get('user')  # Slack user ID of person who @mentioned
+            text = event.get('text', '')
+            team_id = data.get('team_id')
+            
+            client = None
+            response_text = None
+            trigger_background = False
+            user_id = None  # Aurora user the chat runs as
+            asked_by = None  # Slack display name, when users.info returned one
+            as_general_viewer = False
+            label_user_id = None  # Who connected Slack; channel names live on their rows
+
+            try:
+                # 1. Resolve Identity and Client
+                # Bots first so a mention loop never calls users.info.
+                if event.get('bot_id') or event.get('subtype') == 'bot_message':
+                    logger.info("Ignoring @mention from a bot in team %s", sanitize(team_id))
+                elif not slack_user_id or not team_id:
+                    logger.info("Ignoring @mention with no Slack user or team")
+                else:
+                    sender = describe_slack_sender(slack_user_id, team_id)
+                    workspace_user_id = sender["workspace_user_id"]
+                    label_user_id = workspace_user_id
+                    # Replies use the workspace bot token. The chat still runs as the sender.
+                    if workspace_user_id:
+                        client = get_slack_client_for_user(workspace_user_id)
+                    if not client:
+                        logger.error("Failed to create Slack client for workspace %s", sanitize(team_id))
+                    else:
+                        # Read the toggle only when this person has no account to run as.
+                        allow_unregistered = False
+                        if not sender["matched_user_id"] and not sender["installer_user_id"]:
+                            if sender["member"] and sender["org_id"]:
+                                allow_unregistered = org_allows_unregistered_slack(sender["org_id"])
+                        user_id, as_general_viewer, refusal = classify_slack_sender(
+                            matched_user_id=sender["matched_user_id"],
+                            installer_user_id=sender["installer_user_id"],
+                            is_full_member=sender["member"] is not None,
+                            workspace_user_id=workspace_user_id,
+                            allow_unregistered=allow_unregistered,
+                        )
+                        if refusal:
+                            logger.info(
+                                "Refusing Slack user %s in workspace %s",
+                                sanitize(slack_user_id), sanitize(team_id),
+                            )
+                            response_text = refusal
+                        else:
+                            member = sender["member"] or {}
+                            asked_by = member.get("display_name")
+                            # Guest questions are checked as a general viewer, not the connector owner.
+                            if as_general_viewer:
+                                logger.info(
+                                    "Slack user %s has no Aurora account; answering as a general viewer",
+                                    sanitize(slack_user_id),
+                                )
+                            else:
+                                logger.info(
+                                    "Slack user %s resolved to Aurora user %s",
+                                    sanitize(slack_user_id), sanitize(user_id),
+                                )
+                
+                # 2. Logic processing (if no errors yet and client exists)
+                if client and not response_text:
+                    # Drop Aurora's mention only. Other <@USERID> tokens are who to tag.
+                    bot_user_ids = mention_bot_ids(data.get("authorizations"))
+                    # Some deliveries omit authorizations; the install stored our bot id.
+                    if not bot_user_ids:
+                        stored_bot = (get_user_token_data(user_id, "slack") or {}).get("bot_user_id")
+                        bot_user_ids = mention_bot_ids(None, stored_bot)
+                    clean_msg = strip_bot_mentions(text, bot_user_ids)
+
+                    # Bare @Aurora with no question — send the intro, don't start a chat.
+                    if not clean_msg:
+                        response_text = (
+                            "Hi! I'm Aurora, your AI SRE assistant.\n\n"
+                            "You can ask me questions about your infrastructure, incidents, or anything else!\n"
+                            "For example: \"@Aurora my pods are failing in my production cluster. What's going on?\"\n"
+                            "New here? Try \"@Aurora demo\" to watch me work a sample incident."
+                        )
+                    elif is_demo_request(clean_msg):
+                        # Canned sample incident, played in this thread. No chat, no data access.
+                        run_demo_incident_task.delay(team_id, channel, thread_ts)
+                    else:
+                        from utils.auth.stateless_auth import get_org_id_for_user
+                        from utils.auth.viewer_run import viewer_may_run
+
+                        org_id = get_org_id_for_user(user_id)
+                        # Guests were already allowed by the manage-page toggle.
+                        # An Aurora viewer still follows the Access tab switch.
+                        if not as_general_viewer and org_id and not viewer_may_run(user_id, org_id):
+                            response_text = "Starting a chat isn't enabled for your role. Ask an admin to turn it on."
+                        else:
+                            response_text = "Thinking..."
+                            trigger_background = True
+                            # <@USERID> is the only form Slack will notify on.
+                            text = format_asked_by(slack_user_id, asked_by, clean_msg)
+
+                # 3. Execution
+                if client:
+                    if response_text:
+                        try:
+                            if trigger_background:
+                                # Determine session logic early to know if we need channel context
+                                msg_thread_ts = event.get('thread_ts')
+                                
+                                incident_id = None
+                                session_id = None
+                                context_messages = []
+                                channel_context = None
+                                final_thread_ts = None
+                                
+                                if msg_thread_ts and msg_thread_ts != ts:
+                                    # Reply in thread — send "Thinking..." then fetch thread context
+                                    sent_msg = client.send_message(
+                                        channel=channel, 
+                                        text=response_text, 
+                                        thread_ts=thread_ts
+                                    )
+                                    session_id, incident_id = get_session_from_thread(
+                                        user_id, channel, msg_thread_ts,
+                                        access_as="general_viewer" if as_general_viewer else None,
+                                    )
+                                    context_messages = get_thread_messages(client, channel, msg_thread_ts)
+                                    final_thread_ts = msg_thread_ts
+                                else:
+                                    # New top-level message — parallelize "Thinking..." send with channel context fetch
+                                    from concurrent.futures import ThreadPoolExecutor
+                                    with ThreadPoolExecutor(max_workers=2) as pool:
+                                        thinking_future = pool.submit(
+                                            client.send_message,
+                                            channel=channel,
+                                            text=response_text,
+                                            thread_ts=thread_ts
+                                        )
+                                        context_future = pool.submit(
+                                            get_channel_context_with_threads, client, channel, 5
+                                        )
+                                        sent_msg = thinking_future.result()
+                                        channel_context = context_future.result()
+                                    final_thread_ts = ts
+                            else:
+                                # Non-background response (e.g. auth error) — just send normally
+                                client.send_message(
+                                    channel=channel, 
+                                    text=response_text, 
+                                    thread_ts=thread_ts
+                                )
+                            
+                            if trigger_background and sent_msg:
+                                thinking_ts = sent_msg.get('ts')
+                                
+                                logger.info("Processing @Aurora mention in channel %s, thread %s", channel, final_thread_ts)
+                                
+                                send_message_to_aurora(
+                                    user_id=user_id,
+                                    message_text=text,
+                                    channel=channel,
+                                    thread_ts=final_thread_ts,
+                                    incident_id=incident_id,
+                                    session_id=session_id,
+                                    context_messages=context_messages,
+                                    channel_context=channel_context,
+                                    thinking_message_ts=thinking_ts,
+                                    label_user_id=label_user_id,
+                                    access_as="general_viewer" if as_general_viewer else None,
+                                    slack_user_id=slack_user_id,
+                                )
+                        except Exception as e:
+                            logger.error(f"Failed to send message to Slack: {e}")
+                            # Try to inform user if main message failed
+                            try:
+                                client.send_message(
+                                    channel=channel, 
+                                    text="Sorry, something went wrong while processing your request.", 
+                                    thread_ts=thread_ts
+                                )
+                            # Best-effort fallback notice; nothing left to do if even this fails.
+                            except Exception:
+                                logger.warning("Failed to send fallback error message to Slack", exc_info=True)
+
+            except Exception as e:
+                logger.error(f"Error processing app_mention: {e}", exc_info=True)
+                # Try to send error message if client available and we haven't sent a response yet
+                if client and not response_text:
+                     try:
+                         client.send_message(
+                             channel=channel, 
+                             text="Sorry, something went wrong processing your request.", 
+                             thread_ts=thread_ts
+                         )
+                     # Best-effort fallback notice; nothing left to do if even this fails.
+                     except Exception:
+                         logger.warning("Failed to send fallback error message to Slack", exc_info=True)
+            
+                return
+
+        # Someone opened Aurora's Home tab: render the setup checklist.
+        if event_type == 'app_home_opened':
+            if event.get('tab') == 'home' and event.get('user') and data.get('team_id'):
+                publish_home_task.delay(data['team_id'], event['user'])
+            return
+
+        # Aurora was added to a channel (e.g. an incident.io-created one) —
+        # auto-register + describe it so it becomes a routing target.
+        if event_type == 'member_joined_channel':
+            _handle_member_joined(event, data.get('team_id'))
+            return
+
+        # Nothing to do for other event types.
+        return
+
+    except Exception as e:
+        logger.error(f"Error handling Slack event: {e}", exc_info=True)
+        return  # Swallow: a Slack delivery must always be acknowledged.
+
+
 @slack_events_bp.route("/events", methods=["POST"])
 def slack_events():
     """
     Slack Events API webhook endpoint.
     Handles @Aurora mentions and routes them to the chat system.
+
+    Thin transport wrapper: verifies the Slack signature, answers the
+    url_verification challenge, then hands the payload to
+    :func:`process_event_callback`. Socket Mode reuses that same core without
+    going through this route.
     """
     try:
         # Get raw request body for signature verification
         raw_body = request.get_data()
         timestamp = request.headers.get('X-Slack-Request-Timestamp', '')
         signature = request.headers.get('X-Slack-Signature', '')
-        
+
         # Verify request came from Slack
         if not verify_slack_signature(raw_body, timestamp, signature):
             logger.warning("Invalid Slack signature")
             return jsonify({"error": "Invalid signature"}), 403
-        
+
         # Parse JSON payload
         data = request.get_json()
-        
+
         # Handle Slack URL verification challenge
         if data.get('type') == 'url_verification':
             return jsonify({"challenge": data.get('challenge')})
-        
-        # Handle events
-        if data.get('type') == 'event_callback':
-            event = data.get('event', {})
-            event_type = event.get('type')
-            
-            # Handle app_mention events (when someone @mentions Aurora)
-            if event_type == 'app_mention':
-                # Extract event details first
-                channel = event.get('channel')
-                ts = event.get('ts')  # Current message timestamp
-                thread_ts = event.get('thread_ts') or event.get('ts')  # Parent thread timestamp
-                slack_user_id = event.get('user')  # Slack user ID of person who @mentioned
-                text = event.get('text', '')
-                team_id = data.get('team_id')
-                
-                client = None
-                response_text = None
-                trigger_background = False
-                user_id = None # Aurora user ID
 
-                try:
-                    # 1. Resolve Identity and Client
-                    user_id = get_user_id_from_slack_user(slack_user_id, team_id)
-                    
-                    if user_id:
-                        # User is connected and verified
-                        client = get_slack_client_for_user(user_id)
-                        if not client:
-                            logger.error(f"Failed to create client for user {user_id}")
-                    else:
-                        # User not connected. Check if workspace is connected by anyone else.
-                        workspace_user_id = get_user_id_from_slack_team(team_id)
-                        if workspace_user_id:
-                            # Use workspace credentials to send a helpful error message
-                            token_data = get_user_token_data(workspace_user_id, "slack")
-                            if token_data:
-                                client = SlackClient(token_data.get('access_token'))
-                                response_text = (
-                                    "You're not authenticated in Aurora.\n\n"
-                                    f"To use Aurora in this Slack workspace, please connect your Aurora account:\n{FRONTEND_URL}/settings/integrations\n\n"
-                                    "Click 'Connect' for Slack and authorize this workspace."
-                                )
-                    
-                    # 2. Logic processing (if no errors yet and client exists)
-                    if client and not response_text:
-                        # Remove @Aurora mention from text
-                        clean_msg = re.sub(r'<@[A-Z0-9]+>', '', text).strip()
-                        
-                        if not clean_msg:
-                            response_text = (
-                                "Hi! I'm Aurora, your AI SRE assistant.\n\n"
-                                "You can ask me questions about your infrastructure, incidents, or anything else!\n"
-                                "For example: \"@Aurora my pods are failing in my production cluster. What's going on?\""
-                            )
-                        else:
-                            response_text = "Thinking..."
-                            trigger_background = True
-                            # Update text to cleaned version for background task
-                            text = clean_msg 
-
-                    # 3. Execution
-                    if client:
-                        if response_text:
-                            try:
-                                if trigger_background:
-                                    # Determine session logic early to know if we need channel context
-                                    msg_thread_ts = event.get('thread_ts')
-                                    
-                                    incident_id = None
-                                    session_id = None
-                                    context_messages = []
-                                    channel_context = None
-                                    final_thread_ts = None
-                                    
-                                    if msg_thread_ts and msg_thread_ts != ts:
-                                        # Reply in thread — send "Thinking..." then fetch thread context
-                                        sent_msg = client.send_message(
-                                            channel=channel, 
-                                            text=response_text, 
-                                            thread_ts=thread_ts
-                                        )
-                                        session_id, incident_id = get_session_from_thread(user_id, channel, msg_thread_ts)
-                                        context_messages = get_thread_messages(client, channel, msg_thread_ts)
-                                        final_thread_ts = msg_thread_ts
-                                    else:
-                                        # New top-level message — parallelize "Thinking..." send with channel context fetch
-                                        from concurrent.futures import ThreadPoolExecutor
-                                        with ThreadPoolExecutor(max_workers=2) as pool:
-                                            thinking_future = pool.submit(
-                                                client.send_message,
-                                                channel=channel,
-                                                text=response_text,
-                                                thread_ts=thread_ts
-                                            )
-                                            context_future = pool.submit(
-                                                get_channel_context_with_threads, client, channel, 5
-                                            )
-                                            sent_msg = thinking_future.result()
-                                            channel_context = context_future.result()
-                                        final_thread_ts = ts
-                                else:
-                                    # Non-background response (e.g. auth error) — just send normally
-                                    client.send_message(
-                                        channel=channel, 
-                                        text=response_text, 
-                                        thread_ts=thread_ts
-                                    )
-                                
-                                if trigger_background and sent_msg:
-                                    thinking_ts = sent_msg.get('ts')
-                                    
-                                    logger.info("Processing @Aurora mention in channel %s, thread %s", channel, final_thread_ts)
-                                    
-                                    send_message_to_aurora(
-                                        user_id=user_id,
-                                        message_text=text,
-                                        channel=channel,
-                                        thread_ts=final_thread_ts,
-                                        incident_id=incident_id,
-                                        session_id=session_id,
-                                        context_messages=context_messages,
-                                        channel_context=channel_context,
-                                        thinking_message_ts=thinking_ts,
-                                    )
-                            except Exception as e:
-                                logger.error(f"Failed to send message to Slack: {e}")
-                                # Try to inform user if main message failed
-                                try:
-                                    client.send_message(
-                                        channel=channel, 
-                                        text="Sorry, something went wrong while processing your request.", 
-                                        thread_ts=thread_ts
-                                    )
-                                except:
-                                    pass
-
-                except Exception as e:
-                    logger.error(f"Error processing app_mention: {e}", exc_info=True)
-                    # Try to send error message if client available and we haven't sent a response yet
-                    if client and not response_text:
-                         try:
-                             client.send_message(
-                                 channel=channel, 
-                                 text="Sorry, something went wrong processing your request.", 
-                                 thread_ts=thread_ts
-                             )
-                         except:
-                             pass
-                
-                return jsonify({"ok": True}), 200
-        
-        # Acknowledge other events
+        # Shared core (also used by Socket Mode)
+        process_event_callback(data)
         return jsonify({"ok": True}), 200
-        
+
     except Exception as e:
         logger.error(f"Error handling Slack event: {e}", exc_info=True)
         return jsonify({"ok": True}), 200  # Always acknowledge to Slack
 
 
-@slack_events_bp.route("/interactions", methods=["POST"])
-def slack_interactions():
-    """
-    Slack Interactive Components webhook endpoint.
-    Handles button clicks, dropdowns, and other interactive elements.
+def process_interaction(payload: dict) -> dict:
+    """Dispatch a Slack interactivity ``payload`` to the right handler.
+
+    Transport-agnostic core shared by the HTTP interactivity webhook
+    (:func:`slack_interactions`) and the Socket Mode listener. Returns the
+    response body Slack expects as a plain dict (the webhook ``jsonify``s it;
+    Socket Mode acks the envelope and, when a non-empty body is returned,
+    posts it back over the socket). Callers authenticate the payload first.
+    Never raises.
     """
     try:
-        # Get raw request body for signature verification
-        raw_body = request.get_data()
-        timestamp = request.headers.get('X-Slack-Request-Timestamp', '')
-        signature = request.headers.get('X-Slack-Signature', '')
-        
-        # Verify request came from Slack
-        if not verify_slack_signature(raw_body, timestamp, signature):
-            logger.warning("Invalid Slack signature on interaction")
-            return jsonify({"error": "Invalid signature"}), 403
-        
-        # Parse payload (comes as form-encoded)
-        payload_str = request.form.get('payload')
-        if not payload_str:
-            logger.error("No payload in interaction request")
-            return jsonify({"error": "No payload"}), 400
-        
-        payload = json.loads(payload_str)
-        
         # Extract key information
         interaction_type = payload.get('type')
         team_id = payload['team']['id']
         slack_user_id = payload['user']['id']
         channel_id = payload.get('channel', {}).get('id')
-        
+
         logger.info(f"Received Slack interaction: type={sanitize(interaction_type)}, user={sanitize(slack_user_id)}, team={sanitize(team_id)}")
-        
+
         # Handle button actions
         if interaction_type == 'block_actions':
             actions = payload.get('actions', [])
             if not actions:
-                return jsonify({"text": "No action specified"}), 200
-            
+                return {"text": "No action specified"}
+
             action = actions[0]  # Handle first action
             action_id = action.get('action_id', '')
-            
+
             # Handle "Run Suggestion" buttons
             if action_id.startswith('run_suggestion_'):
                 return _handle_run_suggestion(
@@ -284,7 +419,7 @@ def slack_interactions():
                     team_id=team_id,
                     channel_id=channel_id
                 )
-            
+
             # Handle "More details" button
             if action_id.startswith('suggestion_details_'):
                 return _handle_suggestion_details(
@@ -305,20 +440,68 @@ def slack_interactions():
                     channel_id=channel_id
                 )
 
+            # "See a demo incident" from the welcome DM or the App Home. The
+            # Home tab has no channel, so the demo goes to the clicker's DM.
+            if action_id == DEMO_ACTION_ID:
+                run_demo_incident_task.delay(team_id, channel_id or slack_user_id, None)
+                return {"text": ""}
+
+            # Onboarding url buttons open the app; nothing to do server-side.
+            if action_id.startswith(LINK_ACTION_PREFIX):
+                return {"text": ""}
+
             # "View PR" is a url button: ack with an empty body so Slack does not
             # replace the card with the default "Interaction received" text.
             if action_id.startswith(_HPA_VPA_VIEW_PR_PREFIX):
-                return jsonify({"text": ""}), 200
+                return {"text": ""}
 
         # Default response for unhandled interactions
-        return jsonify({"text": "Interaction received"}), 200
-        
+        return {"text": "Interaction received"}
+
+    except Exception as e:
+        logger.error(f"Error handling Slack interaction: {e}", exc_info=True)
+        return {"text": "Sorry, something went wrong processing your action."}
+
+
+@slack_events_bp.route("/interactions", methods=["POST"])
+def slack_interactions():
+    """
+    Slack Interactive Components webhook endpoint.
+    Handles button clicks, dropdowns, and other interactive elements.
+
+    Thin transport wrapper: verifies the Slack signature and parses the
+    form-encoded payload, then hands off to :func:`process_interaction`.
+    """
+    try:
+        # Get raw request body for signature verification
+        raw_body = request.get_data()
+        timestamp = request.headers.get('X-Slack-Request-Timestamp', '')
+        signature = request.headers.get('X-Slack-Signature', '')
+
+        # Verify request came from Slack
+        if not verify_slack_signature(raw_body, timestamp, signature):
+            logger.warning("Invalid Slack signature on interaction")
+            return jsonify({"error": "Invalid signature"}), 403
+
+        # Parse payload (comes as form-encoded)
+        payload_str = request.form.get('payload')
+        if not payload_str:
+            logger.error("No payload in interaction request")
+            return jsonify({"error": "No payload"}), 400
+
+        payload = json.loads(payload_str)
+
+        # Shared core (also used by Socket Mode)
+        return jsonify(process_interaction(payload)), 200
+
     except Exception as e:
         logger.error(f"Error handling Slack interaction: {e}", exc_info=True)
         return jsonify({"text": "Sorry, something went wrong processing your action."}), 200
 
 
-def _handle_run_suggestion(payload: dict, action: dict, slack_user_id: str, team_id: str, channel_id: str) -> tuple:
+
+
+def _handle_run_suggestion(payload: dict, action: dict, slack_user_id: str, team_id: str, channel_id: str) -> dict:
     """
     Handle the "Run Suggestion" button click.
     
@@ -329,7 +512,7 @@ def _handle_run_suggestion(payload: dict, action: dict, slack_user_id: str, team
     """
     try:
         # 1. AUTHENTICATE: Who clicked the button?
-        clicker_user_id = get_user_id_from_slack_user(slack_user_id, team_id)
+        clicker_user_id = aurora_user_for_slack_sender(slack_user_id, team_id)
         
         if not clicker_user_id:
             logger.warning(f"Unauthenticated Slack user {sanitize(slack_user_id)} (team {sanitize(team_id)}) tried to run suggestion")
@@ -354,13 +537,13 @@ def _handle_run_suggestion(payload: dict, action: dict, slack_user_id: str, team
                 except Exception as e:
                     logger.error(f"Failed to send unauthenticated warning to Slack user {sanitize(slack_user_id)}: {e}", exc_info=True)
             
-            return jsonify({"text": ""}), 200
+            return {"text": ""}
         
         # 2. PARSE ACTION: Extract incident_id and suggestion_id
         value = action.get('value', '')  # Format: "incident_id:suggestion_id"
         if ':' not in value:
-            logger.error(f"Invalid action value format: {value}")
-            return jsonify({"text": "Invalid action format"}), 200
+            logger.error(f"Invalid action value format: {sanitize(value)}")
+            return {"text": "Invalid action format"}
         
         incident_id, suggestion_id = value.split(':', 1)
         
@@ -382,7 +565,7 @@ def _handle_run_suggestion(payload: dict, action: dict, slack_user_id: str, team
                 
                 if not row:
                     logger.error(f"Suggestion {suggestion_id} not found for incident {incident_id}")
-                    return jsonify({"text": "WARNING: Suggestion not found"}), 200
+                    return {"text": "WARNING: Suggestion not found"}
                 
                 command, title, risk, _incident_owner_id, incident_org_id, chat_session_id, _owner_email = row
 
@@ -409,7 +592,25 @@ def _handle_run_suggestion(payload: dict, action: dict, slack_user_id: str, team
                 except Exception as e:
                     logger.error(f"Failed to send unauthorized message to Slack user {sanitize(slack_user_id)}: {e}", exc_info=True)
             
-            return jsonify({"text": ""}), 200
+            return {"text": ""}
+
+        # A viewer with chat turned off must not start a background run.
+        from utils.auth.viewer_run import viewer_may_run
+        try:
+            may_run = viewer_may_run(clicker_user_id, clicker_org_id)
+        except Exception:
+            logger.exception("Viewer chat check failed for a Slack suggestion")
+            may_run = False
+        if not may_run:
+            # The clicker may have no personal Slack token. The workspace client
+            # can still tell them why the button did nothing.
+            _send_ephemeral(
+                _slack_client_for_feedback(clicker_user_id, team_id),
+                channel_id,
+                slack_user_id,
+                "Starting a chat isn't enabled for your role. Ask an admin to turn it on.",
+            )
+            return {"text": ""}
         
         # 5. EXECUTE: Run the command with the clicker's credentials
         logger.info(f"User {clicker_user_id} executing suggestion: {title} ({risk} risk)")
@@ -463,19 +664,19 @@ def _handle_run_suggestion(payload: dict, action: dict, slack_user_id: str, team
             logger.info(f"Triggered execution of suggestion {suggestion_id} for user {clicker_user_id}")
             
             # Return success response (updates the button UI)
-            return jsonify({
+            return {
                 "text": f"Executing: {title}\n\nResults will appear in the thread shortly."
-            }), 200
+            }
         else:
             logger.error(f"No chat session found for incident {incident_id}")
-            return jsonify({"text": "WARNING: No chat session found for this incident"}), 200
+            return {"text": "WARNING: No chat session found for this incident"}
     
     except Exception as e:
         logger.error(f"Error handling run_suggestion action: {e}", exc_info=True)
-        return jsonify({"text": "WARNING: Failed to execute command. Please try again."}), 200
+        return {"text": "WARNING: Failed to execute command. Please try again."}
 
 
-def _handle_suggestion_details(payload: dict, action: dict, slack_user_id: str, team_id: str, channel_id: str) -> tuple:
+def _handle_suggestion_details(payload: dict, action: dict, slack_user_id: str, team_id: str, channel_id: str) -> dict:
     """
     Handle the "More details" button click.
     Shows the suggestion description as an ephemeral message (only visible to clicker).
@@ -484,7 +685,7 @@ def _handle_suggestion_details(payload: dict, action: dict, slack_user_id: str, 
     """
     try:
         # 1. AUTHENTICATE: Who clicked?
-        clicker_user_id = get_user_id_from_slack_user(slack_user_id, team_id)
+        clicker_user_id = aurora_user_for_slack_sender(slack_user_id, team_id)
         
         if not clicker_user_id:
             logger.warning(f"Unauthenticated Slack user {sanitize(slack_user_id)} (team {sanitize(team_id)}) tried to view suggestion details")
@@ -508,7 +709,7 @@ def _handle_suggestion_details(payload: dict, action: dict, slack_user_id: str, 
                 except Exception as e:
                     logger.error(f"Failed to send unauthenticated warning to Slack user {sanitize(slack_user_id)}: {e}", exc_info=True)
 
-            return jsonify({"text": ""}), 200
+            return {"text": ""}
 
         # 2. NO OWNERSHIP CHECK - anyone authenticated can view details
         
@@ -516,13 +717,13 @@ def _handle_suggestion_details(payload: dict, action: dict, slack_user_id: str, 
         value = action.get('value', '')
         
         if ':details' not in value:
-            logger.error(f"Invalid details value format: {value}")
-            return jsonify({"text": ""}), 200
+            logger.error(f"Invalid details value format: {sanitize(value)}")
+            return {"text": ""}
         
         # Format: "incident_id:suggestion_id:details"
         parts = value.rsplit(':details', 1)[0]
         if ':' not in parts:
-            return jsonify({"text": ""}), 200
+            return {"text": ""}
         
         incident_id, suggestion_id = parts.split(':', 1)
         
@@ -542,7 +743,7 @@ def _handle_suggestion_details(payload: dict, action: dict, slack_user_id: str, 
                 
                 if not row:
                     logger.error(f"Suggestion {suggestion_id} not found")
-                    return jsonify({"text": ""}), 200
+                    return {"text": ""}
                 
                 title, description, command, stype, risk = row
         
@@ -585,11 +786,11 @@ def _handle_suggestion_details(payload: dict, action: dict, slack_user_id: str, 
                 logger.error(f"Failed to send ephemeral details message to Slack user {sanitize(slack_user_id)}: {e}", exc_info=True)
         
         # Return empty response (interaction already handled)
-        return jsonify({"text": ""}), 200
+        return {"text": ""}
     
     except Exception as e:
         logger.error(f"Error handling suggestion_details action: {e}", exc_info=True)
-        return jsonify({"text": ""}), 200
+        return {"text": ""}
 
 
 def _send_ephemeral(client, channel_id: str, slack_user_id: str, text: str) -> None:
@@ -663,7 +864,7 @@ def _warn_unauthenticated_clicker(slack_user_id: str, team_id: str, channel_id: 
         logger.exception("Failed to warn unauthenticated Slack user %s", sanitize(slack_user_id))
 
 
-def _handle_hpa_vpa_dismiss(payload: dict, action: dict, slack_user_id: str, team_id: str, channel_id: str) -> tuple:
+def _handle_hpa_vpa_dismiss(payload: dict, action: dict, slack_user_id: str, team_id: str, channel_id: str) -> dict:
     """Handle "Dismiss" on a right-sizing recommendation card.
 
     Dismissing means: close the PR and do not raise this workload again for
@@ -688,10 +889,10 @@ def _handle_hpa_vpa_dismiss(payload: dict, action: dict, slack_user_id: str, tea
 
     try:
         # 1. AUTHENTICATE: who clicked?
-        clicker_user_id = get_user_id_from_slack_user(slack_user_id, team_id)
+        clicker_user_id = aurora_user_for_slack_sender(slack_user_id, team_id)
         if not clicker_user_id:
             _warn_unauthenticated_clicker(slack_user_id, team_id, channel_id)
-            return jsonify({"text": ""}), 200
+            return {"text": ""}
 
         # Resolve a feedback client up-front, falling back to the workspace
         # token. Every branch below reports something, so this must not be None
@@ -710,7 +911,7 @@ def _handle_hpa_vpa_dismiss(payload: dict, action: dict, slack_user_id: str, tea
             _send_ephemeral(client, channel_id, slack_user_id,
                             "Sorry -- this card is malformed and cannot be dismissed. "
                             "Please close the PR on GitHub directly.")
-            return jsonify({"text": ""}), 200
+            return {"text": ""}
 
         # 3. TRANSITION: atomic and idempotent. The status='proposed' predicate
         #    *is* the double-click defence -- a second click matches no rows.
@@ -724,7 +925,7 @@ def _handle_hpa_vpa_dismiss(payload: dict, action: dict, slack_user_id: str, tea
                     _send_ephemeral(client, channel_id, slack_user_id,
                                     "Sorry -- Aurora could not resolve your organization, so this "
                                     "recommendation was not dismissed. Please try again.")
-                    return jsonify({"text": ""}), 200
+                    return {"text": ""}
 
                 # 4. AUTHORIZE: RLS already scopes reads to the clicker's org;
                 #    this exists to give the right message instead of a
@@ -740,7 +941,7 @@ def _handle_hpa_vpa_dismiss(payload: dict, action: dict, slack_user_id: str, tea
                     )
                     _send_ephemeral(client, channel_id, slack_user_id,
                                     "Unauthorized: that recommendation does not belong to your organization.")
-                    return jsonify({"text": ""}), 200
+                    return {"text": ""}
 
                 dismissed = dismiss_recommendation(cursor, rec_id, clicker_org_id, slack_user_id)
                 # Commit before the GitHub call so a slow API cannot hold the row lock.
@@ -750,7 +951,7 @@ def _handle_hpa_vpa_dismiss(payload: dict, action: dict, slack_user_id: str, tea
             logger.info(f"Recommendation {rec_id} was already dismissed; no-op")
             _send_ephemeral(client, channel_id, slack_user_id,
                             "That recommendation was already dismissed.")
-            return jsonify({"text": ""}), 200
+            return {"text": ""}
 
         # 5. CLOSE the PR on whichever VCS hosts it. Close as the account that
         #    opened it -- the clicker is a teammate in the same org who may have
@@ -779,11 +980,11 @@ def _handle_hpa_vpa_dismiss(payload: dict, action: dict, slack_user_id: str, tea
         _rewrite_dismissed_card(client, payload, dismissed, rec_id, channel_id, status_line,
                                 keep_pr_link=keep_pr_link)
 
-        return jsonify({"text": ""}), 200
+        return {"text": ""}
 
     except Exception:
         logger.exception("Error handling hpa_vpa_dismiss action")
-        return jsonify({"text": ""}), 200
+        return {"text": ""}
 
 
 def _clear_cooldown_for_merged_pr(rec_id: str, clicker_user_id: str, clicker_org_id: str) -> bool:

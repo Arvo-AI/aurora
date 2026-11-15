@@ -46,4 +46,16 @@ data:
       {{- end }}
     }
     {{- end }}
+
+    {{- if and .Values.vault.seal (eq .Values.vault.seal.type "azurekeyvault") }}
+    {{- $akv := .Values.vault.seal.azurekeyvault | default dict }}
+    seal "azurekeyvault" {
+      tenant_id  = "{{ required "vault.seal.azurekeyvault.tenant_id is required" $akv.tenant_id }}"
+      vault_name = "{{ required "vault.seal.azurekeyvault.vault_name is required" $akv.vault_name }}"
+      key_name   = "{{ required "vault.seal.azurekeyvault.key_name is required" $akv.key_name }}"
+      {{- if $akv.environment }}
+      environment = "{{ $akv.environment }}"
+      {{- end }}
+    }
+    {{- end }}
 {{- end }}

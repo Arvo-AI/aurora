@@ -5,16 +5,21 @@ from chat.backend.agent.db import PostgreSQLClient
 from chat.backend.agent.llm import LLMManager, ModelConfig
 from chat.backend.agent.model_mapper import ModelMapper
 from chat.backend.agent.providers import create_chat_model, get_registry
-from chat.backend.agent.weaviate_client import WeaviateClient
 from chat.backend.agent.utils.state import State
 from chat.backend.agent.utils.tool_context_capture import ToolContextCapture
 from langchain_core.tools import StructuredTool
 from langchain_openai import ChatOpenAI
 from .tools.cloud_tools import set_websocket_context
 from chat.backend.agent.utils.prefix_cache import PrefixCacheManager
-from chat.backend.agent.utils.cache_control import build_cached_system_prompt
-from chat.backend.agent.prompt.prompt_builder import build_prompt_segments, assemble_system_prompt, register_prompt_cache_breakpoints
+from chat.backend.agent.utils.cache_control import (
+    CACHE_STYLE_BEDROCK,
+    build_cached_system_prompt,
+    resolve_cache_style,
+)
+from chat.backend.agent.utils.usage_normalizer import NormalizedUsage, normalize_usage
+from chat.backend.agent.prompt.prompt_builder import build_prompt_segments, assemble_system_prompt_parts, register_prompt_cache_breakpoints
 from chat.backend.agent.utils.llm_usage_tracker import LLMUsageTracker, LLMUsage
+from services.memory.injector import MemoryPrefetch
 import time
 import asyncio
 from datetime import datetime, timezone
@@ -83,13 +88,12 @@ class _ReasoningChatOpenAI(ChatOpenAI):
         return result
 
 class Agent:
-    def __init__(self, weaviate_client: WeaviateClient, postgres_client: PostgreSQLClient, websocket_sender=None, event_loop=None, ctx_len=10):
+    def __init__(self, postgres_client: PostgreSQLClient, websocket_sender=None, event_loop=None, ctx_len=10) -> None:
         self.llm_manager = LLMManager()
         self.postgres_client = postgres_client
-        self.weaviate_client = weaviate_client
         self.ctx_len = ctx_len
-        self.websocket_sender = websocket_sender  # Store websocket_sender directly
-        self.event_loop = event_loop  # Store event loop for thread-safe async calls
+        self.websocket_sender = websocket_sender
+        self.event_loop = event_loop
 
     def set_tool_capture(self, tool_capture):
         """Set the tool capture instance to be used by this agent."""
@@ -269,7 +273,7 @@ class Agent:
             from langchain.agents import create_agent
             from langchain_core.callbacks import BaseCallbackHandler
             from .tools.cloud_tools import get_cloud_tools, set_user_context, set_tool_capture
-            from .middleware import ContextTrimMiddleware, _ForceToolChoice
+            from .middleware import BedrockPromptCacheMiddleware, ContextTrimMiddleware, _ForceToolChoice
 
             logging.info(f"agentic_tool_flow: State has user_id {state.user_id} and session_id {state.session_id}")
             # Set user context for tools
@@ -347,23 +351,85 @@ class Agent:
                 getattr(state, 'attachments', []),
             )
 
+            # Fire async memory prefetch — runs in parallel with prompt building and tool setup.
+            _memory_prefetch = None
+            if state.user_id and state.session_id:
+                try:
+                    _last_msg_content = ""
+                    if state.messages:
+                        _lm = state.messages[-1]
+                        _last_msg_content = _lm.content if isinstance(getattr(_lm, 'content', ''), str) else str(getattr(_lm, 'content', ''))
+                    if _last_msg_content:
+                        # For sessions that speak on a chat platform (@mention
+                        # replies and the post-RCA team-routing agent), always
+                        # inject the platform policy memory regardless of the
+                        # selector. team_routing has no rca_context, so check
+                        # the raw trigger source too.
+                        _rca_ctx = getattr(state, "rca_context", None) or {}
+                        _src = str(_rca_ctx.get("source") or getattr(state, "trigger_source", None) or "").lower()
+                        from services.memory import (
+                            JIRA_MEMORY_CATEGORY,
+                            JIRA_MEMORY_TITLE,
+                            JIRA_POLICY_SOURCES,
+                            SERVICENOW_MEMORY_CATEGORY,
+                            SERVICENOW_MEMORY_TITLE,
+                            SERVICENOW_POLICY_SOURCES,
+                            policy_entries_for_source,
+                        )
+                        _force_entries = policy_entries_for_source(_src) or None
+                        # Filters mode never reads the Jira policy, so only Auto mode gets it
+                        if _src in JIRA_POLICY_SOURCES:
+                            from routes.jira.jira_routes import get_jira_rca_mode
+                            if get_jira_rca_mode(state.user_id) == "auto":
+                                _force_entries = [(JIRA_MEMORY_CATEGORY, JIRA_MEMORY_TITLE)]
+                        elif _src in SERVICENOW_POLICY_SOURCES:
+                            from routes.servicenow.tasks import get_rca_mode as _get_servicenow_rca_mode
+                            if _get_servicenow_rca_mode(state.user_id) == "auto":
+                                _force_entries = [(SERVICENOW_MEMORY_CATEGORY, SERVICENOW_MEMORY_TITLE)]
+                        _memory_prefetch = MemoryPrefetch(
+                            user_id=state.user_id,
+                            session_id=state.session_id,
+                            user_message=_last_msg_content,
+                            force_entries=_force_entries,
+                        )
+                        _memory_prefetch.start()
+                except Exception as _mpe:
+                    logging.debug("Failed to start memory prefetch: %s", _mpe)
+
             # Build prompt segments in background while getting tools on main thread
             # (get_cloud_tools needs thread-local context for tool_capture/user resolution)
             from concurrent.futures import ThreadPoolExecutor as _TPE
+            import contextvars
+            # The worker starts with an empty context. A Slack guest's pin must come along.
+            _prompt_ctx = contextvars.copy_context()
             with _TPE(max_workers=1) as _pool:
                 _prompt_future = _pool.submit(
+                    _prompt_ctx.run,
                     build_prompt_segments,
-                    provider_preference=provider_preference,
-                    mode=getattr(state, "mode", None),
-                    has_zip_reference=has_zip_ref,
-                    state=state,
+                    provider_preference,
+                    getattr(state, "mode", None),
+                    has_zip_ref,
+                    state,
                 )
                 tools = get_cloud_tools()
                 segments = _prompt_future.result()
 
-            system_prompt_text = assemble_system_prompt(segments)
+            # Collect prefetch result and append injected memories to the prompt
+            if _memory_prefetch:
+                try:
+                    injected = await _memory_prefetch.get_result_async(timeout=6.0)
+                    if injected:
+                        memory_index = segments.knowledge_base_memory or ""
+                        segments.knowledge_base_memory = (memory_index + "\n\n" + injected) if memory_index else injected
+                except Exception:
+                    logging.debug("Memory prefetch result unavailable")
+
+            # Cross-session static prefix first, per-session suffix second; the
+            # prompt-cache breakpoint goes between them (utils/cache_control.py).
+            static_prompt_text, dynamic_prompt_text = assemble_system_prompt_parts(segments)
+            # A sub-agent's role brief is its whole prompt and is stable across its turns
             if system_prompt_override is not None:
-                system_prompt_text = system_prompt_override
+                static_prompt_text, dynamic_prompt_text = system_prompt_override, ""
             if tool_subset is not None:
                 tools = tool_subset
 
@@ -379,7 +445,7 @@ class Agent:
                     prompt_text = ' '.join([p['text'] if isinstance(p, dict) and p.get('type') == 'text' else str(p) for p in last_content])
             # Only include zip-related tools if referenced
             if not self._prompt_references_zip(prompt_text, getattr(state, 'attachments', [])):
-                tools = [t for t in tools if getattr(t, 'name', None) not in ('analyze_zip_file', 'rag_index_zip')]
+                tools = [t for t in tools if getattr(t, 'name', None) not in ('analyze_zip_file',)]
 
             # Register canonicalized prefix + tools with cache middleware.
             # Skip for sub-agents: their `system_prompt_override` (the role brief)
@@ -471,41 +537,32 @@ class Agent:
                         
                         call_info = self.current_calls.pop(run_id)
                         
-                        input_tokens = 0
-                        output_tokens = 0
-
                         # Extract real token counts from provider usage_metadata
-                        cached_input_tokens = 0
+                        norm = NormalizedUsage()
                         if hasattr(response, 'generations'):
                             for gen_list in response.generations:
                                 for gen in gen_list:
                                     msg = getattr(gen, 'message', None)
                                     if msg and getattr(msg, 'usage_metadata', None):
-                                        um = msg.usage_metadata
-                                        input_tokens = um.get('input_tokens', 0)
-                                        output_tokens = um.get('output_tokens', 0)
-                                        details = um.get('input_token_details', {})
-                                        if isinstance(details, dict):
-                                            cached_input_tokens = details.get('cache_read', 0)
+                                        norm = normalize_usage(msg.usage_metadata)
                                         break
-                                if input_tokens > 0:
+                                if norm.input_tokens > 0:
                                     break
 
                         # Also check llm_output for OpenAI-style token_usage
-                        if input_tokens == 0 and hasattr(response, 'llm_output') and response.llm_output:
-                            token_usage = response.llm_output.get('token_usage', {})
-                            input_tokens = token_usage.get('prompt_tokens', 0)
-                            output_tokens = token_usage.get('completion_tokens', 0)
-                            prompt_details = token_usage.get('prompt_tokens_details', {})
-                            if isinstance(prompt_details, dict):
-                                cached_input_tokens = prompt_details.get('cached_tokens', 0)
+                        if norm.input_tokens == 0 and hasattr(response, 'llm_output') and response.llm_output:
+                            norm = normalize_usage(response.llm_output.get('token_usage', {}))
+
+                        input_tokens = norm.input_tokens
+                        output_tokens = norm.output_tokens
 
                         if input_tokens == 0 and output_tokens == 0:
                             logging.warning(f"No provider usage_metadata for {self.model_name} - tokens will be 0")
 
                         estimated_cost = LLMUsageTracker.calculate_cost(
                             input_tokens, output_tokens, self.model_name,
-                            cached_input_tokens=cached_input_tokens,
+                            cached_input_tokens=norm.cache_read_tokens,
+                            cache_write_tokens=norm.cache_write_tokens,
                         )
                         
                         usage = LLMUsage(
@@ -519,7 +576,9 @@ class Agent:
                             estimated_cost=estimated_cost,
                             response_time_ms=int((time.time() - call_info['start_time']) * 1000),
                             error_message=None,
-                            request_metadata={'agent_executor': True}
+                            request_metadata={'agent_executor': True},
+                            cache_read_tokens=norm.cache_read_tokens,
+                            cache_write_tokens=norm.cache_write_tokens,
                         )
                         
                         if LLMUsageTracker.store_usage(usage):
@@ -621,12 +680,20 @@ class Agent:
                     0, _ForceToolChoice("trigger_rca", provider=tool_choice_provider)
                 )
 
-            # Mark the stable system prompt with an Anthropic cache_control
-            # breakpoint so turns 2..N of a session bill the prefix as a 0.1x
-            # cache read. No-op for non-Anthropic models and tiny prompts.
+            # Mark the stable system prompt with a cache breakpoint in the dialect of
+            # the provider actually serving the model (cache_control vs Bedrock
+            # cachePoint). No-op for providers without a style and tiny prompts.
+            serving_provider = get_registry().get_provider(tool_choice_provider)
             system_prompt_for_agent = build_cached_system_prompt(
-                model_name, system_prompt_text
+                model_name,
+                static_prompt_text,
+                dynamic_prompt_text,
+                provider=serving_provider,
             )
+            # Native Bedrock also needs explicit points after the tools and the last
+            # message; appended last so it marks the final request.
+            if resolve_cache_style(serving_provider, model_name) == CACHE_STYLE_BEDROCK:
+                middlewares.append(BedrockPromptCacheMiddleware())
 
             agent_graph = create_agent(
                 model=streaming_llm,

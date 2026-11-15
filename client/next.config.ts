@@ -23,6 +23,12 @@ const nextConfig: NextConfig = {
   eslint: {
     ignoreDuringBuilds: true,
   },
+  experimental: {
+    serverActions: {
+      bodySizeLimit: "50mb",
+    },
+    middlewareClientMaxBodySize: "50mb",
+  },
   cacheMaxMemorySize: 0,
   poweredByHeader: false,
   webpack: (config, { isServer, dev }) => {
@@ -72,7 +78,7 @@ const nextConfig: NextConfig = {
       // Note: Don't alias lodash globally as it breaks recharts dependencies
     }
 
-    // Handle JSZip and other modules that need node polyfills disabled
+    // Browser bundles must not pull Node builtins.
     if (!isServer) {
       config.resolve.fallback = {
         ...config.resolve.fallback,

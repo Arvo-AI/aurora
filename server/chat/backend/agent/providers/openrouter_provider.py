@@ -7,10 +7,12 @@ This provider maintains backward compatibility with the existing Aurora setup.
 
 import logging
 import os
+from typing import Optional
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_openai import ChatOpenAI
 
+from chat.backend.agent.utils.cache_control import CACHE_STYLE_CACHE_CONTROL
 from .base_provider import BaseLLMProvider
 from ..model_mapper import ModelMapper
 
@@ -68,6 +70,12 @@ class OpenRouterProvider(BaseLLMProvider):
     def is_available(self) -> bool:
         """Check if OpenRouter API key is configured."""
         return bool(self.api_key)
+
+    def prompt_cache_style(self, model: str) -> Optional[str]:
+        # OpenAI/Gemini cache implicitly and may reject markers, so tag Claude only
+        if model.split("/", 1)[0].lower() == "anthropic":
+            return CACHE_STYLE_CACHE_CONTROL
+        return None
 
     def supports_model(self, model: str) -> bool:
         """

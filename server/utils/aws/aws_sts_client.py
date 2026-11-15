@@ -221,9 +221,22 @@ class STSAssumeRoleClient:
             error_message = e.response.get('Error', {}).get('Message', str(e))
             
             if error_code == 'AccessDenied':
-                logger.error(f"Access denied assuming role {sanitize(role_arn)} for workspace {sanitize(workspace_id)}: {sanitize(error_message)}")
+                # AWS returns the same "not authorized to perform: sts:AssumeRole"
+                # text whether the trust policy rejected the principal or the
+                # ExternalId condition, so name both and include the fingerprint
+                # of the ExternalId we sent (never the value itself).
+                logger.error(
+                    "Access denied assuming role %s for workspace %s (external_id_fp=%s): %s",
+                    sanitize(role_arn), sanitize(workspace_id),
+                    hash_for_log(external_id), sanitize(error_message),
+                )
                 raise ClientError(
-                    {'Error': {'Code': 'AccessDenied', 'Message': 'Role assumption failed - check ExternalId and trust policy'}},
+                    {'Error': {'Code': 'AccessDenied', 'Message': (
+                        'Role assumption failed. Either the trust policy does not allow this '
+                        'principal, or the ExternalId sent does not match the one it requires. '
+                        'AWS reports both identically — compare the ExternalId on the workspace '
+                        'that registered this account against the trust policy condition.'
+                    )}},
                     'AssumeRole'
                 )
             elif error_code == 'InvalidParameterValue':

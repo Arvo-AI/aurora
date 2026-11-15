@@ -9,11 +9,21 @@ import hashlib
 import time
 from typing import Optional
 from utils.db.connection_pool import db_pool
+from utils.auth.stateless_auth import set_rls_context
 from utils.log_sanitizer import sanitize
 import re
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
+
+# Slack notifies only on this form. A typed @name is plain text.
+_SLACK_USER_ID = re.compile(r"[UW][A-Z0-9]{2,}")
+# <@U123|Ada> is the same mention as <@U123>. Label stops at "<" so it can't swallow the next one.
+_SLACK_MENTION = re.compile(r"<@([A-Z0-9]+)(?:\|[^<>]*)?>")
+# Prefix format_asked_by writes. The title drops it so the question stays visible.
+_ASKED_BY_PREFIX = re.compile(
+    r"^Asked by (?:<@[UW][A-Z0-9]+>(?: \([^)]*\))?|[^:]{1,80}): "
+)
 
 # Maximum length for chat session titles (in characters)
 TITLE_MAX_LENGTH = 50
@@ -173,6 +183,66 @@ def get_user_id_from_slack_user(slack_user_id: str, team_id: str) -> Optional[st
         return None
 
 
+def format_slack_speaker(slack_user_id: Optional[str], display_name: Optional[str], *, is_bot: bool = False) -> str:
+    """Speaker label Slack can notify on. ``<@USERID>`` pings; a display name does not."""
+    name = (display_name or "").strip()
+    # Bots have no one to notify; keep the label as a name.
+    if is_bot:
+        return name or "Aurora"
+    uid = (slack_user_id or "").strip()
+    mention = f"<@{uid}>" if _SLACK_USER_ID.fullmatch(uid) else ""
+    # Name is just the id we already printed — don't repeat it.
+    if mention and name and name not in (uid, mention):
+        return f"{mention} ({name})"
+    return mention or name or "Unknown"
+
+
+def format_asked_by(slack_user_id: Optional[str], display_name: Optional[str], message: str) -> str:
+    """Prefix a Slack question with the asker's mention token."""
+    # No Slack id — nothing to mention, so the question goes through as typed.
+    if not slack_user_id:
+        return message
+    return f"Asked by {format_slack_speaker(slack_user_id, display_name)}: {message}"
+
+
+def slack_session_title(message_text: str) -> str:
+    """Title is the question. The Asked-by mention stays in the prompt only."""
+    question = _ASKED_BY_PREFIX.sub("", message_text, count=1)
+    body = question[:TITLE_MAX_LENGTH] + "..." if len(question) > TITLE_MAX_LENGTH else question
+    return f"Slack: {body}"
+
+
+def mention_bot_ids(authorizations, stored_bot_user_id: Optional[str] = None) -> list:
+    """Bot ids to strip. Event authorizations first, then the id saved at install."""
+    ids = [
+        auth.get("user_id")
+        for auth in (authorizations or [])
+        if isinstance(auth, dict) and auth.get("is_bot") and auth.get("user_id")
+    ]
+    # Payload omitted the bot. The install still recorded it, so don't strip people.
+    if not ids and stored_bot_user_id:
+        return [stored_bot_user_id]
+    return ids
+
+
+def strip_bot_mentions(text: str, bot_user_ids: list) -> str:
+    """Remove Aurora's own mention and keep every other <@USERID>."""
+    if not text:
+        return ""
+    ids = {str(bid) for bid in bot_user_ids if bid and _SLACK_USER_ID.fullmatch(str(bid))}
+    # Still no bot id — can't tell Aurora from a person, so drop every mention.
+    if not ids:
+        return _SLACK_MENTION.sub("", text).strip()
+
+    def _keep_people(match):
+        # Aurora's mention, with or without a |label. Everyone else stays.
+        if match.group(1) in ids:
+            return ""
+        return match.group(0)
+
+    return _SLACK_MENTION.sub(_keep_people, text).strip()
+
+
 def _get_user_display_name(client, user_id: str) -> str:
     """
     Get display name for a Slack user ID.
@@ -197,6 +267,179 @@ def _get_user_display_name(client, user_id: str) -> str:
     except Exception as e:
         logger.debug(f"Could not fetch user info for {user_id}: {e}")
         return user_id
+
+
+# Button clicks ack in about three seconds. A fresh users.info on each click can miss that.
+_MEMBER_TTL_S = 30.0
+_member_cache: dict[tuple[str, str], tuple[float, Optional[dict]]] = {}
+
+
+def get_workspace_member(client, slack_user_id: str, team_id: str) -> Optional[dict]:
+    """Full member as {"display_name", "email"}, or None.
+
+    Excludes deleted users, bots, Slack Connect, and guests. email is None
+    when the workspace did not share one.
+    """
+    if not slack_user_id or not team_id:
+        return None
+    key = (team_id, slack_user_id)
+    cached = _member_cache.get(key)
+    now = time.monotonic()
+    # A failed users.info is not cached, so a blip does not lock the sender out.
+    if cached is not None and now - cached[0] < _MEMBER_TTL_S:
+        return cached[1]
+    try:
+        result = client._make_request("GET", "users.info", {"user": slack_user_id}) or {}
+    except Exception as e:
+        logger.warning(f"users.info failed for Slack user {sanitize(slack_user_id)}: {e}")
+        return None
+
+    # ok:false is a failed call, not a missing member. Caching it locks the sender out.
+    if not result.get("ok"):
+        return None
+    user = result.get("user") or {}
+    # Slack Connect, bots, and guests are not this workspace's members.
+    if not user or _not_full_member(user, team_id):
+        member = None
+    else:
+        profile = user.get("profile") or {}
+        display_name = (
+            profile.get("display_name")
+            or profile.get("real_name")
+            or user.get("name")
+            or slack_user_id
+        )
+        # users:read.email puts this on the profile. Hidden emails stay unset.
+        email = (profile.get("email") or "").strip() or None
+        member = {"display_name": display_name.strip(), "email": email}
+    _member_cache[key] = (now, member)
+    if len(_member_cache) > 512:
+        _member_cache.clear()
+        _member_cache[key] = (now, member)
+    return member
+
+
+def _not_full_member(user: dict, team_id: str) -> bool:
+    """True for Slack Connect, bots, deleted users, and guest accounts."""
+    if user.get("team_id") != team_id:
+        return True
+    if user.get("deleted") or user.get("is_bot") or user.get("id") == "USLACKBOT":
+        return True
+    return bool(user.get("is_stranger") or user.get("is_restricted") or user.get("is_ultra_restricted"))
+
+
+# Org preference written from the Slack manage page.
+SLACK_ALLOW_UNREGISTERED_KEY = "slack_allow_unregistered"
+
+_NO_ACCOUNT = (
+    "Aurora couldn't match your Slack email to an account in this organization. "
+    "Sign in to Aurora with that email, or ask an admin to allow messages from people without an account."
+)
+_NOT_A_MEMBER = "Aurora is only available to members of this Slack workspace."
+
+
+def org_allows_unregistered_slack(org_id: str) -> bool:
+    """Missing preference keeps workspace members able to ask. No org does not."""
+    if not org_id:
+        return False
+    from utils.auth.stateless_auth import get_org_preference
+    from utils.auth.viewer_run import flag_enabled
+
+    try:
+        # A missing row still lets members ask. A failed read must not.
+        value = get_org_preference(org_id, SLACK_ALLOW_UNREGISTERED_KEY, default=True, strict=True)
+    except Exception:
+        logger.warning("Could not read whether unregistered Slack members may ask")
+        return False
+    return flag_enabled(value, True)
+
+
+def find_aurora_user_in_org(email: str, org_id: str) -> Optional[str]:
+    """Aurora user in this org with this email. None when missing or ambiguous."""
+    if not email or "@" not in email or not org_id:
+        return None
+    try:
+        # users is not RLS-protected. Two case-variants and no exact hit can be two people.
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                """SELECT id, email FROM users
+                    WHERE LOWER(email) = LOWER(%s) AND org_id = %s
+                    ORDER BY (email = %s) DESC, created_at ASC
+                    LIMIT 2""",
+                (email, org_id, email),
+            )
+            rows = cursor.fetchall()
+        if not rows:
+            return None
+        # Exact case is unambiguous. A lone case-insensitive row is too.
+        if rows[0][1] != email and len(rows) > 1:
+            logger.warning(
+                "Ambiguous Aurora accounts for a Slack sender in org %s",
+                sanitize(org_id),
+            )
+            return None
+        return rows[0][0]
+    except Exception:
+        logger.warning("Slack email lookup failed for org %s", sanitize(org_id), exc_info=True)
+        return None
+
+
+def classify_slack_sender(
+    *,
+    matched_user_id: Optional[str],
+    installer_user_id: Optional[str],
+    is_full_member: bool,
+    workspace_user_id: Optional[str],
+    allow_unregistered: bool,
+) -> tuple:
+    """Who an @mention runs as: (user_id, as_general_viewer, refusal)."""
+    # Slack email is an account in this org, so that role and team apply.
+    if matched_user_id:
+        return matched_user_id, False, None
+    # The person who connected Slack, when the profile email doesn't match.
+    if installer_user_id:
+        return installer_user_id, False, None
+    # Guest, external, or users.info failed. Don't guess a viewer.
+    if not is_full_member or not workspace_user_id:
+        return None, False, _NOT_A_MEMBER
+    # No Aurora account. The manage-page toggle is the only way in.
+    if not allow_unregistered:
+        return None, False, _NO_ACCOUNT
+    return workspace_user_id, True, None
+
+
+def describe_slack_sender(slack_user_id: str, team_id: str) -> dict:
+    """Workspace owner, installer match, profile, and the Aurora user for this email."""
+    workspace_user_id = get_user_id_from_slack_team(team_id)
+    installer_user_id = get_user_id_from_slack_user(slack_user_id, team_id)
+    org_id = None
+    member = None
+    matched_user_id = None
+    if workspace_user_id:
+        from utils.auth.stateless_auth import get_org_id_for_user
+        from connectors.slack_connector.client import get_slack_client_for_user
+
+        org_id = get_org_id_for_user(workspace_user_id)
+        client = get_slack_client_for_user(workspace_user_id)
+        # Full members only. Guests and Slack Connect users stay None.
+        if client:
+            member = get_workspace_member(client, slack_user_id, team_id)
+        email = (member or {}).get("email")
+        if email and org_id:
+            matched_user_id = find_aurora_user_in_org(email, org_id)
+    return {
+        "workspace_user_id": workspace_user_id,
+        "installer_user_id": installer_user_id,
+        "org_id": org_id,
+        "member": member,
+        "matched_user_id": matched_user_id,
+    }
+
+
+def aurora_user_for_slack_sender(slack_user_id: str, team_id: str) -> Optional[str]:
+    """Aurora account for a button click. People without an account get none."""
+    sender = describe_slack_sender(slack_user_id, team_id)
+    return sender["matched_user_id"] or sender["installer_user_id"]
 
 
 def _resolve_user_display_name(client, user_id: str, is_bot: bool, user_name_cache: dict) -> str:
@@ -284,6 +527,43 @@ def get_thread_messages(client, channel: str, thread_ts: str, limit: int = 10, m
         return []
 
 
+def _append_context_reply(context_parts: list, client, reply: dict, user_name_cache: dict,
+                          total_length: int, max_total_length: int):
+    """Append one thread reply. Returns the new length, and whether to stop."""
+    reply_user = reply.get('user')
+    reply_bot = reply.get('bot_id') is not None
+    reply_name = _resolve_user_display_name(client, reply_user, reply_bot, user_name_cache)
+    reply_speaker = format_slack_speaker(reply_user, reply_name, is_bot=reply_bot)
+    reply_text = reply.get('text', '').strip()
+    reply_time = _format_slack_timestamp(reply.get('ts', ''))
+
+    # Keep the channel summary short; the full text is still in the thread.
+    if len(reply_text) > COMMAND_DISPLAY_TRUNCATE_LENGTH:
+        reply_text = reply_text[:COMMAND_DISPLAY_TRUNCATE_LENGTH] + "..."
+
+    timestamp_prefix = f"[{reply_time}] " if reply_time else ""
+    reply_line = f"    • {timestamp_prefix}{reply_speaker}: {reply_text}"
+    # Budget spent — keep what we have and stop walking this thread.
+    if total_length + len(reply_line) > max_total_length:
+        logger.warning("Reached total context limit. Stopping at thread reply.")
+        return total_length, True
+    context_parts.append(reply_line)
+    return total_length + len(reply_line), False
+
+
+def _append_context_replies(context_parts: list, client, replies: list, user_name_cache: dict,
+                            total_length: int, max_total_length: int) -> int:
+    """Append replies until the context budget is spent. Returns the new length."""
+    for reply in replies:
+        total_length, stop = _append_context_reply(
+            context_parts, client, reply, user_name_cache, total_length, max_total_length,
+        )
+        # Cap is spent. A later line is the same size, and skipping one leaves a hole.
+        if stop:
+            break
+    return total_length
+
+
 def get_channel_context_with_threads(client, channel: str, limit: int = 5, max_total_length: int = 50000):
     """
     Fetch recent channel messages and thread summaries for context.
@@ -322,11 +602,12 @@ def get_channel_context_with_threads(client, channel: str, limit: int = 5, max_t
             
             # Resolve user name and format timestamp
             display_name = _resolve_user_display_name(client, user_id, is_bot, user_name_cache)
+            speaker = format_slack_speaker(user_id, display_name, is_bot=is_bot)
             readable_time = _format_slack_timestamp(ts)
             timestamp_prefix = f"[{readable_time}] " if readable_time else ""
             
             # Add main message with timestamp
-            main_msg = f"• {timestamp_prefix}{display_name}: {text}"
+            main_msg = f"• {timestamp_prefix}{speaker}: {text}"
             
             # Check if adding this would exceed total limit
             if total_length + len(main_msg) > max_total_length:
@@ -361,54 +642,20 @@ def get_channel_context_with_threads(client, channel: str, limit: int = 5, max_t
                             context_parts.append(thread_header)
                             total_length += len(thread_header)
                             
-                            for reply in first_3:
-                                reply_user = reply.get('user')
-                                reply_bot = reply.get('bot_id') is not None
-                                reply_name = _resolve_user_display_name(client, reply_user, reply_bot, user_name_cache)
-                                reply_ts = reply.get('ts', '')
-                                reply_text = reply.get('text', '').strip()
-                                reply_time = _format_slack_timestamp(reply_ts)
-                                timestamp_prefix = f"[{reply_time}] " if reply_time else ""
-
-                                # Truncate long messages
-                                if len(reply_text) > COMMAND_DISPLAY_TRUNCATE_LENGTH:
-                                    reply_text = reply_text[:COMMAND_DISPLAY_TRUNCATE_LENGTH] + "..."
-                                
-                                reply_line = f"    • {timestamp_prefix}{reply_name}: {reply_text}"
-                                if total_length + len(reply_line) > max_total_length:
-                                    logger.warning(f"Reached total context limit. Stopping at thread reply.")
-                                    break
-                                
-                                context_parts.append(reply_line)
-                                total_length += len(reply_line)
+                            total_length = _append_context_replies(
+                                context_parts, client, first_3, user_name_cache,
+                                total_length, max_total_length,
+                            )
                             
                             separator = f"    ... ({len(thread_replies) - 6} more messages) ..."
                             if total_length + len(separator) <= max_total_length:
                                 context_parts.append(separator)
                                 total_length += len(separator)
                             
-                            for reply in last_3:
-                                reply_user = reply.get('user')
-                                reply_bot = reply.get('bot_id') is not None
-                                reply_name = _resolve_user_display_name(client, reply_user, reply_bot, user_name_cache)
-                                reply_ts = reply.get('ts', '')
-                                reply_text = reply.get('text', '').strip()
-                                reply_time = _format_slack_timestamp(reply_ts)
-
-                                if len(reply_text) > COMMAND_DISPLAY_TRUNCATE_LENGTH:
-                                    reply_text = reply_text[:COMMAND_DISPLAY_TRUNCATE_LENGTH] + "..."
-                                
-                                if reply_time:
-                                    reply_line = f"    • [{reply_time}] {reply_name}: {reply_text}"
-                                else:
-                                    reply_line = f"    • {reply_name}: {reply_text}"
-                                
-                                if total_length + len(reply_line) > max_total_length:
-                                    logger.warning(f"Reached total context limit. Stopping at thread reply.")
-                                    break
-                                
-                                context_parts.append(reply_line)
-                                total_length += len(reply_line)
+                            total_length = _append_context_replies(
+                                context_parts, client, last_3, user_name_cache,
+                                total_length, max_total_length,
+                            )
                         else:
                             # Fewer than 6 replies, show all
                             thread_header = f"  └─ Thread ({len(thread_replies)} replies):"
@@ -419,28 +666,10 @@ def get_channel_context_with_threads(client, channel: str, limit: int = 5, max_t
                             context_parts.append(thread_header)
                             total_length += len(thread_header)
                             
-                            for reply in thread_replies:
-                                reply_user = reply.get('user')
-                                reply_bot = reply.get('bot_id') is not None
-                                reply_name = _resolve_user_display_name(client, reply_user, reply_bot, user_name_cache)
-                                reply_ts = reply.get('ts', '')
-                                reply_text = reply.get('text', '').strip()
-                                reply_time = _format_slack_timestamp(reply_ts)
-
-                                if len(reply_text) > COMMAND_DISPLAY_TRUNCATE_LENGTH:
-                                    reply_text = reply_text[:COMMAND_DISPLAY_TRUNCATE_LENGTH] + "..."
-                                
-                                if reply_time:
-                                    reply_line = f"    • [{reply_time}] {reply_name}: {reply_text}"
-                                else:
-                                    reply_line = f"    • {reply_name}: {reply_text}"
-                                
-                                if total_length + len(reply_line) > max_total_length:
-                                    logger.warning(f"Reached total context limit. Stopping at thread reply.")
-                                    break
-                                
-                                context_parts.append(reply_line)
-                                total_length += len(reply_line)
+                            total_length = _append_context_replies(
+                                context_parts, client, thread_replies, user_name_cache,
+                                total_length, max_total_length,
+                            )
                 
                 except Exception as e:
                     logger.debug(f"Could not fetch thread for message {ts}: {e}")
@@ -482,7 +711,14 @@ def format_response_for_slack(text: str, max_length: int = SLACK_MAX_MESSAGE_LEN
     formatted = re.sub(r'\*\*([^\*]+)\*\*', r'*\1*', formatted)
     formatted = re.sub(r'(?<!\*)\*(?!\*)([^\*]+)\*(?!\*)', r'_\1_', formatted) #italic
     formatted = re.sub(r'\[([^\]]+)\]\(([^\)]+)\)', r'<\2|\1>', formatted) #links
-    formatted = re.sub(r'<(?!http|@|#)([^>]+)>', '', formatted) #remove html tags
+    # Slack is not HTML. Removing <...> can swallow whole remediation sections
+    # between a comparison ("cache < 150 MB") and a later CLI placeholder.
+    # Preserve Slack links/mentions; escape all other angle brackets as text.
+    formatted = re.sub(
+        r'<(?:https?://[^<>\n]+|[@#][A-Z0-9]+(?:\|[^<>\n]+)?)>|[<>]',
+        lambda match: ({'<': '&lt;', '>': '&gt;'}.get(match[0], match[0])),
+        formatted,
+    )
     
     # Handle length limits - Slack has 4000 char limit per message
     if len(formatted) > max_length:
@@ -534,28 +770,36 @@ def get_incident_by_slack_message(user_id: str, slack_message_ts: str):
     """
     Find an incident by its Slack notification message timestamp.
     Returns (incident_id, session_id) or (None, None) if not found.
+
+    The lookup is org-wide: the incidents channel is shared by the org and a
+    recurrence's completion lands in its anchor's thread, which may belong to
+    another member. It is scoped to the caller's org twice — by RLS and by an
+    explicit org_id predicate — because a Slack ts is only unique within a
+    channel, so two workspaces can hold the same value. The incident's RCA
+    session is only reused for its owner; anyone else gets a fresh session
+    linked to the incident.
     """
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute(
-                    "SET myapp.current_org_id = (SELECT org_id FROM users WHERE id = %s)",
-                    (user_id,)
-                )
+                org_id = set_rls_context(cursor, conn, user_id, log_prefix="[SlackEvents:incident_by_ts]")
+                if not org_id:
+                    return None, None
                 cursor.execute(
                     """
-                    SELECT id, aurora_chat_session_id
+                    SELECT id, aurora_chat_session_id, user_id
                     FROM incidents
-                    WHERE user_id = %s AND slack_message_ts = %s
+                    WHERE slack_message_ts = %s AND org_id = %s
                     LIMIT 1
                     """,
-                    (user_id, slack_message_ts)
+                    (slack_message_ts, org_id)
                 )
                 result = cursor.fetchone()
-                
+
                 if result:
                     incident_id = str(result[0])
-                    session_id = str(result[1]) if result[1] else None
+                    is_owner = str(result[2]) == str(user_id)
+                    session_id = str(result[1]) if result[1] and is_owner else None
                     logger.info(f"Found incident {incident_id} (session: {session_id}) from slack_message_ts {slack_message_ts}")
                     return incident_id, session_id
                 
@@ -566,26 +810,26 @@ def get_incident_by_slack_message(user_id: str, slack_message_ts: str):
         return None, None
 
 
-def get_session_from_thread(user_id: str, channel_id: str, thread_ts: str):
-    """
-    Find the session_id associated with a Slack thread.
-    First checks if thread_ts matches an incident notification message.
-    Then looks up chat sessions by thread_ts in trigger_metadata.
-    Returns (session_id, incident_id) or (None, None) if not found.
-    """
+def get_session_from_thread(
+    user_id: str, channel_id: str, thread_ts: str, access_as: Optional[str] = None,
+):
+    """Session for this Slack thread. A guest never resumes the owner's RCA."""
+    # Guest and owner share a user id. The pin is what separates their sessions.
+    guest = access_as == "general_viewer"
     try:
         # First, check if this thread is from an incident notification
         incident_id, session_id = get_incident_by_slack_message(user_id, thread_ts)
-        if incident_id:
+        # The owner's RCA session is not the guest's conversation.
+        if guest:
+            incident_id, session_id = None, None
+        elif session_id:
             return session_id, incident_id
         
         # Otherwise, look up by thread_ts in chat session metadata
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute(
-                    "SET myapp.current_org_id = (SELECT org_id FROM users WHERE id = %s)",
-                    (user_id,)
-                )
+                if not set_rls_context(cursor, conn, user_id, log_prefix="[SlackEvents:session_by_thread]"):
+                    return None, incident_id
                 cursor.execute(
                     """
                     SELECT id, ui_state
@@ -594,15 +838,19 @@ def get_session_from_thread(user_id: str, channel_id: str, thread_ts: str):
                     AND (ui_state->'triggerMetadata'->>'source') = 'slack'
                     AND (ui_state->'triggerMetadata'->>'channel') = %s
                     AND (ui_state->'triggerMetadata'->>'thread_ts') = %s
+                    AND COALESCE(ui_state->'triggerMetadata'->>'access_as', '') = %s
                     ORDER BY created_at DESC
                     LIMIT 1
                     """,
-                    (user_id, channel_id, str(thread_ts))
+                    (user_id, channel_id, str(thread_ts), access_as or "")
                 )
                 result = cursor.fetchone()
                 
                 if result:
                     session_id = str(result[0])
+                    if incident_id:
+                        # This user's Q&A session on an incident they do not own.
+                        return session_id, None
                     
                     cursor.execute(
                         """
@@ -618,16 +866,44 @@ def get_session_from_thread(user_id: str, channel_id: str, thread_ts: str):
                     
                     return session_id, incident_id
                 
-                return None, None
+                return None, incident_id
                 
     except Exception as e:
         logger.error(f"Error looking up session from thread: {e}", exc_info=True)
         return None, None
 
 
+def _resolve_channel_label(user_id: str, channel_id: str) -> str:
+    """Return a human '#name (id)' label for a Slack channel so the agent knows
+    which channel a message came from — critical for scoped directives like
+    "in this channel". Prefers our registered slack_channels row (no API call),
+    falls back to the bare id. Never raises."""
+    if not channel_id:
+        return "unknown"
+    from services.channels import registry
+    name = registry.get_channel_name(user_id, "slack", channel_id)
+    # Registered channel — use its name so it matches routing/descriptions.
+    # Unregistered or lookup failed — the id alone still anchors "this channel".
+    return f"#{name} ({channel_id})" if name else channel_id
+
+
+def _slack_run_metadata(channel, thread_ts, thinking_message_ts=None, access_as=None, slack_user_id=None):
+    """Session and task metadata. access_as is how a guest is checked."""
+    meta = {"source": "slack", "channel": channel, "thread_ts": thread_ts}
+    if thinking_message_ts:
+        meta["thinking_message_ts"] = thinking_message_ts
+    if access_as:
+        meta["access_as"] = access_as
+    if slack_user_id:
+        meta["slack_user_id"] = slack_user_id
+    return meta
+
+
 def send_message_to_aurora(user_id: str, message_text: str, channel: str, thread_ts: str = None, 
                            incident_id: str = None, session_id: str = None, context_messages: list = None,
-                           channel_context: str | None = None, thinking_message_ts: str | None = None):
+                           channel_context: str | None = None, thinking_message_ts: str | None = None,
+                           label_user_id: str | None = None, access_as: str | None = None,
+                           slack_user_id: str | None = None):
     """
     Route a Slack message to Aurora's chat system.
     Uses background chat task to process the message.
@@ -637,23 +913,23 @@ def send_message_to_aurora(user_id: str, message_text: str, channel: str, thread
     from chat.background.task import run_background_chat, create_background_chat_session
     
     try:
+        # Only the incident's own RCA session (its owner continuing it) runs as
+        # the incident's investigation. A fresh session is a Q&A about the
+        # incident: linked for context through chat_sessions.incident_id like
+        # the incident chat in the UI, but it must not re-run the RCA lifecycle
+        # (re-link aurora_chat_session_id, re-summarize, re-dispatch actions).
+        rca_incident_id = incident_id if session_id else None
         # Create session if not exists
         if not session_id:
-            # Generate a title from the message (first TITLE_MAX_LENGTH chars)
-            title = 'Slack: ' + (message_text[:TITLE_MAX_LENGTH] + "..." if len(message_text) > TITLE_MAX_LENGTH else message_text)
-            
-            # Trigger metadata for tracking
-            trigger_metadata = {
-                "source": "slack",
-                "channel": channel,
-                "thread_ts": thread_ts,
-            }
-            
+            title = slack_session_title(message_text)
             # Create the session in the database so it appears in chat history
             session_id = create_background_chat_session(
                 user_id=user_id,
                 title=title,
-                trigger_metadata=trigger_metadata
+                trigger_metadata=_slack_run_metadata(
+                    channel, thread_ts, access_as=access_as, slack_user_id=slack_user_id,
+                ),
+                incident_id=incident_id,
             )
         
         # Build context from thread messages or channel messages
@@ -665,11 +941,14 @@ def send_message_to_aurora(user_id: str, message_text: str, channel: str, thread
             
             for i, msg in enumerate(context_messages, 1):
                 display_name = msg.get('display_name', msg.get('user', 'Unknown'))
+                speaker = format_slack_speaker(
+                    msg.get('user'), display_name, is_bot=bool(msg.get('is_bot')),
+                )
                 text = msg.get('text', '').strip()
                 timestamp = msg.get('timestamp', '')
                 readable_time = _format_slack_timestamp(timestamp)
                 timestamp_prefix = f"[{readable_time}] " if readable_time else ""
-                context_str += f"{i}. {timestamp_prefix}{display_name}: {text}\n"
+                context_str += f"{i}. {timestamp_prefix}{speaker}: {text}\n"
             
             context_str += "--- End of thread context ---\n"
         
@@ -677,16 +956,18 @@ def send_message_to_aurora(user_id: str, message_text: str, channel: str, thread
             # Channel context - includes recent messages and thread summaries
             context_str = f"\n\n--- Recent channel context (last 5 messages with thread summaries) ---\n{channel_context}\n--- End of channel context ---\n"
         
-        # Prepare the message with context
-        full_message = f"{message_text}{context_str}"
+        # Prepare the message with context. Lead with an explicit channel identity
+        # so the agent can resolve references like "this channel" and scope any
+        # directive it saves to the right channel (matches routing/descriptions).
+        # Channel rows belong to whoever connected Slack, not whoever asked.
+        channel_label = _resolve_channel_label(label_user_id or user_id, channel)
+        # Mention rules live in the Slack skill and system prompt, not this turn.
+        channel_header = f"[Slack message from channel {channel_label}]\n\n"
+        full_message = f"{channel_header}{message_text}{context_str}"
         
-        # Trigger metadata for tracking and response
-        trigger_metadata = {
-            "source": "slack",
-            "channel": channel,
-            "thread_ts": thread_ts,
-            "thinking_message_ts": thinking_message_ts,  # Store the thinking message timestamp
-        }
+        trigger_metadata = _slack_run_metadata(
+            channel, thread_ts, thinking_message_ts, access_as, slack_user_id,
+        )
         
         # Launch background chat task
         # For Slack @mentions, link to incident but don't send "investigation started" notifications
@@ -696,7 +977,7 @@ def send_message_to_aurora(user_id: str, message_text: str, channel: str, thread
             initial_message=full_message,
             trigger_metadata=trigger_metadata,
             provider_preference=None,  # Use default providers
-            incident_id=incident_id,
+            incident_id=rca_incident_id,
             send_notifications=False  # Don't send investigation started notifications for Slack @mentions
         )
         

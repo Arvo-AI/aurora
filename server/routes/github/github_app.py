@@ -82,6 +82,56 @@ def _orgs_owning_install(installation_id: int) -> set[str | None]:
             )
             return {row[0] for row in cur.fetchall()}
 
+
+# Installs this user may relink: they held a link to it in this org, and
+# this org held it last. Nothing else proves access to an install no org
+# holds now, and linking it imports every repo it covers.
+_RELINKABLE_SQL = """
+    SELECT mine.installation_id
+      FROM user_github_installations mine
+     WHERE mine.user_id = %s
+       AND mine.org_id = %s
+       AND mine.disconnected_at IS NOT NULL
+       AND (SELECT latest.org_id
+              FROM user_github_installations latest
+             WHERE latest.installation_id = mine.installation_id
+             ORDER BY latest.disconnected_at DESC NULLS FIRST
+             LIMIT 1) = %s"""
+
+
+def _relinkable_installs(cur, user_id: str, org_id: str) -> set[int]:
+    cur.execute(_RELINKABLE_SQL, (user_id, org_id, org_id))
+    return {row[0] for row in cur.fetchall()}
+
+
+def _can_relink(user_id: str, org_id: str, installation_id: int) -> bool:
+    with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+        return installation_id in _relinkable_installs(cur, user_id, org_id)
+
+
+def hand_off_import_state(cur, user_id: str, installation_ids: list[int] | None = None) -> None:
+    """Move a leaving user's import marker to teammates still linked.
+
+    The marker and the legacy flag describe the org's repos, not the user:
+    without this, a teammate's unmarked link would trigger a full import
+    that brings back repos the org removed.
+    """
+    cur.execute(
+        """UPDATE user_github_installations other
+              SET repos_imported_at = COALESCE(other.repos_imported_at, mine.repos_imported_at),
+                  repos_import_legacy = other.repos_import_legacy OR mine.repos_import_legacy
+             FROM user_github_installations mine
+            WHERE mine.user_id = %s
+              AND mine.disconnected_at IS NULL
+              AND (%s::bigint[] IS NULL OR mine.installation_id = ANY(%s::bigint[]))
+              AND other.installation_id = mine.installation_id
+              AND other.org_id = mine.org_id
+              AND other.user_id <> mine.user_id
+              AND other.disconnected_at IS NULL""",
+        (user_id, installation_ids, installation_ids),
+    )
+
+
 # Install-state TTL: GitHub's install flow takes seconds in practice, but
 # allow 30 minutes to absorb account-creation, 2FA, OAuth-grant, popup-block
 # detours. After expiry the user must re-initiate the install.
@@ -96,6 +146,36 @@ _ERROR_INVALID_STATE = "Install request could not be verified. Please try instal
 _ERROR_GITHUB_API = "Could not verify installation with GitHub"
 _ERROR_INTERNAL = "An internal error occurred while finalizing installation"
 _ERROR_NOT_CONFIGURED = "GitHub App is not configured"
+_ERROR_INSTALL_NOT_AUTHORIZED = "Your GitHub account does not have access to this installation"
+_ERROR_LINKED_ELSEWHERE = "This GitHub installation is already connected to another Aurora organization"
+
+
+def _installer_can_access(code: str | None, installation_id: int) -> bool:
+    """Whether the installer can access ``installation_id`` on GitHub.
+
+    Hosted deployments (client secret set, OAuth during install on) require
+    the OAuth code and check it. Without a client secret there is nothing
+    to check it with; the cross-org refusal still applies.
+    """
+    code = (code or "").strip()
+    if not os.getenv("GITHUB_APP_CLIENT_SECRET"):
+        # Self-hosted without OAuth during install: nothing to verify with.
+        return True
+    if not code:
+        # With OAuth during install on, GitHub always sends a code; a
+        # callback without one was not produced by GitHub's install flow.
+        logger.warning("[GITHUB-APP-CALLBACK] callback without OAuth code refused")
+        return False
+    from routes.github.github_signup import (
+        _exchange_code_for_identity,
+        _user_authorized_for_installation,
+    )
+
+    exchanged = _exchange_code_for_identity(code)
+    if exchanged is None:
+        logger.warning("[GITHUB-APP-CALLBACK] OAuth code exchange failed")
+        return False
+    return _user_authorized_for_installation(exchanged[1], installation_id)
 
 
 def _state_serializer() -> URLSafeTimedSerializer:
@@ -259,7 +339,9 @@ def _reconcile_user_installations(user_id: str) -> None:
                 with conn.cursor() as cur:
                     cur.execute(
                         """UPDATE user_github_installations
-                              SET disconnected_at = NOW()
+                              SET disconnected_at = NOW(),
+                                  repos_imported_at = NULL,
+                                  repos_import_legacy = FALSE
                             WHERE user_id = %s
                               AND installation_id = ANY(%s)
                               AND disconnected_at IS NULL""",
@@ -448,6 +530,12 @@ def github_app_install_callback():
         )
         return _render_error(_ERROR_GITHUB_API)
 
+    # The state proves which Aurora user clicked Install, not that the
+    # installation_id in the URL is theirs. When GitHub also sent an OAuth
+    # code, confirm the installer can access that installation.
+    if not _installer_can_access(request.args.get("code"), installation_id):
+        return _render_error(_ERROR_INSTALL_NOT_AUTHORIZED)
+
     # Best-effort org_id population — defensive, in case
     # ``user_github_installations`` is later promoted to RLS-protected.
     # Missing org_id is non-fatal at install time.
@@ -457,6 +545,14 @@ def github_app_install_callback():
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
+                from routes.github.github_signup import _linked_elsewhere
+
+                if _linked_elsewhere(cur, installation_id, org_id):
+                    logger.warning(
+                        "[GITHUB-APP-CALLBACK] installation_id=%d linked to another org",
+                        installation_id,
+                    )
+                    return _render_error(_ERROR_LINKED_ELSEWHERE)
                 cur.execute(
                     """INSERT INTO github_installations (
                             installation_id, account_login, account_id, account_type,
@@ -514,12 +610,16 @@ def github_app_install_callback():
     )
 
     # Auto-import the repos the user already granted on GitHub so they don't
-    # have to re-select them inside Aurora. Best-effort + async: a failure here
-    # must never break the install (the manual picker remains as a fallback).
+    # have to re-select them inside Aurora, with PR review on for the rows the
+    # import creates (existing per-repo choices are kept). Best-effort + async:
+    # a failure here must never break the install (the manual picker remains
+    # as a fallback).
     try:
         from routes.github.github_repo_metadata import import_installation_repos
 
-        import_installation_repos.delay(user_id, installation_id)
+        import_installation_repos.delay(
+            user_id, installation_id, enroll_change_gating=True
+        )
     except Exception:
         # Best-effort: the manual repo picker remains a fallback. Log with a
         # trace so a persistent broker/import failure is visible in ops.
@@ -691,6 +791,11 @@ def github_app_discover_installations(user_id):
                 bindings: dict[int, set[str | None]] = {}
                 for inst_id, bound_org in cur.fetchall():
                     bindings.setdefault(inst_id, set()).add(bound_org)
+                # Installs this user disconnected, while this org held them
+                # last, can be relinked: the App stays installed on GitHub,
+                # so the install popup has nothing to send back.
+                for inst_id in _relinkable_installs(cur, user_id, requesting_org_id):
+                    bindings.setdefault(inst_id, {requesting_org_id})
                 cur.execute(
                     """SELECT installation_id
                          FROM user_github_installations
@@ -756,6 +861,19 @@ def github_app_claim_installation(user_id, installation_id):
         return jsonify({
             "error": "install is already linked to a different organization",
             "code": "CROSS_ORG_CLAIM_REFUSED",
+        }), 403
+    if requesting_org_id not in owning_orgs and not _can_relink(
+        user_id, requesting_org_id, installation_id
+    ):
+        # Claim joins an install a teammate linked, or relinks one this user
+        # disconnected while their org held it last (what discovery lists).
+        logger.warning(
+            "[GITHUB-APP-CLAIM] claim of unlinked install refused user=%s installation_id=%d",
+            user_id, installation_id,
+        )
+        return jsonify({
+            "error": "install is not linked to your organization; install it from Connectors",
+            "code": "INSTALL_NOT_IN_ORG",
         }), 403
 
     try:
@@ -827,6 +945,14 @@ def github_app_claim_installation(user_id, installation_id):
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
+                # Lock first, like every other link path.
+                from routes.github.github_signup import _linked_elsewhere
+
+                if _linked_elsewhere(cur, installation_id, org_id):
+                    return jsonify({
+                        "error": "install is already linked to a different organization",
+                        "code": "CROSS_ORG_CLAIM_REFUSED",
+                    }), 403
                 cur.execute(
                     """INSERT INTO github_installations (
                             installation_id, account_login, account_id, account_type,
@@ -876,7 +1002,296 @@ def github_app_claim_installation(user_id, installation_id):
         "[GITHUB-APP-CLAIM] user=%s claimed installation_id=%d account=%s",
         user_id, installation_id, account_login,
     )
+    _enqueue_enrolled_import(user_id, installation_id, "[GITHUB-APP-CLAIM]")
     return jsonify({"success": True, "installation_id": installation_id})
+
+
+def _enqueue_enrolled_import(user_id: str, installation_id: int, log_prefix: str) -> None:
+    """Import a just-linked installation's repos with PR review on (best-effort)."""
+    try:
+        from routes.github.github_repo_metadata import import_installation_repos
+
+        import_installation_repos.delay(
+            user_id, installation_id, enroll_change_gating=True
+        )
+    except Exception:
+        logger.warning(
+            "%s failed to enqueue repo auto-import installation_id=%d",
+            log_prefix, installation_id, exc_info=True,
+        )
+
+
+def _claim_refusal(cur, user_id: str, claim: dict) -> dict | None:
+    """Why ``user_id`` may not redeem ``claim``, or None when it may."""
+    cur.execute(
+        "SELECT LOWER(email), github_user_id FROM users WHERE id = %s", (user_id,)
+    )
+    row = cur.fetchone()
+    if not row or row[0] != claim["email"]:
+        logger.warning("[GITHUB-APP-CLAIM-PENDING] email mismatch user=%s", user_id)
+        return {"error": "Signed in as a different account", "code": "CLAIM_EMAIL_MISMATCH"}
+    if row[1] is not None and row[1] != claim["gh_id"]:
+        return {"error": "Account is linked to another GitHub user",
+                "code": "CLAIM_IDENTITY_MISMATCH"}
+    cur.execute(
+        "SELECT 1 FROM users WHERE github_user_id = %s AND id <> %s",
+        (claim["gh_id"], user_id),
+    )
+    if cur.fetchone():
+        return {"error": "GitHub user is linked to another account",
+                "code": "CLAIM_IDENTITY_MISMATCH"}
+    return None
+
+
+@github_app_bp.route("/app/claim-pending", methods=["POST", "OPTIONS"])
+@require_permission("connectors", "write")
+def github_app_claim_pending(user_id):
+    """Finish a one-click install whose GitHub email matched an existing account.
+
+    The signup callback verified the installation, the installer's identity
+    and their access to it, then sent them to sign in with a signed claim
+    token instead of logging them in (an email match alone must never be a
+    login). Having now signed in, the account is linked when its email is
+    the one GitHub reported for the installer.
+    """
+    from routes.github.github_signup import _verify_installation, verify_claim_token
+
+    if not flask.current_app.config.get("GITHUB_APP_ENABLED"):
+        return jsonify({"error": _APP_NOT_CONFIGURED}), 503
+
+    body = request.get_json(silent=True) or {}
+    token = body.get("token") if isinstance(body, dict) else None
+    claim = verify_claim_token(token) if isinstance(token, str) else None
+    if claim is None:
+        return jsonify({"error": "Claim link expired", "code": "CLAIM_INVALID"}), 400
+
+    installation_id = claim["iid"]
+    org_id = get_org_id_for_user(user_id)
+    if not org_id:
+        return jsonify({"error": "No organization", "code": "MISSING_ORG_CONTEXT"}), 403
+    if _orgs_owning_install(installation_id) - {org_id}:
+        logger.warning(
+            "[GITHUB-APP-CLAIM-PENDING] cross-org claim refused user=%s installation_id=%d",
+            user_id, installation_id,
+        )
+        return jsonify({"error": "Installation belongs to another organization",
+                        "code": "CROSS_ORG_CLAIM_REFUSED"}), 403
+
+    install_data = _verify_installation(installation_id)
+    if install_data is None or install_data.get("id") != installation_id:
+        return jsonify({"error": "Could not verify installation with GitHub"}), 502
+    account = install_data.get("account") if isinstance(install_data.get("account"), dict) else {}
+    if account.get("type") not in ("User", "Organization") or not isinstance(
+        account.get("login"), str
+    ):
+        return jsonify({"error": "Invalid response from GitHub"}), 502
+
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                refusal = _claim_refusal(cur, user_id, claim)
+                if refusal is not None:
+                    return jsonify(refusal), 403
+                from routes.github.github_signup import _linked_elsewhere
+
+                if _linked_elsewhere(cur, installation_id, org_id):
+                    return jsonify({"error": "Installation belongs to another organization",
+                                        "code": "CROSS_ORG_CLAIM_REFUSED"}), 403
+                # Remember the GitHub identity so the next one-click install
+                # logs this person straight in.
+                cur.execute(
+                    "UPDATE users SET github_user_id = %s, github_login = %s WHERE id = %s",
+                    (claim["gh_id"], claim["gh_login"], user_id),
+                )
+                from routes.github.github_signup import _link_installation
+
+                _link_installation(cur, user_id, org_id, install_data)
+                conn.commit()
+    except Exception:
+        logger.exception(
+            "[GITHUB-APP-CLAIM-PENDING] DB write failed user=%s installation_id=%d",
+            user_id, installation_id,
+        )
+        return jsonify({"error": "Failed to link installation"}), 500
+
+    logger.info(
+        "[GITHUB-APP-CLAIM-PENDING] user=%s linked installation_id=%d",
+        user_id, installation_id,
+    )
+    _enqueue_enrolled_import(user_id, installation_id, "[GITHUB-APP-CLAIM-PENDING]")
+    try:
+        from utils.auth.tool_registry import seed_org_tool_permissions
+
+        seed_org_tool_permissions(org_id, user_id)
+    except Exception:
+        logger.warning("[GITHUB-APP-CLAIM-PENDING] tool permission seeding failed", exc_info=True)
+    return jsonify({"success": True, "installation_id": installation_id})
+
+
+_LINK_TICKET_SALT = "aurora.github.app.link-pending-ticket.v2"
+_LINK_TICKET_TTL_SEC = 2 * 60
+_LINK_STATE_SALT = "aurora.github.app.link-pending-state.v1"
+_LINK_STATE_TTL_SEC = 10 * 60
+
+
+def _token_hash(token: str) -> str:
+    import hashlib
+
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def _sign_link(salt: str, token: str, user_id: str, org_id: str) -> str:
+    from routes.github.github_signup import _state_serializer
+
+    return _state_serializer(salt).dumps({"t": _token_hash(token), "u": user_id, "o": org_id})
+
+
+def _verify_link(salt: str, max_age: int, signed, token: str) -> tuple[str, str] | None:
+    from routes.github.github_signup import _state_serializer
+
+    if not isinstance(signed, str) or not signed:
+        return None
+    try:
+        payload = _state_serializer(salt).loads(signed, max_age=max_age)
+    except Exception:
+        return None
+    if not isinstance(payload, dict) or payload.get("t") != _token_hash(token):
+        return None
+    user_id, org_id = payload.get("u"), payload.get("o")
+    if not isinstance(user_id, str) or not isinstance(org_id, str):
+        return None
+    return user_id, org_id
+
+
+def sign_link_state(token: str, user_id: str, org_id: str) -> str:
+    """Issued by the card to the signed-in session that is about to click Connect."""
+    return _sign_link(_LINK_STATE_SALT, token, user_id, org_id)
+
+
+def verify_link_state(state, token: str) -> tuple[str, str] | None:
+    return _verify_link(_LINK_STATE_SALT, _LINK_STATE_TTL_SEC, state, token)
+
+
+def sign_link_ticket(token: str, user_id: str, org_id: str) -> str:
+    """Short-lived proof that this user's Connect was confirmed in the installer's browser."""
+    return _sign_link(_LINK_TICKET_SALT, token, user_id, org_id)
+
+
+def verify_link_ticket(ticket, token: str) -> tuple[str, str] | None:
+    return _verify_link(_LINK_TICKET_SALT, _LINK_TICKET_TTL_SEC, ticket, token)
+
+
+@github_app_bp.route("/app/link-pending/start", methods=["POST", "OPTIONS"])
+@require_permission("connectors", "write")
+def github_app_link_pending_start(user_id):
+    """What the "Connect GitHub to <org>?" card shows, read from the signed token.
+
+    Also issues the link state that Connect carries through the installer's
+    browser, so the link can only finish for this user and org.
+    """
+    from routes.github.github_signup import verify_pending_signup
+    from utils.auth.stateless_auth import get_org_id_from_request
+
+    body = request.get_json(silent=True) or {}
+    token = body.get("token") if isinstance(body, dict) else None
+    pending = verify_pending_signup(token)
+    if pending is None:
+        return jsonify({"error": "Install link expired", "code": "CLAIM_INVALID"}), 400
+    org_id = get_org_id_from_request()
+    if not org_id:
+        return jsonify({"error": "No organization context", "code": "MISSING_ORG_CONTEXT"}), 403
+    return jsonify({
+        "account_login": pending.get("acct") or "",
+        "installer_login": pending["identity"]["login"],
+        "link_state": sign_link_state(token, user_id, org_id),
+    })
+
+
+@github_app_bp.route("/app/link-pending/finish", methods=["POST", "OPTIONS"])
+@require_permission("connectors", "write")
+def github_app_link_pending_finish(user_id):
+    """Connect: link the pending install to the signed-in user's org.
+
+    Needs the ticket ``/github/app/link-pending/confirm`` hands out only to
+    the browser that did the install, in exchange for the link state this
+    user's card was issued. The ticket names that user and org, and must
+    match the session finishing it: a ticket the installer minted for
+    themselves cannot link their install into someone else's org.
+    """
+    from routes.github.github_signup import (
+        release_pending_signup,
+        reserve_pending_signup,
+        verify_pending_signup,
+    )
+    from utils.auth.stateless_auth import get_org_id_from_request
+
+    body = request.get_json(silent=True) or {}
+    token = body.get("token") if isinstance(body, dict) else None
+    ticket = body.get("ticket") if isinstance(body, dict) else None
+    pending = verify_pending_signup(token)
+    bound = verify_link_ticket(ticket, token) if pending is not None else None
+    org_id = get_org_id_from_request()
+    if bound is None or bound != (user_id, org_id):
+        return jsonify({"error": "Install link expired", "code": "CLAIM_INVALID"}), 400
+    if not reserve_pending_signup(token):
+        return jsonify({"error": "Install link already used", "code": "CLAIM_INVALID"}), 400
+    error = link_pending_install(user_id, org_id, pending)
+    if error is not None:
+        release_pending_signup(token)
+        return jsonify({"error": error, "code": "LINK_FAILED"}), 409
+    return jsonify({"success": True, "installation_id": pending["iid"]})
+
+
+def link_pending_install(user_id: str, authorized_org: str, pending: dict) -> str | None:
+    """Link a pending new install to ``user_id``'s org; an error message or None.
+
+    Only the installation is linked: the GitHub identity is not attached to
+    this account, so a pending install can never become a way to log in.
+    """
+    from routes.github.github_signup import (
+        _link_installation,
+        _linked_elsewhere,
+        _verify_installation,
+    )
+
+    if not flask.current_app.config.get("GITHUB_APP_ENABLED"):
+        return _APP_NOT_CONFIGURED
+    installation_id = pending["iid"]
+    if not validate_user_exists(user_id):
+        return _ERROR_UNKNOWN_USER
+    org_id = get_org_id_for_user(user_id)
+    if not org_id or org_id != authorized_org:
+        return _ERROR_UNKNOWN_USER
+    install_data = _verify_installation(installation_id)
+    if install_data is None or install_data.get("id") != installation_id:
+        return _ERROR_GITHUB_API
+
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                if _linked_elsewhere(cur, installation_id, org_id):
+                    return _ERROR_LINKED_ELSEWHERE
+                _link_installation(cur, user_id, org_id, install_data)
+                conn.commit()
+    except Exception:
+        logger.exception(
+            "[GITHUB-APP-LINK-PENDING] DB write failed user=%s installation_id=%d",
+            user_id, installation_id,
+        )
+        return _ERROR_INTERNAL
+
+    logger.info(
+        "[GITHUB-APP-LINK-PENDING] user=%s linked installation_id=%d",
+        user_id, installation_id,
+    )
+    _enqueue_enrolled_import(user_id, installation_id, "[GITHUB-APP-LINK-PENDING]")
+    try:
+        from utils.auth.tool_registry import seed_org_tool_permissions
+
+        seed_org_tool_permissions(org_id, user_id)
+    except Exception:
+        logger.warning("[GITHUB-APP-LINK-PENDING] tool permission seeding failed", exc_info=True)
+    return None
 
 
 @github_app_bp.route(
@@ -895,6 +1310,7 @@ def github_app_unlink_installation(user_id, installation_id):
 
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
+                hand_off_import_state(cur, user_id, [installation_id])
                 cur.execute(
                     """DELETE FROM user_github_installations
                         WHERE user_id = %s AND installation_id = %s""",
@@ -1093,20 +1509,43 @@ def github_disconnect(user_id):
 
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cur:
+                from utils.auth.stateless_auth import get_org_id_from_request
+
+                # First: set_rls_context commits, so it must run before any
+                # disconnect write or it could persist half of one.
+                rls_org = set_rls_context(
+                    cur, conn, user_id,
+                    org_id=get_org_id_from_request(),
+                    log_prefix="[GITHUB-DISCONNECT]",
+                )
+                hand_off_import_state(cur, user_id)
                 cur.execute(
                     """UPDATE user_github_installations
-                          SET disconnected_at = NOW()
+                          SET disconnected_at = NOW(),
+                              repos_imported_at = NULL,
+                              repos_import_legacy = FALSE
                         WHERE user_id = %s
                           AND disconnected_at IS NULL""",
                     (user_id,),
                 )
                 soft_deleted_installs = cur.rowcount
 
-                if linked_installs:
-                    set_rls_context(
-                        cur, conn, user_id,
-                        log_prefix="[GITHUB-DISCONNECT]",
+                cur.execute(
+                    """SELECT 1 FROM user_github_installations
+                        WHERE org_id = %s AND disconnected_at IS NULL LIMIT 1""",
+                    (rls_org,),
+                )
+                if rls_org and cur.fetchone() is None:
+                    # The org's last link is gone, so this starts over: a
+                    # reconnect imports every granted repo again. Removals
+                    # recorded while connected (the app clears the picker
+                    # first) must not block it. Teammates still linked keep
+                    # their removals.
+                    cur.execute(
+                        "DELETE FROM github_repo_exclusions WHERE org_id = %s",
+                        (rls_org,),
                     )
+                if linked_installs:
                     cur.execute(
                         """UPDATE connected_repos
                               SET installation_id = NULL,

@@ -5,7 +5,7 @@ import { useUser, useAuth } from '@/hooks/useAuthHooks';
 import { canWrite } from '@/lib/roles';
 import { getEnv } from '@/lib/env';
 import { useRouter } from "next/navigation";
-import { Loader2 } from "lucide-react";
+import { Loader2, Lock } from "lucide-react";
 import dynamic from "next/dynamic";
 // Core chat components
 import { MessageList } from "@/components/chat/message-list";
@@ -20,7 +20,8 @@ const DynamicPrompts = dynamic(() => import("@/components/DynamicPrompts"), {
 
 // Hooks and utilities
 import { useWebSocket } from "@/hooks/useWebSocket";
-import { useChatHistory } from "@/hooks/useChatHistory";
+import { ChatAccessDeniedError, useChatHistory } from "@/hooks/useChatHistory";
+import { Button } from "@/components/ui/button";
 import { DISPATCH_SUBAGENT_TOOL_NAME, Message } from "../types";
 import { useStreamingMessages } from '@/hooks/useStreamingMessages';
 import { useMessageHandler } from '@/hooks/useMessageHandler';
@@ -66,10 +67,29 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [isLoadingSessionMessages, setIsLoadingSessionMessages] = useState(false);
   const [hasCreatedSession, setHasCreatedSession] = useState(false);
+  // Set when the linked chat exists but this person may not read it (403).
+  const [accessDeniedMessage, setAccessDeniedMessage] = useState<string | null>(null);
   const justCreatedSessionRef = useRef<string | null>(null);
   const lastLoadedSessionRef = useRef<string | null>(null);
   const initialMessageSentRef = useRef<boolean>(false);
   const [activeIncidentContext, setActiveIncidentContext] = useState<string | undefined>(incidentContext);
+  // Null until the org setting loads. Viewers stay read-only during that gap.
+  const [viewerChat, setViewerChat] = useState<boolean | null>(role === "viewer" ? null : true);
+  useEffect(() => {
+    if (role !== "viewer") {
+      setViewerChat(true);
+      return;
+    }
+    // Role just became viewer. The previous true would leave chat open
+    // until this request comes back.
+    setViewerChat(null);
+    let cancelled = false;
+    fetch("/api/org/viewer-run")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => { if (!cancelled) setViewerChat(Boolean(data?.chat)); })
+      .catch(() => { if (!cancelled) setViewerChat(false); });
+    return () => { cancelled = true; };
+  }, [role]);
 
   // Multi-agent dispatch panel state
   const [selectedSubAgent, setSelectedSubAgent] = useState<{
@@ -386,6 +406,7 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
 
     // New chat (no sessionId): clear previous session state
     if (!initialSessionId) {
+      setAccessDeniedMessage(null);
       if (currentSessionId) {
         setCurrentSessionId(null);
         setHasCreatedSession(false);
@@ -412,6 +433,7 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
         // Load session if not just created by us
         if (justCreatedSessionRef.current !== initialSessionId) {
           setIsLoadingSessionMessages(true);
+          setAccessDeniedMessage(null);
           onClearMessages(); // Clear existing messages before loading new session
           try {
             const loaded = await loadSessionData(initialSessionId);
@@ -420,7 +442,12 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
               setHasCreatedSession(false);
             }
           } catch (error) {
-            console.error('Error loading session:', error);
+            if (error instanceof ChatAccessDeniedError) {
+              setAccessDeniedMessage(error.message);
+              setHasCreatedSession(false);
+            } else {
+              console.error('Error loading session:', error);
+            }
           } finally {
             setIsLoadingSessionMessages(false);
           }
@@ -440,9 +467,12 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [handleChatSessionSelect, handleNewChat, currentSessionId]);
 
+  // A viewer whose chat is off must not auto-send a link's initial message.
+  const viewerMaySend = role !== "viewer" || viewerChat === true;
+
   // Auto-send initial message from URL or sessionStorage (e.g., Next Steps execution)
   useEffect(() => {
-    if (initialMessage && chatWebSocket.isReady && userId && !isLoadingSessionMessages && !isSending && !initialMessageSentRef.current) {
+    if (initialMessage && chatWebSocket.isReady && userId && !isLoadingSessionMessages && !isSending && viewerMaySend && !initialMessageSentRef.current) {
       initialMessageSentRef.current = true;
       const timer = setTimeout(() => {
         handleSend(initialMessage, chatWebSocket).then((success) => {
@@ -459,7 +489,7 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
       return () => clearTimeout(timer);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialMessage, chatWebSocket.isReady, userId, isLoadingSessionMessages, isSending]);
+  }, [initialMessage, chatWebSocket.isReady, userId, isLoadingSessionMessages, isSending, viewerMaySend]);
 
   // Memoized message list
   const memoizedMessages = useMemo(() => {
@@ -486,11 +516,29 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
     );
   }
 
+  // The linked chat exists but isn't this person's to read: say so, never a blank chat.
+  if (accessDeniedMessage) {
+    return (
+      <div className="flex h-full w-full items-center justify-center px-4 py-16">
+        <div className="flex max-w-md flex-col items-center gap-3 text-center">
+          <Lock className="h-8 w-8 text-muted-foreground" aria-hidden="true" />
+          <h2 className="text-base font-medium">You can&apos;t open this chat</h2>
+          <p className="text-sm text-muted-foreground">{accessDeniedMessage}</p>
+          <Button variant="outline" size="sm" className="mt-2" onClick={handleNewChat}>
+            Start a new chat
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
   // Show empty state when no messages, otherwise show chat interface
   const hasMessages = memoizedMessages.length > 0;
 
-  // Viewers cannot interact with chat
-  const isReadOnly = !canWrite(role);
+  const isReadOnly = role === "viewer" ? viewerChat !== true : !canWrite(role);
+  const readOnlyNote = role === "viewer"
+    ? "Chat isn't enabled for viewers in this organization."
+    : "Read-only access. Editors and admins can interact with infrastructure.";
 
   if (hasMessages) {
     // Standard chat interface with messages
@@ -547,7 +595,7 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
           <div className="max-w-4xl mx-auto space-y-2">
             <SessionUsagePanel sessionUsage={sessionUsage} isSending={isSending} />
             {isReadOnly ? (
-              <p className="text-sm text-muted-foreground py-2">Read-only access. Editors and admins can interact with infrastructure.</p>
+              <p className="text-sm text-muted-foreground py-2">{readOnlyNote}</p>
             ) : (
             <EnhancedChatInput
               input={input}
@@ -600,7 +648,7 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
           <EmptyStateHeader />
           
           {isReadOnly ? (
-            <p className="text-sm text-muted-foreground py-4">Read-only access. Editors and admins can interact with infrastructure.</p>
+            <p className="text-sm text-muted-foreground py-4">{readOnlyNote}</p>
           ) : (
           <>
           <EnhancedChatInput

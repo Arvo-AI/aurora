@@ -15,7 +15,7 @@ import { GitHubCommitTool } from "@/components/GitHubCommitTool"
 import {
   extractIacAction,
   parseCloudExecCommand,
-  parseGitHubToolCommand,
+  parseMcpToolCommand,
   parseGitHubRcaCommand,
   parseJenkinsRcaCommand,
   parseCloudbeesRcaCommand,
@@ -24,9 +24,12 @@ import {
   parseAwsMcpCommand,
   parseAwsSuggestCommand,
   parseCorootCommand,
+  parseRabbitMQCommand,
   parseNewRelicCommand,
   parseCloudflareCommand,
+  parseElasticCommand,
   parseSlackCommand,
+  parseSplunkCommand,
   parseGitLabToolCommand,
 } from "./tool-command-parser"
 import { RenderOutput } from "./tool-output-renderer"
@@ -81,8 +84,18 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
   let command: string = tool.command || normalizedInput || defaultCliCommand
 
   // Special display names for specific tools
-  if (tool.tool_name === "knowledge_base_search") {
-    command = "Knowledge Base"
+  if (tool.tool_name === "list_memories") {
+    command = "List Memories"
+  } else if (tool.tool_name === "read_memory") {
+    command = "Read Memory"
+  } else if (tool.tool_name === "write_memory") {
+    command = "Write Memory"
+  } else if (tool.tool_name === "append_to_memory") {
+    command = "Append to Memory"
+  } else if (tool.tool_name === "edit_memory") {
+    command = "Edit Memory"
+  } else if (tool.tool_name === "grep_memories") {
+    command = "Search Memory"
   }
 
   if (tool.tool_name === "load_skill") {
@@ -130,9 +143,9 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
       ? tool.command
       : parsed.command
   }
-  // GitHub MCP tools parsing
+  // MCP tool parsing (built-in GitHub/AWS servers and customer-registered ones)
   else if (tool.tool_name.startsWith("mcp_") && typeof command === "string" && command.trim().startsWith("{")) {
-    command = parseGitHubToolCommand(tool.tool_name, command)
+    command = parseMcpToolCommand(tool.tool_name, command)
   }
   // GitHub RCA tool parsing
   else if (tool.tool_name === "github_rca" && typeof command === "string" && command.trim().startsWith("{")) {
@@ -181,12 +194,32 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
   else if (tool.tool_name.startsWith("coroot_")) {
     command = parseCorootCommand(tool.tool_name, normalizedInput)
   }
+  else if (tool.tool_name.startsWith("rabbitmq_")) {
+    command = parseRabbitMQCommand(tool.tool_name, normalizedInput)
+  }
   // New Relic tools parsing
   else if (tool.tool_name === "query_newrelic" && typeof command === "string" && command.trim().startsWith("{")) {
     command = parseNewRelicCommand(normalizedInput)
   }
   else if (tool.tool_name === "query_cloudflare" || tool.tool_name === "cloudflare_list_zones" || tool.tool_name === "cloudflare_action") {
     command = parseCloudflareCommand(tool.tool_name, normalizedInput)
+  }
+  // Elastic tools parsing
+  else if (tool.tool_name?.startsWith("elastic_")) {
+    command = parseElasticCommand(tool.tool_name, normalizedInput)
+  }
+  // Name the Splunk instance on the tool call, including a fan-out across several.
+  else if (
+    tool.tool_name === "search_splunk" ||
+    tool.tool_name === "list_splunk_indexes" ||
+    tool.tool_name === "list_splunk_sourcetypes"
+  ) {
+    const outputStr = typeof tool.output === "string"
+      ? tool.output
+      : tool.output && typeof tool.output === "object"
+        ? JSON.stringify(tool.output)
+        : ""
+    command = parseSplunkCommand(tool.tool_name, normalizedInput, outputStr)
   }
   // Notion tools: humanize the label (actual output rendering stays generic via RenderOutput)
   else if (tool.tool_name?.startsWith("notion_")) {
@@ -209,7 +242,7 @@ const ToolExecutionWidget = ({ tool, className, sendMessage, sendRaw, onToolUpda
     }
   }
   // Slack tools parsing
-  else if (tool.tool_name === "list_slack_channels" || tool.tool_name === "get_channel_history" || tool.tool_name === "get_thread_replies") {
+  else if (tool.tool_name === "list_slack_channels" || tool.tool_name === "list_slack_users" || tool.tool_name === "get_channel_history" || tool.tool_name === "get_thread_replies") {
     command = parseSlackCommand(tool.tool_name, normalizedInput)
   }
   // Alert payload drill-down tool: show the json_path being queried

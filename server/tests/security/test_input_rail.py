@@ -404,12 +404,123 @@ class TestGuardrailsLLMCompatBind:
         assert isinstance(bound, RunnableBinding)
         assert bound.bound is wrapper
 
-    def test_bind_renames_max_tokens_in_stored_kwargs(self):
+    def test_bind_defers_the_rename_to_call_time(self):
+        # The rename (and the sampling-param strip) happens in ``_prepare`` at
+        # generate time, not at bind time: the strip only learns which params the
+        # model rejects *after* a call fails, so both have to run on the same dict.
         wrapper = _GuardrailsLLMCompat.model_construct(inner=_RecordingInner("ok"), rename_max_tokens=True)
 
         bound = wrapper.bind(max_tokens=7, temperature=0.0)
 
-        assert bound.kwargs == {"max_output_tokens": 7, "temperature": 0.0}
+        assert bound.kwargs == {"max_tokens": 7, "temperature": 0.0}
+
+    def test_bound_kwargs_are_renamed_by_the_time_inner_is_called(self):
+        inner = _RecordingInner("ok")
+        wrapper = _GuardrailsLLMCompat.model_construct(inner=inner, rename_max_tokens=True)
+
+        wrapper._generate([], stop=None, **wrapper.bind(max_tokens=7).kwargs)
+
+        assert "max_output_tokens" in inner.last_kwargs
+        assert "max_tokens" not in inner.last_kwargs
+
+
+class TestGuardrailsLLMCompatSamplingStrip:
+    """Newer models (Claude Opus 5.5 / Sonnet 5, GPT-6 Astra) removed ``temperature``.
+
+    NeMo re-attaches it as a *call* kwarg on every self-check, so the providers'
+    instance-level ``_sampling_guard`` cannot help and the rail used to fail closed —
+    blocking every background RCA. The wrapper drops the rejected params and retries.
+    """
+
+    class _RejectsSampling:
+        """Inner model that 400s while ``temperature`` is present, like Opus 5.5."""
+
+        def __init__(self):
+            self.calls = []
+
+        def _generate(self, messages, stop=None, **kwargs):
+            self.calls.append(kwargs)
+            if "temperature" in kwargs:
+                raise RuntimeError("Error code: 400 - `temperature` is deprecated for this model.")
+            return _chat_result_with(_ai_message_with("No"))
+
+        async def _agenerate(self, messages, stop=None, **kwargs):
+            await asyncio.sleep(0)
+            return self._generate(messages, stop=stop, **kwargs)
+
+    def _wrapper(self, inner):
+        return _GuardrailsLLMCompat.model_construct(
+            inner=inner, rename_max_tokens=False, drop_sampling=False
+        )
+
+    def test_retries_without_temperature_and_succeeds(self):
+        inner = self._RejectsSampling()
+        wrapper = self._wrapper(inner)
+
+        result = wrapper._generate([], stop=None, temperature=0.0, max_tokens=512)
+
+        assert result.generations[0].message.content == "No"
+        assert "temperature" in inner.calls[0]
+        assert "temperature" not in inner.calls[1]
+        assert inner.calls[1]["max_tokens"] == 512, "non-sampling kwargs must survive"
+
+    def test_rejection_is_sticky_so_later_checks_skip_the_retry(self):
+        inner = self._RejectsSampling()
+        wrapper = self._wrapper(inner)
+
+        wrapper._generate([], stop=None, temperature=0.0)
+        inner.calls.clear()
+        wrapper._generate([], stop=None, temperature=0.0)
+
+        assert wrapper.drop_sampling is True
+        assert inner.calls == [{}], "second check should not re-send temperature"
+
+    def test_async_path_retries_the_same_way(self):
+        inner = self._RejectsSampling()
+        wrapper = self._wrapper(inner)
+
+        result = asyncio.run(wrapper._agenerate([], stop=None, temperature=0.0))
+
+        assert result.generations[0].message.content == "No"
+        assert len(inner.calls) == 2
+
+    def test_unrelated_errors_still_propagate(self):
+        class _RateLimited:
+            def _generate(self, messages, stop=None, **kwargs):
+                raise RuntimeError("Error code: 429 - rate limit exceeded")
+
+        wrapper = self._wrapper(_RateLimited())
+
+        with pytest.raises(RuntimeError, match="rate limit"):
+            wrapper._generate([], stop=None, temperature=0.0)
+
+    def test_does_not_retry_when_no_sampling_param_was_sent(self):
+        """A temperature-shaped error with no temperature in the call is not ours to fix;
+        retrying would just repeat an identical request."""
+        class _AlwaysFails:
+            def __init__(self):
+                self.calls = 0
+
+            def _generate(self, messages, stop=None, **kwargs):
+                self.calls += 1
+                raise RuntimeError("400 `temperature` is deprecated for this model.")
+
+        inner = _AlwaysFails()
+        wrapper = self._wrapper(inner)
+
+        with pytest.raises(RuntimeError):
+            wrapper._generate([], stop=None, max_tokens=512)
+
+        assert inner.calls == 1
+
+    def test_model_that_accepts_temperature_is_untouched(self):
+        inner = _RecordingInner("No")
+        wrapper = self._wrapper(inner)
+
+        wrapper._generate([], stop=None, temperature=0.0, max_tokens=512)
+
+        assert inner.last_kwargs == {"temperature": 0.0, "max_tokens": 512}
+        assert wrapper.drop_sampling is False
 
 
 class TestGuardrailsLLMCompatGenerate:

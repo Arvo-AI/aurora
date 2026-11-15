@@ -1,5 +1,5 @@
-import { Server } from "lucide-react";
-import { isOvhEnabled, isSharePointEnabled, isJiraEnabled, isSpinnakerEnabled, isNotionEnabled, isCloudBeesEnabled } from "@/lib/feature-flags";
+import { Plug, Server } from "lucide-react";
+import { isOvhEnabled, isSharePointEnabled, isSpinnakerEnabled, isNotionEnabled, isCloudBeesEnabled } from "@/lib/feature-flags";
 import type { ConnectorConfig } from "./types";
 
 class ConnectorRegistry {
@@ -34,8 +34,6 @@ class ConnectorRegistry {
       storageKey: "isDatadogConnected",
       alertsPath: "/datadog/events",
       alertsLabel: "View Events",
-      overviewPath: "/datadog/overview",
-      overviewLabel: "Overview",
       useCustomConnection: true,
     });
 
@@ -62,6 +60,19 @@ class ConnectorRegistry {
       path: "/splunk/auth",
       storageKey: "isSplunkConnected",
       alertsPath: "/splunk/alerts",
+      alertsLabel: "View Alerts",
+    });
+
+    this.register({
+      id: "elastic",
+      name: "Elastic Cloud",
+      description: "Connect Elasticsearch and Kibana (Elastic Cloud Hosted, Serverless, or self-managed) to search logs, read Kibana alerts, and turn alert rules into Aurora incidents.",
+      iconPath: "/elastic.svg",
+      iconBgColor: "bg-white dark:bg-white",
+      category: "Monitoring",
+      path: "/elastic/auth",
+      storageKey: "isElasticConnected",
+      alertsPath: "/elastic/alerts",
       alertsLabel: "View Alerts",
     });
 
@@ -160,7 +171,7 @@ class ConnectorRegistry {
     this.register({
         id: "incidentio",
         name: "incident.io",
-        description: "Connect incident.io for real-time incident lifecycle tracking. Receive webhook events, investigate incidents with timeline data, and post RCA results back automatically.",
+        description: "Connect incident.io for real-time incident lifecycle tracking. Receive webhook events, run RCA on incidents and alerts (with customizable severity filtering), and post RCA results back automatically.",
         iconPath: "/incidentio.svg",
         iconBgColor: "bg-white dark:bg-white",
         category: "Incident Management",
@@ -168,6 +179,17 @@ class ConnectorRegistry {
         storageKey: "isIncidentIoConnected",
         alertsPath: "/incident-io/incidents",
         alertsLabel: "View Incidents",
+      });
+
+    this.register({
+        id: "servicenow",
+        name: "ServiceNow",
+        description: "Investigate ServiceNow incidents automatically and post the root cause back as a work note",
+        iconPath: "/servicenow.svg",
+        iconBgColor: "bg-white dark:bg-white",
+        category: "Incident Management",
+        path: "/servicenow/auth",
+        storageKey: "isServiceNowConnected",
       });
 
     this.register({
@@ -192,18 +214,16 @@ class ConnectorRegistry {
       storageKey: "isConfluenceConnected",
     });
 
-    if (isJiraEnabled()) {
-      this.register({
-        id: "jira",
-        name: "Jira",
-        description: "Search issues, track incidents, and export postmortem action items as tracked Jira work.",
-        iconPath: "/jira.svg",
-        iconBgColor: "bg-white dark:bg-white",
-        category: "Documentation",
-        path: "/jira/connect",
-        storageKey: "isJiraConnected",
-      });
-    }
+    this.register({
+      id: "jira",
+      name: "Jira",
+      description: "Search issues, track incidents, and export postmortem action items as tracked Jira work.",
+      iconPath: "/jira.svg",
+      iconBgColor: "bg-white dark:bg-white",
+      category: "Documentation",
+      path: "/jira/connect",
+      storageKey: "isJiraConnected",
+    });
 
     if (isSharePointEnabled()) {
       this.register({
@@ -240,6 +260,18 @@ class ConnectorRegistry {
       category: "Infrastructure",
       path: "/kubectl/manage",
       storageKey: "isKubectlConnected",
+    });
+
+    this.register({
+      id: "mcp",
+      name: "Custom MCP Servers",
+      description: "Register your own MCP servers so Aurora can query systems it has no built-in connector for. Aurora discovers their tools and uses them during investigations.",
+      icon: Plug,
+      iconBgColor: "bg-muted",
+      category: "Infrastructure",
+      path: "/mcp/auth",
+      storageKey: "isMcpConnected",
+      useCustomConnection: true,
     });
 
     this.register({
@@ -282,6 +314,18 @@ class ConnectorRegistry {
         iconBgColor: "bg-white dark:bg-white",
         category: "Communication",
         storageKey: "isSlackConnected",
+        useCustomConnection: true,
+      });
+
+    this.register({
+        id: "teams",
+        name: "Microsoft Teams",
+        description:
+          "Install the Aurora Teams app in each team, then connect your Microsoft tenant in Aurora for @mentions, routing, and incident updates.",
+        iconPath: "/microsoft-teams.svg",
+        iconBgColor: "bg-muted",
+        category: "Communication",
+        storageKey: "isTeamsConnected",
         useCustomConnection: true,
       });
 
@@ -401,6 +445,17 @@ class ConnectorRegistry {
       category: "Infrastructure",
       path: "/vm-config",
       storageKey: "isOnPremConnected",
+    });
+
+    this.register({
+      id: "rabbitmq",
+      name: "RabbitMQ",
+      description: "Connect a RabbitMQ management API to inspect queue depth, consumers, node alarms, and connections during root cause analysis.",
+      iconPath: "/rabbitmq.svg",
+      iconBgColor: "bg-white dark:bg-white",
+      category: "Infrastructure",
+      path: "/rabbitmq/auth",
+      storageKey: "isRabbitMQConnected",
     });
 
     this.register({

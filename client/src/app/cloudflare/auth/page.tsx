@@ -32,6 +32,7 @@ const REQUIRED_READ_PERMISSIONS: Record<string, string> = {
   "DNS Read": "Zone — DNS — Read",
   "Analytics Read": "Zone — Analytics — Read",
   "Firewall Services Read": "Zone — Firewall Services — Read",
+  "Zone WAF Read": "Zone — Zone WAF — Read",
   "Load Balancers Account Read": "Account — Load Balancing: Account Load Balancers — Read",
   "Account API Tokens Read": "Account — API Tokens — Read",
 };
@@ -40,6 +41,7 @@ const RECOMMENDED_WRITE_PERMISSIONS: Record<string, string> = {
   "DNS Write": "Zone — DNS — Edit",
   "Cache Purge": "Zone — Cache Purge — Purge",
   "Firewall Services Write": "Zone — Firewall Services — Edit",
+  "Zone WAF Write": "Zone — Zone WAF — Edit",
   "Zone Settings Write": "Zone — Zone Settings — Edit",
   "Load Balancers Account Write": "Account — Load Balancing: Account Load Balancers — Edit",
 };
@@ -498,7 +500,7 @@ export default function CloudflareAuthPage() {
                     </div>
                     <div className="flex items-start gap-2">
                       <span className="text-muted-foreground mt-0.5">4.</span>
-                      <p>Under <strong>Permissions</strong>, click <strong>&quot;+ Add more&quot;</strong> and add <strong>Account — API Tokens — Read</strong></p>
+                      <p>Under <strong>Permissions</strong>, double-check that <strong>Account — API Tokens — Read has been selected.</strong></p>
                     </div>
                     <div className="flex items-start gap-2">
                       <span className="text-muted-foreground mt-0.5">5.</span>
@@ -511,7 +513,7 @@ export default function CloudflareAuthPage() {
                         <ul className="text-xs text-muted-foreground mt-1 list-disc list-inside space-y-0.5">
                           <li>Zone — DNS — Edit</li>
                           <li>Zone — Cache Purge — Purge</li>
-                          <li>Zone — Firewall Services — Edit</li>
+                          <li>Zone — Zone WAF — Edit (enable or disable a WAF custom rule)</li>
                           <li>Account — Load Balancing: Account Load Balancers — Edit</li>
                         </ul>
                       </div>

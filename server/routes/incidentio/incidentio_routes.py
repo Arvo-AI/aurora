@@ -4,15 +4,26 @@ import base64
 import hashlib
 import hmac
 import logging
-import os
 import re
 from typing import Any, Dict, Optional
 
-import requests
 from flask import Blueprint, jsonify, request
 
-from routes.incidentio.tasks import process_incidentio_event
+from routes.incidentio.incidentio_client import (
+    IncidentioAPIError,
+    IncidentioClient,
+    postback_can_enable,
+)
+from routes.incidentio.tasks import (
+    process_incidentio_event,
+    get_org_severities,
+    get_postback_access,
+    invalidate_org_severity_cache,
+    invalidate_postback_access_cache,
+    _get_org_severity_ranks,
+)
 from utils.db.connection_pool import db_pool
+from utils.web.public_url import external_backend_url
 from utils.auth.stateless_auth import (
     get_user_preference,
     set_rls_context,
@@ -21,9 +32,6 @@ from utils.auth.stateless_auth import (
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
 from utils.secrets.secret_ref_utils import delete_user_secret
-
-INCIDENTIO_API_BASE = "https://api.incident.io/v2"
-INCIDENTIO_TIMEOUT = 15
 
 _SAFE_LOG_RE = re.compile(r"[^a-zA-Z0-9._\-]")
 
@@ -35,79 +43,6 @@ incidentio_bp = Blueprint("incidentio", __name__)
 def _sanitize_for_log(value: str, max_len: int = 80) -> str:
     """Strip any character that isn't alphanumeric, dot, dash, or underscore."""
     return _SAFE_LOG_RE.sub("", value)[:max_len]
-
-
-class IncidentioAPIError(Exception):
-    """Error codes avoid leaking HTTP response bodies through str(exc)."""
-    INVALID_KEY = "invalid_key"
-    FORBIDDEN = "forbidden"
-    TIMEOUT = "timeout"
-    UNREACHABLE = "unreachable"
-    API_ERROR = "api_error"
-
-    _USER_MESSAGES = {
-        INVALID_KEY: "Invalid API key",
-        FORBIDDEN: "API key lacks required permissions",
-        TIMEOUT: "Connection to incident.io timed out",
-        UNREACHABLE: "Unable to reach incident.io API",
-        API_ERROR: "Failed to validate API key with incident.io",
-    }
-
-    def __init__(self, code: str):
-        self.code = code
-        super().__init__(self._USER_MESSAGES.get(code, self._USER_MESSAGES[self.API_ERROR]))
-
-
-class IncidentioClient:
-    """Client for the incident.io REST API."""
-
-    def __init__(self, api_key: str):
-        self.api_key = api_key
-
-    @property
-    def headers(self) -> Dict[str, str]:
-        return {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        }
-
-    def _request(self, method: str, path: str, **kwargs) -> requests.Response:
-        url = f"{INCIDENTIO_API_BASE}{path}"
-        try:
-            response = requests.request(
-                method, url, headers=self.headers, timeout=INCIDENTIO_TIMEOUT, **kwargs
-            )
-            response.raise_for_status()
-            return response
-        except requests.exceptions.Timeout:
-            raise IncidentioAPIError(IncidentioAPIError.TIMEOUT)
-        except requests.exceptions.ConnectionError:
-            raise IncidentioAPIError(IncidentioAPIError.UNREACHABLE)
-        except requests.HTTPError as exc:
-            status = exc.response.status_code if exc.response is not None else None
-            logger.warning("[INCIDENTIO] HTTP %s from %s", status, path)
-            if status == 401:
-                raise IncidentioAPIError(IncidentioAPIError.INVALID_KEY)
-            if status == 403:
-                raise IncidentioAPIError(IncidentioAPIError.FORBIDDEN)
-            raise IncidentioAPIError(IncidentioAPIError.API_ERROR)
-
-    def list_incidents(self, page_size: int = 5) -> Dict[str, Any]:
-        return self._request("GET", "/incidents", params={"page_size": page_size}).json()
-
-    def get_incident(self, incident_id: str) -> Dict[str, Any]:
-        return self._request("GET", f"/incidents/{incident_id}").json()
-
-    def get_incident_updates(self, incident_id: str) -> Dict[str, Any]:
-        return self._request("GET", "/incident_updates", params={"incident_id": incident_id}).json()
-
-    def post_incident_update(self, incident_id: str, message: str) -> Dict[str, Any]:
-        return self._request(
-            "POST",
-            "/incident_updates",
-            json={"incident_id": incident_id, "message": message},
-        ).json()
 
 
 def _get_stored_credentials(user_id: str) -> Optional[Dict[str, Any]]:
@@ -148,10 +83,15 @@ def connect(user_id):
     token_payload = {"api_key": api_key}
 
     try:
-        store_tokens_in_db(user_id, token_payload, "incidentio")
+        store_tokens_in_db(user_id, token_payload, "incidentio", schedule_prediscovery=True)
     except Exception:
         logger.exception("[INCIDENTIO] Failed to store credentials for user %s", user_id)
         return jsonify({"error": "Failed to store credentials"}), 500
+
+    # New/rotated key may have different scopes — drop any cached catalog so
+    # the next fetch reflects this key's actual permissions.
+    invalidate_org_severity_cache(user_id)
+    invalidate_postback_access_cache(user_id)
 
     return jsonify({"success": True, "connected": True})
 
@@ -186,6 +126,10 @@ def disconnect(user_id):
         success, _ = delete_user_secret(user_id, "incidentio")
         if not success:
             return jsonify({"error": "Failed to delete stored credentials"}), 500
+
+        # Clear cached severity catalog so a future reconnect re-fetches.
+        invalidate_org_severity_cache(user_id)
+        invalidate_postback_access_cache(user_id)
 
         logger.info("[INCIDENTIO] Disconnected user %s", user_id)
         return jsonify({"success": True, "message": "incident.io disconnected successfully"})
@@ -297,9 +241,7 @@ def get_alerts(user_id):
 @require_permission("connectors", "read")
 def get_webhook_url(user_id):
     """Return the webhook URL for this user's incident.io configuration."""
-    ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")
-    backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "").rstrip("/")
-    base_url = ngrok_url if ngrok_url and backend_url.startswith("http://localhost") else backend_url
+    base_url = external_backend_url()
     if not base_url:
         base_url = request.host_url.rstrip("/")
 
@@ -315,7 +257,13 @@ def get_webhook_url(user_id):
             "1. Go to incident.io → Settings → Webhooks",
             "2. Click 'Add endpoint'",
             "3. Paste the webhook URL above",
-            "4. Select events: incident.created, incident.updated",
+            "\n".join([
+                "4. Subscribe to these event types (each is a separate subscription):",
+                "    • public_incident.incident_created_v2  (required)",
+                "    • public_alert.alert_created_v1  (required)",
+                "    • private_incident.incident_created_v2  (only if you use private incidents)",
+                "    • private_alert.alert_created_v1  (only if you use private alerts)",
+            ]),
             "5. Save the endpoint, then copy the signing secret from the endpoint settings",
             "6. Paste the signing secret (starts with whsec_) into the field above",
         ],
@@ -349,12 +297,50 @@ def save_webhook_secret(user_id):
     return jsonify({"success": True})
 
 
+@incidentio_bp.route("/severities", methods=["GET"])
+@require_permission("connectors", "read")
+def list_org_severities(user_id):
+    """Return the org's configured incident.io severities for the RCA filter UI.
+
+    Shape: {"available": bool, "denied": bool, "severities": [{name, rank}]}.
+    ``available`` is False (and ``denied`` True) when the API key lacks the
+    "View data" scope, so the client can disable severity-name selection.
+    """
+    result = get_org_severities(user_id)
+    return jsonify(result)
+
+
+def _rca_settings_payload(
+    user_id: str,
+    access: Optional[Dict[str, Any]] = None,
+    *,
+    postback_refused: bool = False,
+) -> Dict[str, Any]:
+    if access is None:
+        access = get_postback_access(user_id)
+    payload = {
+        "rcaEnabled": get_user_preference(user_id, "incidentio_rca_enabled", default=True),
+        "postbackEnabled": get_user_preference(user_id, "incidentio_postback_enabled", default=False),
+        "alertRcaEnabled": get_user_preference(user_id, "incidentio_alert_rca_enabled", default=True),
+        "alertMinSeverity": get_user_preference(user_id, "incidentio_alert_min_severity", default="low"),
+        "alertSeverityAllowlist": get_user_preference(
+            user_id, "incidentio_alert_severity_allowlist", default=None
+        ),
+        "postbackAccess": access,
+    }
+    if postback_refused:
+        payload["postbackRefused"] = True
+    return payload
+
+
 @incidentio_bp.route("/rca-settings", methods=["GET"])
 @require_permission("connectors", "read")
 def get_rca_settings(user_id):
-    rca_enabled = get_user_preference(user_id, "incidentio_rca_enabled", default=True)
-    postback_enabled = get_user_preference(user_id, "incidentio_postback_enabled", default=False)
-    return jsonify({"rcaEnabled": rca_enabled, "postbackEnabled": postback_enabled})
+    return jsonify(_rca_settings_payload(user_id))
+
+
+# Severity labels accepted by the alert RCA filter (normalized values only).
+_VALID_SEVERITIES = frozenset(("critical", "high", "medium", "low", "unknown"))
 
 
 @incidentio_bp.route("/rca-settings", methods=["PUT"])
@@ -367,6 +353,12 @@ def update_rca_settings(user_id):
 
     rca_enabled = data.get("rcaEnabled")
     postback_enabled = data.get("postbackEnabled")
+    alert_rca_enabled = data.get("alertRcaEnabled")
+    alert_min_severity = data.get("alertMinSeverity")
+    alert_severity_allowlist = data.get("alertSeverityAllowlist")
+    # Reused in the response so a refused enable doesn't call identity twice.
+    access = None
+    postback_refused = False
 
     if rca_enabled is not None:
         if not isinstance(rca_enabled, bool):
@@ -376,10 +368,65 @@ def update_rca_settings(user_id):
     if postback_enabled is not None:
         if not isinstance(postback_enabled, bool):
             return jsonify({"error": "postbackEnabled must be a boolean"}), 400
-        store_user_preference(user_id, "incidentio_postback_enabled", postback_enabled)
+        # Turning on with a key that can write nowhere would silently drop every RCA.
+        if postback_enabled:
+            access = get_postback_access(user_id)
+            if not postback_can_enable(access):
+                postback_refused = True
+                logger.info("[INCIDENTIO] Post-back left off: API key cannot write incidents or alerts")
+            else:
+                store_user_preference(user_id, "incidentio_postback_enabled", value=True)
+        else:
+            store_user_preference(user_id, "incidentio_postback_enabled", value=False)
 
-    return jsonify({
-        "success": True,
-        "rcaEnabled": get_user_preference(user_id, "incidentio_rca_enabled", default=True),
-        "postbackEnabled": get_user_preference(user_id, "incidentio_postback_enabled", default=False),
-    })
+    if alert_rca_enabled is not None:
+        if not isinstance(alert_rca_enabled, bool):
+            return jsonify({"error": "alertRcaEnabled must be a boolean"}), 400
+        store_user_preference(user_id, "incidentio_alert_rca_enabled", alert_rca_enabled)
+
+    # Minimum-severity threshold: either a normalized bucket label OR a real
+    # org severity name (so the UI can offer the user's actual severities).
+    if alert_min_severity is not None:
+        if not isinstance(alert_min_severity, str) or not alert_min_severity.strip():
+            return jsonify({"error": "alertMinSeverity must be a non-empty string"}), 400
+        candidate = alert_min_severity.lower().strip()
+        # Accept a fixed bucket, or a real severity name from the org catalog.
+        if candidate not in _VALID_SEVERITIES:
+            org_ranks = _get_org_severity_ranks(user_id)
+            if candidate not in org_ranks:
+                return jsonify({
+                    "error": (
+                        "alertMinSeverity must be one of: "
+                        f"{', '.join(sorted(_VALID_SEVERITIES))}, "
+                        "or a severity configured in your incident.io organization"
+                    )
+                }), 400
+        store_user_preference(user_id, "incidentio_alert_min_severity", candidate)
+
+    # Explicit allowlist: list of normalized severities, or null/empty to clear
+    # it (falls back to the minimum-severity threshold).
+    if alert_severity_allowlist is not None:
+        if not isinstance(alert_severity_allowlist, list):
+            return jsonify({"error": "alertSeverityAllowlist must be a list or null"}), 400
+        normalized = [str(s).lower() for s in alert_severity_allowlist]
+        # Accept a fixed bucket, or a real severity name from the org catalog
+        # (mirrors alertMinSeverity). Only resolve the org catalog for names
+        # that aren't already a known fixed bucket to avoid a needless API call.
+        unknown = [s for s in normalized if s not in _VALID_SEVERITIES]
+        org_ranks = _get_org_severity_ranks(user_id) if unknown else {}
+        invalid = [s for s in unknown if s not in org_ranks]
+        if invalid:
+            return jsonify({
+                "error": (
+                    "alertSeverityAllowlist contains invalid severities: "
+                    f"{', '.join(invalid)}"
+                )
+            }), 400
+        # Store an empty list as None so downstream treats it as "no allowlist".
+        store_user_preference(
+            user_id,
+            "incidentio_alert_severity_allowlist",
+            normalized or None,
+        )
+
+    return jsonify({"success": True, **_rca_settings_payload(user_id, access, postback_refused=postback_refused)})

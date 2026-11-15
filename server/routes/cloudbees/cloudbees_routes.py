@@ -13,6 +13,7 @@ from flask import Blueprint, jsonify, request
 
 from connectors.jenkins_connector.api_client import JenkinsClient
 from utils.db.connection_pool import db_pool
+from utils.web.public_url import external_backend_url
 from utils.web.webhook_signature import SIGNATURE_HEADER, verify_webhook_signature
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
@@ -114,7 +115,7 @@ def connect(user_id):
     }
 
     try:
-        store_tokens_in_db(user_id, token_payload, CLOUDBEES_PROVIDER)
+        store_tokens_in_db(user_id, token_payload, CLOUDBEES_PROVIDER, schedule_prediscovery=True)
         logger.info("[CLOUDBEES] Stored credentials for user %s (url=%s)", user_id, base_url)
     except Exception:
         logger.exception("[CLOUDBEES] Failed to store credentials for user %s", user_id)
@@ -321,7 +322,7 @@ def connect_platform(user_id):
             "webhook_secret": secrets.token_hex(32),
         }
         try:
-            store_tokens_in_db(user_id, oc_payload, CLOUDBEES_OC_PROVIDER)
+            store_tokens_in_db(user_id, oc_payload, CLOUDBEES_OC_PROVIDER, schedule_prediscovery=True)
             logger.info("[CLOUDBEES] Stored OC credentials for user %s", user_id)
         except Exception:
             logger.exception("[CLOUDBEES] Failed to store OC credentials for user %s", user_id)
@@ -360,7 +361,7 @@ def _validate_and_store_fm(user_id: str, fm_api_token: str | None, fm_app_id: st
             "app_id": fm_app_id or "",
         }
         try:
-            store_tokens_in_db(user_id, fm_payload, CLOUDBEES_FM_PROVIDER)
+            store_tokens_in_db(user_id, fm_payload, CLOUDBEES_FM_PROVIDER, schedule_prediscovery=True)
             logger.info("[CLOUDBEES] Stored FM credentials for user %s", user_id)
             return {"connected": True, "app_id": fm_app_id}
         except Exception:
@@ -736,11 +737,11 @@ def deployment_webhook(user_id: str):
 @require_permission("connectors", "read")
 def get_webhook_url(user_id):
     """Return the webhook URL and Jenkinsfile snippets for the authenticated user."""
-    ngrok_url = os.getenv("NGROK_URL", "").rstrip("/")
     backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "").rstrip("/")
+    # No configured backend: the request host is the only URL we can offer.
     if not backend_url:
         backend_url = request.host_url.rstrip("/")
-    base_url = ngrok_url if ngrok_url and backend_url.startswith("http://localhost") else backend_url
+    base_url = external_backend_url(backend_url)
 
     webhook_url = f"{base_url}/cloudbees/webhook/{user_id}"
 

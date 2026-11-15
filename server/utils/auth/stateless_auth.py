@@ -176,7 +176,7 @@ def get_credentials_from_db(user_id: str, provider: str) -> Optional[Dict[str, A
         if provider == 'aws':
             try:
                 from utils.aws.aws_auth import assume_role_and_get_creds
-                from utils.workspace.workspace_utils import get_or_create_workspace
+                from utils.workspace.workspace_utils import resolve_connection_external_id
 
                 conn = connect_to_db_as_user()
                 cur = conn.cursor()
@@ -184,7 +184,7 @@ def get_credentials_from_db(user_id: str, provider: str) -> Optional[Dict[str, A
 
                 cur.execute(
                     """
-                    SELECT role_arn, account_id FROM user_connections
+                    SELECT role_arn, account_id, workspace_id FROM user_connections
                     WHERE (user_id = %s OR org_id = %s) AND provider = 'aws' AND status = 'active'
                     ORDER BY CASE WHEN user_id = %s THEN 0 ELSE 1 END,
                              last_verified_at DESC NULLS LAST
@@ -203,18 +203,22 @@ def get_credentials_from_db(user_id: str, provider: str) -> Optional[Dict[str, A
                 logger.warning(f"No active AWS connection found for user {user_id}")
                 return None
 
-            role_arn, account_id = row
+            role_arn, account_id, workspace_id = row
             # Try cache
             cached = _get_cached_aws_creds(user_id, account_id)
             if cached:
                 logger.debug("Returned cached AWS credentials for %s/%s", user_id, account_id)
                 return cached
 
-            # Get external_id from workspace (required for role assumption)
-            workspace = get_or_create_workspace(user_id, "default")
-            external_id = workspace.get('aws_external_id')
+            # ExternalId belongs to the workspace that registered this connection,
+            # not the caller's -- connectors are org-shared.
+            external_id = resolve_connection_external_id(
+                {"workspace_id": str(workspace_id) if workspace_id else None,
+                 "account_id": account_id},
+                user_id,
+            )
             if not external_id:
-                logger.error(f"Workspace for user {user_id} missing aws_external_id - cannot assume role")
+                logger.error("Could not resolve aws_external_id for user %s - cannot assume role", sanitize(user_id))
                 return None
 
             try:
@@ -263,14 +267,17 @@ def get_credentials_from_db(user_id: str, provider: str) -> Optional[Dict[str, A
                     if 'conn' in locals() and conn:
                         conn.close()
             
-            logger.info(f"Retrieved {provider} credentials for user {user_id}")
+            logger.info(f"Retrieved {sanitize(provider)} credentials for user {sanitize(user_id)}")
             return token_data
         
-        logger.warning(f"No {provider} credentials found for user {user_id}")
+        logger.warning(f"No {sanitize(provider)} credentials found for user {sanitize(user_id)}")
         return None
         
-    except Exception as e:
-        logger.error(f"Error retrieving credentials for {user_id}/{provider}: {e}")
+    except Exception:
+        # Log a fixed message with sanitized identifiers only. The raw exception
+        # can embed secret/credential values, and sanitize() strips control chars
+        # but does not redact payloads — so keep it out of the log (CWE-532).
+        logger.error(f"Error retrieving credentials for {sanitize(user_id)}/{sanitize(provider)}")
         return None
 
 def store_deployment_task(user_id: str, task_id: str, deployment_id: str = None, status: str = "started", task_data: Dict = None):
@@ -430,7 +437,7 @@ def store_org_preference(org_id: str, key: str, value: Any, *, cursor=None) -> N
         logger.exception("Error storing org preference %s for org %s", sanitize(key), sanitize(org_id))
 
 
-def get_org_preference(org_id: str, key: str, default=None):
+def get_org_preference(org_id: str, key: str, default=None, *, strict: bool = False):
     """Read an org-scoped preference written via store_org_preference().
 
     Uses an admin connection with RLS configured from org_id directly, so it
@@ -456,6 +463,9 @@ def get_org_preference(org_id: str, key: str, default=None):
                 return _parse_preference_value(row[0], default)
     except Exception:
         logger.exception("Error reading org preference %s for org %s", sanitize(key), sanitize(org_id))
+        # Callers that must tell "never set" from "the read failed" opt in.
+        if strict:
+            raise
         return default
 
 def _parse_preference_value(raw, default=None):
@@ -469,8 +479,12 @@ def _parse_preference_value(raw, default=None):
     except (json.JSONDecodeError, ValueError):
         return raw
 
-def get_user_preference(user_id: str, key: str, default=None):
-    """Get user preference from database."""
+def get_user_preference(user_id: str, key: str, default=None, *, strict: bool = False):
+    """Get user preference from database.
+
+    strict=True re-raises a read failure instead of returning default, so a
+    caller can retry rather than treat an outage as "no preference".
+    """
     conn = None
     cursor = None
     try:
@@ -488,6 +502,9 @@ def get_user_preference(user_id: str, key: str, default=None):
             return default
         return _parse_preference_value(result[0], default)
     except Exception:
+        # Callers that must not confuse an outage with a missing value retry instead.
+        if strict:
+            raise
         logger.exception("Error retrieving user preference")
         return default
     finally:
@@ -640,13 +657,66 @@ def get_org_id_for_user(user_id: str) -> Optional[str]:
         return None
 
 
-def set_rls_context(cursor, conn, user_id: str, *, log_prefix: str = "") -> Optional[str]:
+def get_user_display_name(user_id: str) -> Optional[str]:
+    """Look up a user's display name (users.name) by user_id.
+
+    Used to record the actual person behind a human edit (e.g. "added by
+    Alex"). Returns None when the user has no name set or lookup fails —
+    callers should fall back to a generic label. users is not RLS-protected.
+    """
+    if not user_id:
+        return None
+    try:
+        from utils.db.connection_pool import db_pool
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT name FROM users WHERE id = %s", (user_id,))
+                row = cursor.fetchone()
+                name = row[0] if row and row[0] else None
+                return name.strip() if isinstance(name, str) and name.strip() else None
+    except Exception as e:
+        logger.warning("Error looking up display name for user %s: %s", sanitize(user_id), type(e).__name__)
+        return None
+
+
+def users_by_org() -> Dict[str, List[str]]:
+    """Map org_id -> [user_id, ...] for every org that has users.
+
+    Entry point for cross-org background tasks: ``users`` is NOT RLS-protected, so
+    it can be read before any org context exists. Pair with :func:`set_rls_context`
+    per org before touching RLS-protected tables.
+    """
+    from utils.db.connection_pool import db_pool
+
+    with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT org_id, id FROM users WHERE org_id IS NOT NULL ORDER BY org_id, id"
+        )
+        by_org: Dict[str, List[str]] = {}
+        for org_id, user_id in cur.fetchall():
+            by_org.setdefault(org_id, []).append(user_id)
+        return by_org
+
+
+def set_rls_context(
+    cursor, conn, user_id: str, *, org_id: Optional[str] = None, log_prefix: str = ""
+) -> Optional[str]:
     """Resolve org_id and configure RLS session variables on a DB connection.
 
     Returns the org_id on success, or None (and logs an error) when the org
     cannot be resolved — callers should abort persistence in that case.
+
+    Pass ``org_id`` from a request handler that already resolved it via
+    ``get_org_id_from_request()`` (the X-Org-ID header, from the Auth.js session).
+    Without it the org comes from ``users.org_id``, and the two can disagree while
+    a reassignment propagates — a stale JWT still carrying the old org, or this
+    function's own 5-minute cache lagging a new one. RLS then filters a different
+    org than the handler's WHERE clause, so queries silently match zero rows.
+    Handlers should pin both to the org RBAC authorized. Omit it in Celery /
+    background callers, which have no request to read the header from.
     """
-    org_id = get_org_id_for_user(user_id)
+    if org_id is None:
+        org_id = get_org_id_for_user(user_id)
     if not org_id:
         logger.error("%s Missing org_id for user %s; cannot set RLS context", log_prefix, sanitize(user_id))
         return None

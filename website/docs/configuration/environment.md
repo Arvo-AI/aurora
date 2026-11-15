@@ -51,14 +51,14 @@ Tuning parameters for gunicorn, Celery, and the database connection pool. Defaul
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `GUNICORN_WORKERS` | `2` | Number of gunicorn worker processes |
-| `GUNICORN_THREADS` | `4` | Threads per gunicorn worker (total parallel requests = workers x threads) |
+| `GUNICORN_THREADS` | `32` | Threads per gunicorn worker (total parallel requests = workers x threads) |
 | `CELERY_CONCURRENCY` | `4` | Number of concurrent Celery task workers |
 | `DB_POOL_MIN` | `2` | Minimum database connections kept open per process |
-| `DB_POOL_MAX` | `20` | Maximum database connections per process (must be >= workers x threads) |
+| `DB_POOL_MAX` | `20` | Maximum database connections per process; excess threads wait briefly for a connection |
 
 ```bash
 GUNICORN_WORKERS=2
-GUNICORN_THREADS=4
+GUNICORN_THREADS=32
 CELERY_CONCURRENCY=4
 DB_POOL_MIN=2
 DB_POOL_MAX=20
@@ -228,6 +228,7 @@ At least one LLM provider API key is required. See [LLM Providers](/docs/integra
 | `GOOGLE_AI_API_KEY` | - | Google AI API key |
 | `LLM_PROVIDER_MODE` | `openrouter` | Provider routing mode (see below) |
 | `AGENT_RECURSION_LIMIT` | `240` | Max agent reasoning steps |
+| `INVESTIGATION_TIMEOUT_SECONDS` | `3600` | Wall-clock limit for one investigation, in seconds. Default is one hour. Clamped to 120–10800. Requires a process restart. On Kubernetes the chart raises the worker termination grace and the nginx proxy timeouts to at least this value. |
 
 ### LLM_PROVIDER_MODE
 
@@ -251,6 +252,7 @@ GOOGLE_AI_API_KEY=your-key
 
 LLM_PROVIDER_MODE=openrouter   # or: direct
 AGENT_RECURSION_LIMIT=240
+INVESTIGATION_TIMEOUT_SECONDS=3600
 ```
 
 ### Vertex AI (Google Cloud)
@@ -282,13 +284,13 @@ OLLAMA_BASE_URL=http://host.docker.internal:11434
 
 One `bedrock` provider with two modes, auto-selected: set `BEDROCK_BASE_URL` for **gateway mode** (OpenAI-compatible endpoint in front of Bedrock), or leave it unset for **native mode** (AWS SDK). `BEDROCK_*` variables take precedence over the standard `AWS_*` ones.
 
-For native mode, set **`LLM_PROVIDER_MODE=bedrock`** to route clean model picks (e.g. `anthropic/claude-sonnet-4.6`) through Bedrock automatically — translated to the matching inference-profile id, region-aware. For gateway mode (or to pin specific ids), use `LLM_PROVIDER_MODE=direct` and point `MAIN_MODEL` (etc.) at an explicit `bedrock/<id>` model.
+For native mode, set **`LLM_PROVIDER_MODE=bedrock`** to route clean model picks (e.g. `anthropic/claude-sonnet-5`) through Bedrock automatically — translated to the matching inference-profile id, region-aware. For gateway mode (or to pin specific ids), use `LLM_PROVIDER_MODE=direct` and point `MAIN_MODEL` (etc.) at an explicit `bedrock/<id>` model.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `BEDROCK_BASE_URL` | - | Gateway mode: OpenAI-compatible base URL (e.g. `.../v1`). When set, Aurora uses gateway mode. |
 | `BEDROCK_API_KEY` | `not-needed` | Gateway mode only. Optional — many VPC gateways need no key. |
-| `BEDROCK_REGION` | - | Native mode AWS region. Falls back to `AWS_REGION` / `AWS_DEFAULT_REGION`. |
+| `BEDROCK_REGION` | - | Native mode AWS region. Falls back to `AWS_REGION` / `AWS_DEFAULT_REGION`. Set to `global` to use Bedrock's `global.` inference profiles, which bill at the direct list price instead of the ~10% cross-region premium. |
 | `BEDROCK_ACCESS_KEY_ID` | _(AWS_ACCESS_KEY_ID)_ | Native mode access key. Omit to use an IAM role / default credential chain. |
 | `BEDROCK_SECRET_ACCESS_KEY` | _(AWS_SECRET_ACCESS_KEY)_ | Native mode secret key. |
 | `BEDROCK_SESSION_TOKEN` | _(AWS_SESSION_TOKEN)_ | Native mode session token, used alongside `BEDROCK_ACCESS_KEY_ID` / `BEDROCK_SECRET_ACCESS_KEY` for temporary / STS credentials. Omit for long-lived keys, a profile, or an IAM role. |
@@ -307,7 +309,7 @@ BEDROCK_ACCESS_KEY_ID=AKIA...          # or use BEDROCK_PROFILE / an IAM role
 BEDROCK_SECRET_ACCESS_KEY=...
 BEDROCK_SESSION_TOKEN=                  # omit unless using temporary / STS credentials
 LLM_PROVIDER_MODE=bedrock               # routes clean model picks through Bedrock
-MAIN_MODEL=anthropic/claude-sonnet-4.6  # auto-translated to us.anthropic.claude-sonnet-4-6
+MAIN_MODEL=anthropic/claude-sonnet-5    # auto-translated to us.anthropic.claude-sonnet-5
 ```
 
 ### Web Search
@@ -322,7 +324,9 @@ MAIN_MODEL=anthropic/claude-sonnet-4.6  # auto-translated to us.anthropic.claude
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `RCA_MODEL` | - | Model for background RCA (format: `provider/model`). Overrides `RCA_OPTIMIZE_COSTS` when set. Default RCA path when `ORCHESTRATOR_ENABLED=false`. |
-| `RCA_OPTIMIZE_COSTS` | `true` | Only used when `RCA_MODEL` is not set. `true` = `anthropic/claude-haiku-4.5`, `false` = `anthropic/claude-opus-4.6` |
+| `MEMORY_SELECTOR_MODEL` | _(provider fast model)_ | Model that picks which memories to inject. It has about 6 seconds. The loader used to return only the newest 200 memories. Unset uses a fast model the active provider can serve: Gemini 3.5 Flash-Lite (Google/OpenRouter/Vertex), Haiku 5.5 (Anthropic and `LLM_PROVIDER_MODE=bedrock`), or GPT-5.6 Luna (OpenAI). Ollama uses `MAIN_MODEL` when that id is `ollama/...`. A Bedrock gateway (`direct` mode, `MAIN_MODEL=bedrock/<id>`) stays on that id; pin a fast one with `bedrock/<id>`. |
+| `JIRA_RCA_JUDGE_MODEL` | `RCA_MODEL` | Yes/no model for Jira automatic RCA. Unset uses the resolved `RCA_MODEL`. |
+| `RCA_OPTIMIZE_COSTS` | `true` | Only used when `RCA_MODEL` is not set. `true` = `anthropic/claude-haiku-5.5`, `false` = `anthropic/claude-opus-5.5` |
 | `ORCHESTRATOR_ENABLED` | `false` | Multi-agent RCA orchestrator (opt-in). When `true`, a lead orchestrator triages each background RCA and may fan out parallel read-only sub-agents; `RCA_MODEL` is ignored. When `false` (default), RCA uses the single-agent path with `RCA_MODEL`. |
 | `RCA_ORCHESTRATOR_MODEL` | - | *Only when `ORCHESTRATOR_ENABLED=true`.* Brain model for triage + synthesis. Format: `provider/model`. |
 | `RCA_SUBAGENT_MODEL` | - | *Only when `ORCHESTRATOR_ENABLED=true`.* Sub-agent investigator model. Per-role overrides in `orchestrator/roles/*.md` frontmatter take precedence. Format: `provider/model`. |
@@ -336,6 +340,8 @@ Three-layer safety: input rail + signature matcher + LLM safety judge. See [Comm
 |----------|---------|-------------|
 | `GUARDRAILS_ENABLED` | `true` | Master switch. When enabled (default), all three layers run and every LLM check fails closed on error. Set to `false` to disable all guardrails. |
 | `GUARDRAILS_LLM_MODEL` | _(MAIN_MODEL)_ | Model used by the safety judge and input rail. Same format and routing as `MAIN_MODEL`. |
+| `GUARDRAILS_DISABLE_THINKING` | `true` | Shorten the safety judge. Gemini 3.6 Flash uses `minimal`; Gemini 3.8 Flash, Pro, and Argon use `low` (`minimal` is rejected). Gemini 2.5 Flash uses a budget of 0; 2.5 Pro uses 128. GPT-5 and the o-series use reasoning effort `low`; `gpt-5.5-pro` uses `medium`. Haiku 4.5 and 5.5 get thinking disabled (Opus rejects that field). Ollama and OpenRouter only get it for weights that advertise a think switch (`qwen3`, `deepseek-r1`, `qwq`, `gpt-oss`, `magistral`); a plain Llama is left alone because Ollama returns 400 otherwise. Set to `false` to leave the model on its default. Requires a restart. |
+| `GUARDRAILS_LLM_TIMEOUT_SECONDS` | `10` | Seconds the safety judge may run before the command is blocked. Clamped to 5–60. |
 | `GUARDRAILS_SIGMA_ENABLED` | `true` | Gates the vendored SigmaHQ rule corpus inside the signature matcher. Requires `GUARDRAILS_ENABLED=true`. Set to `false` to run only hand-written rules. |
 
 ## Cloud Providers
@@ -397,6 +403,9 @@ on-prem deployments that cannot expose a public webhook URL.
 | `GITHUB_APP_WEBHOOK_SECRET` | | Fallback only — the secrets backend path `aurora/system/github-app/webhook-secret` (Vault or AWS Secrets Manager) takes precedence. |
 | `GH_OAUTH_CLIENT_ID` | | OAuth App Client ID. Required only when `GITHUB_AUTH_MODE` is `oauth` or `hybrid`. |
 | `GH_OAUTH_CLIENT_SECRET` | | OAuth App Client Secret. Required only when `GITHUB_AUTH_MODE` is `oauth` or `hybrid`. |
+| `HOSTED_SIGNUP_ENABLED` | `false` | Hosted deployments only. Enables the one-click website signup flow (`/github/app/signup/start`): installing the GitHub App provisions an Aurora org + admin account from the GitHub identity and auto-enrolls the granted repos in Incident Prevention. Leave off for self-hosted installs (registration stays invite-only). |
+| `MARKETING_SITE_URL` | | Hosted deployments only. The website hosting the "Add to Slack" button (`/slack/signup/start`). Clicking Cancel on Slack's install screen returns there with `?slack=cancelled`. Empty sends people to the app's sign-in page instead. |
+| `GITHUB_APP_CLIENT_SECRET` | | Client secret from the App settings page. Required only when `HOSTED_SIGNUP_ENABLED=true` — used to exchange the install-time OAuth code for the installer's GitHub identity. The App must have "Request user authorization (OAuth) during installation" enabled and `https://<aurora-host>/github/app/signup/callback` registered as a Callback URL. |
 | `NEXT_PUBLIC_ENABLE_INCIDENT_PREVENTION` | `true` | Master switch for pre-merge PR risk review (GitHub **and** Bitbucket). Must be set on the **server and the Celery worker** — the webhook ingress and the review task each check it independently. |
 
 App-mode (recommended):
@@ -475,11 +484,15 @@ See the [Bitbucket connector guide](../integrations/connectors.md#bitbucket) for
 | `SLACK_CLIENT_ID` | Slack App Client ID |
 | `SLACK_CLIENT_SECRET` | Slack App Client Secret |
 | `SLACK_SIGNING_SECRET` | Slack App Signing Secret |
+| `SLACK_APP_TOKEN` | App-level token (`xapp-...`) with `connections:write`. Set it to enable Socket Mode (outbound WebSocket) instead of HTTP webhooks — for private/self-hosted deployments with no public URL. Leave empty to use HTTP webhooks. |
 
 ```bash
 SLACK_CLIENT_ID=your-client-id
 SLACK_CLIENT_SECRET=your-client-secret
 SLACK_SIGNING_SECRET=your-signing-secret
+
+# Private/self-hosted only (no public webhook URL) — see the Slack connector docs
+SLACK_APP_TOKEN=
 ```
 
 ### Google Chat
@@ -510,6 +523,8 @@ PAGERDUTY_CLIENT_ID=your-client-id
 PAGERDUTY_CLIENT_SECRET=your-client-secret
 ```
 
+OAuth now requests `incidents.write` (for posting RCA notes); register it on the PagerDuty app, and existing OAuth connections must disconnect and reconnect to receive it.
+
 ### OVH
 
 | Variable | Default | Description |
@@ -530,15 +545,7 @@ OVH_EU_CLIENT_SECRET=your-eu-client-secret
 
 ### Scaleway
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `NEXT_PUBLIC_ENABLE_SCALEWAY` | `false` | Enable Scaleway connector in UI |
-
-```bash
-NEXT_PUBLIC_ENABLE_SCALEWAY=true
-```
-
-> No additional server-side credentials required. Users connect via API key through the UI.
+The Scaleway connector is always available. Users connect with an API key; no server-side credentials are required.
 
 ### Confluence
 
@@ -601,20 +608,6 @@ SMTP_FROM_NAME=Aurora
 | `USE_UNTRUSTED_NODES` | - | Allow untrusted nodes |
 | `NEXT_PUBLIC_KUBECTL_AGENT_CHART_URL` | - | Helm chart URL for kubectl agent |
 
-## Weaviate (Vector Database)
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `WEAVIATE_HOST` | `weaviate` | Weaviate server host |
-| `WEAVIATE_PORT` | `8080` | Weaviate HTTP port |
-| `WEAVIATE_GRPC_PORT` | `50051` | Weaviate gRPC port |
-
-```bash
-WEAVIATE_HOST=weaviate
-WEAVIATE_PORT=8080
-WEAVIATE_GRPC_PORT=50051
-```
-
 ## MCP Server
 
 | Variable | Default | Description |
@@ -623,6 +616,16 @@ WEAVIATE_GRPC_PORT=50051
 | `BACKEND_URL` | `http://aurora-server:5080` | Internal Aurora API URL (shared with other services) |
 
 The MCP server authenticates clients via Bearer tokens stored in the `mcp_tokens` database table. No additional environment variable is needed for token configuration -- see the [MCP integration guide](../integrations/mcp) for details.
+
+## Custom MCP Servers
+
+Controls Aurora connecting **out** to MCP servers you register, which is the opposite direction from the section above. See [Custom MCP Servers](../integrations/custom-mcp-servers).
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MCP_ALLOW_PRIVATE_TARGETS` | `true` (Compose, Helm, and when unset) | Allow registering MCP servers on private, loopback or link-local addresses. Default is on for self-hosted OSS. Set `false` on multi-tenant SaaS: with it on, anyone holding `connectors:write` can aim Aurora at any address it can reach, including cloud metadata endpoints. |
+
+The redirect URI Aurora presents to OAuth providers is derived from `FRONTEND_URL` as `<FRONTEND_URL>/mcp/callback`. Credentials go to the configured secrets backend, so there is no env var for them.
 
 ## Rate Limiting
 

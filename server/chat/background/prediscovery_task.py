@@ -3,15 +3,23 @@ Celery task for running prediscovery agent sessions.
 
 The prediscovery agent autonomously explores connected integrations (GitHub, Jenkins,
 cloud providers, monitoring tools) to map how services are interconnected. Findings
-are saved to the knowledge base for fast retrieval during RCA investigations.
+are saved to org memory for fast retrieval during RCA investigations.
 """
 
 import logging
 from typing import Any, Dict, List
 
 from celery_config import celery_app
+from chat.investigation_timeout import (
+    investigation_soft_timeout_seconds,
+    investigation_timeout_seconds,
+)
 
 logger = logging.getLogger(__name__)
+
+# Same wall as RCA. Prediscovery calls the background chat workflow.
+_INVESTIGATION_HARD_TIMEOUT = investigation_timeout_seconds()
+_INVESTIGATION_SOFT_TIMEOUT = investigation_soft_timeout_seconds()
 
 
 def _get_users_with_integrations() -> List[Dict[str, Any]]:
@@ -54,20 +62,6 @@ def _get_users_with_integrations() -> List[Dict[str, Any]]:
         return []
 
 
-def _cleanup_old_discovery_chunks(org_id: str, before: str = None) -> int:
-    """Delete previous discovery findings from Weaviate for this org.
-    
-    Args:
-        org_id: Organization to clean up for
-        before: ISO timestamp -- only delete findings created before this time
-    """
-    try:
-        from routes.knowledge_base.weaviate_client import delete_discovery_chunks
-        return delete_discovery_chunks(org_id, before=before)
-    except Exception as e:
-        logger.warning(f"[Prediscovery] Failed to cleanup old chunks: {e}")
-        return 0
-
 
 def build_prediscovery_prompt(user_id: str, providers: List[str], integrations: Dict[str, bool]) -> str:
     """Build the system prompt for the prediscovery agent."""
@@ -88,8 +82,7 @@ for understanding the production system.
 
 ## YOUR DELIVERABLE
 
-At the END of your investigation, you MUST call save_infrastructure_context() with a single
-document that covers:
+At the END of your investigation, produce a comprehensive infrastructure context document covering:
 - All environments (for example production, staging, dev are common) and how they relate
 - Services in each environment, their dependencies, and how they communicate
 - CI/CD pipelines: what repo deploys where, through what mechanism
@@ -98,21 +91,28 @@ document that covers:
 - Network topology and security boundaries
 - Any other interconnected systems
 
+BEFORE writing, read the existing 'Infrastructure Context' entry (if any) with read_memory(category='infrastructure', title='Infrastructure Context').
+- If it doesn't exist: use write_memory() to create it.
+- If it exists but is outdated or missing sections: use edit_memory() or append_to_memory() to update it.
+- If it exists and needs a full rewrite (e.g. major topology changes): use write_memory(overwrite=true).
+
 Write it so a coding agent can understand the full system topology in one read. If an org doesn't have all of these don't make up findings, only write about things actually there. Use markdown
 with clear sections. Be specific -- include names, regions, namespaces, ports, image tags.
 
 ## SIDE-EFFECT: INDIVIDUAL FINDINGS
 
-As you investigate, ALSO call save_discovery_finding() for each logical chain you discover.
-These are indexed separately for semantic search during incident response.
+As you investigate, save each logical chain you discover to memory (category='infrastructure').
+Before writing, check if a relevant entry already exists (use list_memories or grep_memories).
+- If an entry for that topic exists: use append_to_memory() or edit_memory() to update it.
+- If it's a new topic: use write_memory() to create a new entry.
 
 ## CRITICAL RULES
 
 - The local filesystem is Aurora's own code -- NEVER use terminal_exec to read local files (ls, cat, find, grep, env). There is nothing useful locally.
 - terminal_exec is ONLY allowed for SSH into manual VMs (e.g. ssh -i ~/.ssh/id_key user@ip).
 - Each finding must describe real infrastructure you discovered by querying external APIs.
-- Call save_discovery_finding after EVERY interconnection chain you discover.
-- Call save_infrastructure_context ONCE at the very end with the complete consolidated document.
+- Save findings to memory as you go (check existing entries first, prefer append/edit over creating duplicates).
+- At the very end, update the 'Infrastructure Context' entry as described in YOUR DELIVERABLE above.
 
 ## EXPLORATION STRATEGY
 
@@ -142,12 +142,14 @@ These are indexed separately for semantic search during incident response.
    - For each deployment: what repo, what target environment, what K8s cluster/namespace
    - If CloudBees Operations Center OR a manually-registered controller fleet (Multiple Controllers mode) is connected: use cloudbees_rca(action='controller_list') to discover all controllers, then cloudbees_rca(action='cross_controller_deployments') to see what's deploying across the organization
 
-6. **Observability** (if Datadog/Splunk/Coroot/Dynatrace/ThousandEyes connected):
+6. **Observability** (if Datadog/Splunk/Elastic/Coroot/Dynatrace/ThousandEyes/RabbitMQ connected):
    - Datadog: query_datadog(resource_type='monitors') and query_datadog(resource_type='hosts')
-   - Splunk: list_splunk_indexes(), search_splunk() to discover log sources
+   - Splunk: list_splunk_indexes(), search_splunk() to discover log sources. Several instances return results_by_account; pass account_id (host:port) to stay on one. Only instances this user can access are included.
+   - Elastic: elastic_list_indices(), elastic_search_logs() to discover log data streams and services
    - Coroot: coroot_get_service_map() for eBPF-discovered service dependencies, coroot_get_applications() for app inventory
    - Dynatrace: query_dynatrace() for entities and topology
    - ThousandEyes: thousandeyes_list_tests() for network monitoring targets
+   - RabbitMQ: rabbitmq_list_queues() and rabbitmq_list_nodes() for broker backlog and node alarms
    - Map monitors/tests to the services and hosts discovered in earlier steps
 
 7. **Documentation** (if Confluence/SharePoint connected):
@@ -160,24 +162,28 @@ Each finding must be a detailed, descriptive paragraph that a human or AI can re
 an incident and immediately understand the topology. Write full sentences, not bullet lists.
 
 GOOD example:
-  save_discovery_finding(
+  write_memory(
+    category='infrastructure',
     title='payment-api deployment and monitoring chain',
     content='The payment-api service lives in GitHub repo acme-org/payment-api on the main branch. It is deployed via Jenkins job payment-service-deploy which builds a Docker image pushed to ECR at 390403884122.dkr.ecr.us-east-1.amazonaws.com/payment-api. The deployment targets Kubernetes cluster prod-east-1 in namespace payments, running as deployment payment-api with 3 replicas. The service depends on RDS instance db-payments-prod (PostgreSQL) which it connects to via environment variable DATABASE_URL, and ElastiCache cluster redis-sessions for session storage. It is monitored by Datadog monitors payment-api-latency (threshold: p99 > 500ms) and payment-api-error-rate (threshold: 5xx > 1%), both tagged with service:payment-api and env:production.',
-    tags='github,jenkins,k8s,aws,datadog,payment-api'
+    description='github,jenkins,k8s,aws,datadog,payment-api'
   )
 
 ## BEGIN EXPLORATION
 
-Investigate all connected integrations. Build toward the consolidated document.
-Call save_discovery_finding() as you go. Once your investigation is complete, call
-save_infrastructure_context() with the full synthesized document."""
+IMPORTANT: Before investigating, use list_memories(category='infrastructure') to see what is already
+documented. READ existing entries to understand what you already know. Then investigate and ONLY save
+genuinely new or changed information.
+
+For new topics, use write_memory(). For adding findings to an existing entry, use append_to_memory().
+For correcting outdated details, use edit_memory(). Do not rewrite unchanged content."""
 
 
 @celery_app.task(
     bind=True,
     name="chat.background.prediscovery_task.run_prediscovery",
-    time_limit=1800,
-    soft_time_limit=1740,
+    time_limit=_INVESTIGATION_HARD_TIMEOUT,
+    soft_time_limit=_INVESTIGATION_SOFT_TIMEOUT,
 )
 def run_prediscovery(
     self,
@@ -202,7 +208,6 @@ def run_prediscovery(
     logger.info(f"[Prediscovery] Starting for user {user_id} (trigger={trigger})")
 
     from utils.auth.stateless_auth import get_org_id_for_user
-    from datetime import datetime, timezone
     org_id = get_org_id_for_user(user_id)
 
     # Hook: check if LLM call is allowed
@@ -220,7 +225,6 @@ def run_prediscovery(
         if connected_count == 0:
             logger.info(f"[Prediscovery] No integrations for user {user_id}, skipping")
             return {"status": "skipped", "reason": "no_integrations"}
-        run_started_at = datetime.now(timezone.utc).isoformat()
 
         prompt = build_prediscovery_prompt(user_id, providers, integrations)
 
@@ -232,21 +236,25 @@ def run_prediscovery(
             trigger_metadata=trigger_metadata,
         )
 
-        asyncio.run(_execute_background_chat(
-            user_id=user_id,
-            session_id=session_id,
-            initial_message=prompt,
-            trigger_metadata=trigger_metadata,
-            provider_preference=providers,
-            mode="prediscovery",
-            rail_text="",
-        ))
+        # Same heartbeat and watchdog as an investigation: the cleanup sweep
+        # fails an in-progress session whose worker stops beating.
+        from chat.background.liveness import run_watched
+        run_watched(
+            _execute_background_chat(
+                user_id=user_id,
+                session_id=session_id,
+                initial_message=prompt,
+                trigger_metadata=trigger_metadata,
+                provider_preference=providers,
+                mode="prediscovery",
+                rail_text="",
+            ),
+            session_id,
+            user_id,
+        )
 
         from chat.background.task import _update_session_status
         _update_session_status(session_id, "completed", user_id=user_id)
-
-        if org_id:
-            _cleanup_old_discovery_chunks(org_id, before=run_started_at)
 
         logger.info(f"[Prediscovery] Completed for user {user_id}, session {session_id}")
         return {"status": "completed", "session_id": session_id, "user_id": user_id}

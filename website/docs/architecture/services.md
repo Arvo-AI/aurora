@@ -15,7 +15,6 @@ Detailed reference for all Aurora services.
 | Chatbot | 5006 | WebSocket | Real-time chat |
 | PostgreSQL | 5432 | TCP | Primary database |
 | Redis | 6379 | TCP | Task queue / cache |
-| Weaviate | 8080 | HTTP | Vector database |
 | Vault | 8200 | HTTP | Secrets management |
 | SeaweedFS S3 | 8333 | HTTP | Object storage API |
 | SeaweedFS UI | 8888 | HTTP | File browser |
@@ -139,20 +138,6 @@ In-memory data store.
 ### Access
 ```bash
 docker exec -it aurora-redis-1 redis-cli
-```
-
-## Weaviate
-
-Vector database for semantic search.
-
-### Uses
-- Log embeddings
-- Document search
-- Similarity queries
-
-### API
-```
-http://localhost:8080/v1
 ```
 
 ## Vault

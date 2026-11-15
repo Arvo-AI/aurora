@@ -433,12 +433,11 @@ def _handle_installation_repositories_event(
     """Apply an ``installation_repositories.<action>`` webhook.
 
     Supported actions:
-        * ``added``: **NO-OP**. Aurora populates ``connected_repos``
-          lazily when a user fetches their installation's repos via the
-          auth router (Task 9). Eagerly inserting per-user rows here
-          would require iterating ``user_github_installations`` for every
-          linked user, which is wasteful for installations with no
-          active Aurora users yet.
+        * ``added``: re-runs the repo import with change gating on when
+          the installation's connected repos are all enrolled (or there are
+          none yet), so a repo created or granted later gets reviewed like
+          the ones that existed at install time. When someone turned review
+          off on a repo, new repos are left for them to pick.
         * ``removed``: DELETE matching rows from
           ``connected_repos`` for ALL users that have this
           ``(installation_id, repo_full_name)`` pair. Multi-user
@@ -454,17 +453,39 @@ def _handle_installation_repositories_event(
     installation_id, _installation, account_login = _extract_installation_block(payload)
 
     if action == "added":
-        # Lazy population: count for log breadcrumb only, no DB writes.
         repositories_added = payload.get("repositories_added")
         repo_count = len(repositories_added) if isinstance(repositories_added, list) else 0
+        owner = None
+        if installation_id is not None:
+            owner = auto_enroll_owner(installation_id)
+        added_names = [
+            r["full_name"]
+            for r in (repositories_added if isinstance(repositories_added, list) else [])
+            if isinstance(r, dict) and isinstance(r.get("full_name"), str)
+        ]
+        if owner and added_names:
+            from routes.github.github_repo_metadata import import_installation_repos
+
+            # Once the first full import has landed, only the repos GitHub
+            # just granted. Before that, the full import, so the repos that
+            # were there at install come in too.
+            import_installation_repos.delay(
+                owner, installation_id, enroll_change_gating=True,
+                only_repos=added_names if _repos_imported(installation_id) else None,
+                require_enrollment=True,
+                grant_delivery_id=delivery_id,
+            )
+        else:
+            owner = None
         duration_ms = int((time.monotonic() - start) * 1000)
         logger.info(
             "gh_webhook_handler=installation_repositories action=added "
             "installation_id=%s account_login=%s delivery_id=%s "
-            "status=noop_lazy_population repo_count=%s duration_ms=%d",
+            "status=%s repo_count=%s duration_ms=%d",
             installation_id,
             account_login,
             delivery_id,
+            "enroll_queued" if owner else "noop_lazy_population",
             repo_count,
             duration_ms,
         )
@@ -701,6 +722,96 @@ def _resolve_change_gating_owner(installation_id: int, repo_full_name: str) -> t
     return ("ok", owner) if owner else ("not_enrolled", None)
 
 
+def auto_enroll_owner(installation_id: int) -> str | None:
+    """Linked user to import newly added repos for, or None to leave them alone.
+
+    New repos are enrolled only when every repo already
+    connected on this installation is enrolled. One repo with change gating
+    off means someone chose per-repo control, so the choice stays theirs. An
+    installation with no connected repos qualifies: installing the App is the
+    opt-in, and an import that never landed (GitHub outage at signup) must
+    not lock it out.
+    """
+    from utils.auth.stateless_auth import set_rls_context
+    from utils.db.connection_pool import db_pool
+
+    with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """SELECT user_id
+                 FROM user_github_installations
+                WHERE installation_id = %s
+                  AND disconnected_at IS NULL
+                ORDER BY linked_at ASC, user_id ASC""",
+            (installation_id,),
+        )
+        linked_users = [row[0] for row in cur.fetchall() if row[0]]
+        try:
+            for linked_user_id in linked_users:
+                if not set_rls_context(
+                    cur,
+                    conn,
+                    linked_user_id,
+                    log_prefix="[gh_webhook:installation_repositories]",
+                ):
+                    continue
+                cur.execute(
+                    """SELECT COUNT(*),
+                              COUNT(*) FILTER (WHERE change_gating_enabled = TRUE)
+                         FROM connected_repos
+                        WHERE installation_id = %s""",
+                    (installation_id,),
+                )
+                total, enrolled = cur.fetchone()
+                if total == enrolled:
+                    return linked_user_id
+        finally:
+            if linked_users:
+                cur.execute(_RESET_RLS_SQL)
+    return None
+
+
+def _repos_imported(installation_id: int) -> bool:
+    """Whether the installation's first full repo import has landed."""
+    from utils.db.connection_pool import db_pool
+
+    with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """SELECT MAX(repos_imported_at)
+                 FROM user_github_installations
+                WHERE installation_id = %s
+                  AND disconnected_at IS NULL""",
+            (installation_id,),
+        )
+        row = cur.fetchone()
+        return bool(row) and row[0] is not None
+
+
+def _record_gating_outcome(delivery_id: str, repo: str | None, outcome: str) -> None:
+    """Note on ``webhook_deliveries`` what change gating did with a PR event.
+
+    Defensive like ``_update_delivery_status``: an audit-row failure must
+    never affect the review itself.
+    """
+    from utils.db.connection_pool import db_pool
+
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """UPDATE webhook_deliveries
+                       SET repo_full_name = %s, gating_outcome = %s
+                       WHERE delivery_id = %s""",
+                    (repo, outcome, delivery_id),
+                )
+            conn.commit()
+    except Exception as exc:
+        logger.warning(
+            "change_gating: outcome record failed (%s) delivery_id=%s",
+            type(exc).__name__,
+            delivery_id,
+        )
+
+
 def _maybe_enqueue_change_gating(
     payload: dict[str, Any],
     action: str | None,
@@ -729,6 +840,8 @@ def _maybe_enqueue_change_gating(
             _fmt_field(action),
             delivery_id,
         )
+        if reason != "duplicate_delivery":  # redeliveries must stay free of DB work
+            _record_gating_outcome(delivery_id, repo, reason)
 
     from utils.flags.feature_flags import is_incident_prevention_enabled
 
@@ -820,6 +933,7 @@ def _maybe_enqueue_change_gating(
     except Exception:
         _release_dedupe_key()
         raise
+    _record_gating_outcome(delivery_id, repo, "enqueued")
     logger.info(
         "change_gating: enqueued repo=%s pr=%s head_sha=%s action=%s user=%s delivery_id=%s",
         _fmt_field(repo),

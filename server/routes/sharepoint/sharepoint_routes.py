@@ -181,7 +181,7 @@ def _exchange_oauth_code(user_id: str, data: dict, code: str):
         token_payload["expires_in"] = expires_in
         token_payload["expires_at"] = int(time.time()) + int(expires_in)
 
-    store_tokens_in_db(user_id, token_payload, "sharepoint")
+    store_tokens_in_db(user_id, token_payload, "sharepoint", schedule_prediscovery=True)
     return _safe_json_response({
         "success": True,
         "connected": True,

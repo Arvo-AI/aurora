@@ -32,14 +32,11 @@ spec:
       automountServiceAccountToken: false
       securityContext:
         {{- include "aurora.podSecurityContext" (dict "service" "mcp" "global" $ "defaults" (dict "runAsUser" 1000 "runAsGroup" 1000 "fsGroup" 1000)) | nindent 8 }}
-      {{- if .Values.image.pullSecrets }}
-      imagePullSecrets:
-        {{- toYaml .Values.image.pullSecrets | nindent 8 }}
-      {{- end }}
+      {{- include "aurora.imagePullSecrets" (dict "image" "server" "global" $) | nindent 6 }}
       {{- include "aurora.scheduling" (dict "service" "mcp" "global" $) | nindent 6 }}
       containers:
         - name: aurora-mcp
-          image: "{{ .Values.image.registry }}/aurora-server:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          image: {{ include "aurora.image" (dict "image" "server" "global" $) | quote }}
           imagePullPolicy: IfNotPresent
           command: ["python", "mcp_server.py"]
           securityContext:

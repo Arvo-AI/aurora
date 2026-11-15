@@ -94,6 +94,10 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
                        "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                          "Authorization", "X-Provider-Preference"],
                        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]},
+         r"/teams/*": {"origins": FRONTEND_URL, "supports_credentials": True,
+                       "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
+                                         "Authorization", "X-Provider-Preference"],
+                       "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]},
          r"/google-chat/*": {"origins": FRONTEND_URL, "supports_credentials": True,
                              "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                                "Authorization", "X-Provider-Preference"],
@@ -110,6 +114,14 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
                        "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                          "Authorization", "X-Provider-Preference"],
                        "methods": ["GET", "POST", "DELETE", "OPTIONS"]},
+        r"/elastic/*": {"origins": FRONTEND_URL, "supports_credentials": True,
+                        "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
+                                          "Authorization", "X-Provider-Preference"],
+                        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]},
+        r"/mcp/*": {"origins": FRONTEND_URL, "supports_credentials": True,
+                    "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
+                                      "Authorization", "X-Provider-Preference"],
+                    "methods": ["GET", "POST", "DELETE", "OPTIONS"]},
         r"/incidentio/*": {"origins": FRONTEND_URL, "supports_credentials": True,
                            "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                              "Authorization", "X-Provider-Preference"],
@@ -122,6 +134,10 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
                          "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                            "Authorization", "X-Provider-Preference"],
                          "methods": ["GET", "POST", "DELETE", "OPTIONS", "PATCH"]},
+        r"/servicenow/*": {"origins": FRONTEND_URL, "supports_credentials": True,
+                           "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
+                                             "Authorization", "X-Provider-Preference"],
+                           "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]},
         r"/opsgenie/*": {"origins": FRONTEND_URL, "supports_credentials": True,
                          "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With",
                                            "X-User-ID", "Authorization", "X-Provider-Preference"],
@@ -130,6 +146,10 @@ CORS(app, origins=FRONTEND_URL, supports_credentials=True,
                         "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                           "Authorization", "X-Provider-Preference"],
                         "methods": ["GET", "POST", "DELETE", "OPTIONS"]},
+        r"/rabbitmq/*": {"origins": FRONTEND_URL, "supports_credentials": True,
+                         "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
+                                           "Authorization", "X-Provider-Preference"],
+                         "methods": ["GET", "POST", "DELETE", "OPTIONS"]},
         r"/spinnaker/*": {"origins": FRONTEND_URL, "supports_credentials": True,
                         "allow_headers": ["Content-Type", "X-Provider", "X-Requested-With", "X-User-ID",
                                           "Authorization", "X-Provider-Preference"],
@@ -192,7 +212,9 @@ if _AURORA_ENV != "dev" and not _INTERNAL_API_SECRET:
         "Refusing to start without authentication secrets in production." % _AURORA_ENV
     )
 
-_OPEN_PATHS = frozenset(("/api/auth/login", "/api/auth/register"))
+_OPEN_PATHS = frozenset(
+    ("/api/auth/login", "/api/auth/register", "/api/auth/handoff")
+)
 
 _HEALTH_PATH = "/health"
 
@@ -201,6 +223,17 @@ _OPEN_PREFIXES = (
     "/callback",
     # GitHub App install callback — verified via signed state token, not session.
     "/github/app/install/callback",
+    # One-click website signup (hosted only) — start is a public entry point,
+    # callback is verified via signed state + GitHub-verified installation.
+    "/github/app/signup/start",
+    "/github/app/signup/callback",
+    "/github/app/signup/complete",
+    "/github/app/link-pending/confirm",
+    # SAML SSO — browser/IdP hit these directly. /acs is verified by the IdP's
+    # signature plus a request ID bound to this browser; /discover is not open.
+    "/api/auth/saml/login/",
+    "/api/auth/saml/acs/",
+    "/api/auth/saml/metadata/",
     "/github/webhook",
     # OAuth callback — registered only when GITHUB_AUTH_MODE allows OAuth, but
     # listed here unconditionally so the gate applies even if OAuth flips on
@@ -211,14 +244,22 @@ _OPEN_PREFIXES = (
     # (X-Hub-Signature), not session.
     "/bitbucket/webhook/",
     "/slack/callback",
+    # Website "Add to Slack" and "Sign in with Slack" (hosted only): public
+    # entry points that only redirect to Slack with a signed state.
+    "/slack/signup/start",
+    "/slack/signin/start",
+    "/slack/signin/available",
     "/slack/events",
     "/slack/interactions",
+    "/teams/callback",
+    "/teams/messages",
     "/pagerduty/oauth/callback",
     "/google-chat/callback",
     "/google-chat/events",
     "/datadog/webhook/",
     "/grafana/alerts/webhook/",
     "/splunk/alerts/webhook/",
+    "/elastic/alerts/webhook/",
     "/netdata/alerts/webhook/",
     "/bigpanda/webhook/",
     "/dynatrace/webhook/",
@@ -231,8 +272,9 @@ _OPEN_PREFIXES = (
     "/spinnaker/webhook/",
     "/jira/webhook/",
     "/incidentio/alerts/webhook/",
+    # ServiceNow Business Rule webhook — verified via the per-user shared secret, not session.
+    "/servicenow/webhook/",
     "/ovh_api/ovh/oauth2/callback",
-    "/azure/callback",
     "/azure/setup-script",
     "/azure/setup-script-ps1",
     "/aws/setup-script",
@@ -348,6 +390,17 @@ app.register_blueprint(admin_bp)  # RBAC admin routes
 from routes.org_routes import org_bp
 app.register_blueprint(org_bp)
 
+# --- SAML SSO Routes ---
+# /login and /acs are hit by the browser directly and /login writes a request
+# row per hit, so they get a tighter per-IP budget than the global default.
+from routes.sso_routes import saml_bp, saml_discover_bp, org_sso_bp
+from utils.web.limiter_ext import get_public_auth_rate_limit_key
+limiter.limit("30 per minute;300 per hour")(saml_bp)
+limiter.limit("10 per minute;60 per hour", key_func=get_public_auth_rate_limit_key)(saml_discover_bp)
+app.register_blueprint(saml_bp)
+app.register_blueprint(saml_discover_bp)
+app.register_blueprint(org_sso_bp)
+
 # --- Command Policy Routes ---
 from routes.command_policies import command_policies_bp
 app.register_blueprint(command_policies_bp)
@@ -356,17 +409,31 @@ app.register_blueprint(command_policies_bp)
 from routes.tool_permissions import tool_permissions_bp
 app.register_blueprint(tool_permissions_bp)
 
+from routes.connector_access import connector_access_bp
+app.register_blueprint(connector_access_bp)
+
+from routes.org_teams import org_teams_bp
+app.register_blueprint(org_teams_bp)
+
 # --- GitHub Integration Routes (App-first, OAuth gated by GITHUB_AUTH_MODE) ---
 from routes.github.github_user_repos import github_user_repos_bp
 from routes.github.github_repo_selection import github_repo_selection_bp
 from routes.github.github_webhook import github_webhook_bp
 from routes.github.github_app import github_app_bp
 from routes.github.github_oauth import github_oauth_bp
+from routes.github.github_signup import github_signup_bp
 app.register_blueprint(github_user_repos_bp, url_prefix="/github")
 app.register_blueprint(github_repo_selection_bp, url_prefix="/github")
 app.register_blueprint(github_webhook_bp, url_prefix="/github")
 app.register_blueprint(github_app_bp, url_prefix="/github")
 app.register_blueprint(github_oauth_bp, url_prefix="/github")
+# Public, unauthenticated entry points: /start mints a signed state per hit and
+# /callback fans out to GitHub + a provisioning transaction, so give them a
+# much tighter per-IP budget than the global default. Applied here (not in the
+# route module) so the blueprint stays importable in the lightweight test env,
+# which has no flask_limiter.
+limiter.limit("10 per minute;30 per hour")(github_signup_bp)
+app.register_blueprint(github_signup_bp, url_prefix="/github")
 
 # --- GitLab Integration Routes ---
 from routes.gitlab.gitlab_routes import gitlab_bp
@@ -387,8 +454,26 @@ app.register_blueprint(mcp_token_bp)
 # --- Slack Integration Routes ---
 from routes.slack.slack_routes import slack_bp
 from routes.slack.slack_events import slack_events_bp
+from routes.slack.slack_channels import slack_channels_bp
 app.register_blueprint(slack_bp, url_prefix="/slack")
 app.register_blueprint(slack_events_bp, url_prefix="/slack")
+app.register_blueprint(slack_channels_bp, url_prefix="/slack")
+# Website "Add to Slack" entry point: public and mints a signed state per hit,
+# so it gets the same tight per-IP budget as the GitHub signup routes.
+from routes.slack.slack_signup import slack_signup_bp
+limiter.limit("10 per minute;30 per hour")(slack_signup_bp)
+app.register_blueprint(slack_signup_bp, url_prefix="/slack")
+# "Sign in with Slack": the start route carries its own per-IP limit.
+from routes.slack.slack_signin import slack_signin_bp
+app.register_blueprint(slack_signin_bp, url_prefix="/slack")
+
+# --- Microsoft Teams Integration Routes ---
+from routes.teams.teams_routes import teams_bp
+from routes.teams.teams_events import teams_events_bp
+from routes.teams.teams_channels import teams_channels_bp
+app.register_blueprint(teams_bp, url_prefix="/teams")
+app.register_blueprint(teams_events_bp, url_prefix="/teams")
+app.register_blueprint(teams_channels_bp, url_prefix="/teams")
 
 # --- Google Chat Integration Routes ---
 from routes.google_chat.google_chat_routes import google_chat_bp
@@ -434,14 +519,32 @@ import routes.splunk.tasks  # noqa: F401
 app.register_blueprint(splunk_bp, url_prefix="/splunk")
 app.register_blueprint(splunk_search_bp, url_prefix="/splunk")
 
+# --- Elastic Cloud Integration Routes ---
+from routes.elastic import bp as elastic_bp, search_bp as elastic_search_bp
+app.register_blueprint(elastic_bp, url_prefix="/elastic")
+app.register_blueprint(elastic_search_bp, url_prefix="/elastic")
+
+# --- Custom MCP server connector routes (Aurora as MCP client) ---
+from routes.mcp import bp as mcp_servers_bp
+app.register_blueprint(mcp_servers_bp, url_prefix="/mcp")
+
 # --- incident.io Integration Routes ---
 from routes.incidentio import bp as incidentio_bp  # noqa: F401
 import routes.incidentio.tasks  # noqa: F401
 app.register_blueprint(incidentio_bp, url_prefix="/incidentio")
 
+# --- ServiceNow Integration Routes ---
+from routes.servicenow import bp as servicenow_bp  # noqa: F401
+import routes.servicenow.tasks  # noqa: F401
+app.register_blueprint(servicenow_bp, url_prefix="/servicenow")
+
 # --- Coroot Integration Routes ---
 from routes.coroot import bp as coroot_bp  # noqa: F401
 app.register_blueprint(coroot_bp, url_prefix="/coroot")
+
+# --- RabbitMQ Integration Routes ---
+from routes.rabbitmq import bp as rabbitmq_bp  # noqa: F401
+app.register_blueprint(rabbitmq_bp, url_prefix="/rabbitmq")
 
 # --- ThousandEyes Integration Routes ---
 from routes.thousandeyes import bp as thousandeyes_bp  # noqa: F401
@@ -476,9 +579,9 @@ from routes.opsgenie import bp as opsgenie_bp  # noqa: F401
 import routes.opsgenie.tasks  # noqa: F401
 app.register_blueprint(opsgenie_bp, url_prefix="/opsgenie")
 
-# --- Knowledge Base Routes ---
-from routes.knowledge_base import bp as knowledge_base_bp  # noqa: F401
-app.register_blueprint(knowledge_base_bp, url_prefix="/api/knowledge-base")
+# --- Memory Routes ---
+from routes.memory import memory_bp  # noqa: F401
+app.register_blueprint(memory_bp, url_prefix="/api/memory")
 
 
 # --- Confluence Integration Routes ---
@@ -486,15 +589,13 @@ from routes.confluence import bp as confluence_bp  # noqa: F401
 app.register_blueprint(confluence_bp, url_prefix="/confluence")
 
 # --- Unified Atlassian Routes (Confluence + Jira OAuth) ---
-from utils.flags.feature_flags import is_jira_enabled, is_confluence_enabled
-if is_confluence_enabled() or is_jira_enabled():
-    from routes.atlassian import bp as atlassian_bp  # noqa: F401
-    app.register_blueprint(atlassian_bp, url_prefix="/atlassian")
+# Confluence is always on, so the shared OAuth routes always register.
+from routes.atlassian import bp as atlassian_bp  # noqa: F401
+app.register_blueprint(atlassian_bp, url_prefix="/atlassian")
 
 # --- Jira Integration Routes ---
-if is_jira_enabled():
-    from routes.jira import bp as jira_bp  # noqa: F401
-    app.register_blueprint(jira_bp, url_prefix="/jira")
+from routes.jira import bp as jira_bp  # noqa: F401
+app.register_blueprint(jira_bp, url_prefix="/jira")
 
 # --- SharePoint Integration Routes ---
 from utils.flags.feature_flags import is_sharepoint_enabled
@@ -521,10 +622,8 @@ app.register_blueprint(bitbucket_webhook_bp, url_prefix="/bitbucket")
 # --- Incidents Routes ---
 from routes.incidents_routes import incidents_bp
 from routes.incidents_sse import incidents_sse_bp
-from routes.incident_feedback import incident_feedback_bp
 app.register_blueprint(incidents_bp)
 app.register_blueprint(incidents_sse_bp)
-app.register_blueprint(incident_feedback_bp)
 from routes.incidents_findings import findings_bp
 app.register_blueprint(findings_bp)
 
@@ -548,8 +647,10 @@ app.register_blueprint(visualization_bp)
 # --- Monitor Routes (Agent Fleet / Waterfall) ---
 from routes.monitor.fleet_routes import fleet_bp
 from routes.monitor.waterfall_routes import waterfall_bp
+from routes.monitor.chat_audit_routes import chat_audit_bp
 app.register_blueprint(fleet_bp)
 app.register_blueprint(waterfall_bp)
+app.register_blueprint(chat_audit_bp)
 
 # --- Audit Log Routes ---
 from routes.audit_routes import audit_bp
@@ -689,21 +790,33 @@ def initialize_app():
     # Acquire a session-level advisory lock so that concurrent gunicorn workers
     # serialise DDL (CREATE TABLE / ALTER TABLE) instead of deadlocking.
     from utils.db.db_utils import connect_to_db_as_admin
+    from utils.db.migration_lock import (
+        MIGRATION_LOCK_KEY,
+        acquire_migration_lock,
+        reset_migration_session,
+        set_connection_autocommit,
+    )
     conn = connect_to_db_as_admin()
     try:
-        conn.autocommit = True
-        with conn.cursor() as cur:
-            cur.execute("SELECT pg_advisory_lock(42)")
-        conn.autocommit = False
+        # The pool wrapper swallows `conn.autocommit = ...`, so set it on the
+        # psycopg2 connection. Otherwise the wait sleeps inside a transaction.
+        set_connection_autocommit(conn, True)
+        acquire_migration_lock(conn)
         try:
+            set_connection_autocommit(conn, False)
             ensure_database_exists()
             initialize_tables()
         finally:
-            conn.autocommit = True
+            set_connection_autocommit(conn, True)
             with conn.cursor() as cur:
-                cur.execute("SELECT pg_advisory_unlock(42)")
+                cur.execute("SELECT pg_advisory_unlock(%s)", (MIGRATION_LOCK_KEY,))
     finally:
-        conn.close()
+        try:
+            reset_migration_session(conn)
+            # Next checkout expects a transactional connection
+            set_connection_autocommit(conn, False)
+        finally:
+            conn.close()
 
     # Initialize Casbin RBAC enforcer (seeds default policies on first run)
     try:

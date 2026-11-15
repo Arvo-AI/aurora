@@ -20,15 +20,20 @@ spec:
         app.kubernetes.io/name: {{ include "aurora.name" . }}-vault
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/part-of: aurora
+        {{- if and .Values.vault.seal (eq .Values.vault.seal.type "azurekeyvault") (ne (toString ((.Values.vault.seal.azurekeyvault | default dict).workloadIdentity)) "false") }}
+        # AKS Workload Identity injects the federated token Vault uses to reach Key Vault.
+        azure.workload.identity/use: "true"
+        {{- end }}
     spec:
       serviceAccountName: {{ include "aurora.fullname" . }}-vault
       automountServiceAccountToken: false
       securityContext:
         {{- include "aurora.podSecurityContext" (dict "service" "vault" "global" $ "defaults" (dict "runAsUser" 100 "runAsGroup" 1000 "fsGroup" 1000)) | nindent 8 }}
+      {{- include "aurora.imagePullSecrets" (dict "image" "vault" "global" $) | nindent 6 }}
       {{- include "aurora.scheduling" (dict "service" "vault" "global" $) | nindent 6 }}
       containers:
         - name: vault
-          image: hashicorp/vault:1.15
+          image: {{ include "aurora.image" (dict "image" "vault" "global" $) | quote }}
           imagePullPolicy: IfNotPresent
           command: ["/bin/sh", "-c"]
           args: 

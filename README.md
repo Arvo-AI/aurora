@@ -56,6 +56,13 @@ When an alert fires at 3 AM, your on-call engineer spends 30-60 minutes doing th
 
 </div>
 
+### How well does it work?
+
+We test it in the open. [Aurora Lab](https://github.com/Arvo-AI/aurora-lab) breaks a Kubernetes cluster in 19 known ways, sends Aurora only the alert, and grades the investigation against the injected root cause. Every run is published, including the ones Aurora gets wrong.
+
+- **[Benchmark](https://www.aurorasre.ai/benchmark)**: Aurora and HolmesGPT on the same 19 faults, with the losses. K8sGPT takes no alert and scans the namespace, so its runs are reported separately, not scored against the other two
+- **[Runbooks](https://www.aurorasre.ai/runbooks)**: one per lab fault (OOMKilled, ImagePullBackOff, Service with no endpoints, and more), built from the real runs
+
 ---
 
 ## Features
@@ -243,6 +250,7 @@ Also available via OCI: `oci://ghcr.io/arvo-ai/charts/aurora-oss`
 ![SharePoint](https://img.shields.io/badge/SharePoint-0078D4?style=flat-square&logo=microsoftsharepoint&logoColor=white)
 ![Bitbucket](https://img.shields.io/badge/Bitbucket-0052CC?style=flat-square&logo=bitbucket&logoColor=white)
 ![Splunk](https://img.shields.io/badge/Splunk-000000?style=flat-square&logo=splunk&logoColor=white)
+![Elastic](https://img.shields.io/badge/Elastic-005571?style=flat-square&logo=elastic&logoColor=white)
 ![Fly.io](https://img.shields.io/badge/Fly.io-7B36ED?style=flat-square&logo=flydotio&logoColor=white)
 ![CloudBees](https://img.shields.io/badge/CloudBees-1997B5?style=flat-square&logoColor=white)
 ![Tailscale](https://img.shields.io/badge/Tailscale-242424?style=flat-square&logo=tailscale&logoColor=white)
@@ -271,7 +279,6 @@ aurora/
 | Backend | Python, Flask, Celery |
 | Frontend | Next.js, TypeScript |
 | Graph DB | Memgraph |
-| Vector Store | Weaviate |
 | Secrets | HashiCorp Vault, AWS Secrets Manager |
 | Storage | PostgreSQL, Redis, S3-compatible |
 
@@ -315,6 +322,8 @@ Aurora is **100% self-hosted**. Your incident data never leaves your infrastruct
 - **[GitHub Discussions](https://github.com/Arvo-AI/aurora/discussions)** — Ideas and Q&A
 - **[Documentation](https://arvo-ai.github.io/aurora/)** — Full deployment and configuration guides
 - **[Blog](https://www.aurorasre.ai/blog)** — SRE best practices, incident management guides
+- **[Aurora Lab](https://github.com/Arvo-AI/aurora-lab)** — Reproducible Kubernetes failure scenarios and every graded Aurora run
+- **[lastwords](https://github.com/Arvo-AI/lastwords)**: Open-source Kubernetes DaemonSet that snapshots a container's memory before an OOM kill and saves the logs and core dumps of crashes. Works on its own, without Aurora.
 - **[Contributing](CONTRIBUTING.md)** — We welcome PRs! Read the guide first.
 
 ---

@@ -28,6 +28,7 @@ from dataclasses import dataclass
 
 from langchain_core.language_models import BaseChatModel
 
+from chat.backend.agent.providers._sampling_guard import SAMPLING_FIELDS
 from utils.security.command_safety import _fingerprint
 
 logger = logging.getLogger(__name__)
@@ -66,27 +67,40 @@ class InputRailResult:
 
 
 class _GuardrailsLLMCompat(BaseChatModel):
-    """Adapt non-string-content chat models for NeMo Guardrails self-check tasks.
+    """Adapt chat models for NeMo Guardrails self-check tasks.
 
-    Two incompatibilities are bridged here:
+    Three incompatibilities are bridged here:
 
-    1. NeMo calls ``llm.bind(max_tokens=3, ...)`` at invoke time
-       (``nemoguardrails/library/self_check/input_check/actions.py``). Gemini's
+    1. NeMo calls ``llm.bind(temperature=..., max_tokens=...)`` at invoke time
+       (``LangChainLLMAdapter.generate_async`` in
+       ``nemoguardrails/integrations/langchain/llm_adapter.py``). Gemini's
        ``GenerateContentConfig`` only knows ``max_output_tokens`` and rejects
        the alias as ``extra_forbidden``. We rename the key at bind time when
        ``rename_max_tokens`` is set (Gemini direct path only).
-    2. Reasoning models (Gemini ``gemini-2.5+``, OpenAI ``gpt-5+`` via the
-       Responses API) return structured content (a list of
-       ``{"type": "reasoning" | "thinking" | "text", ...}`` blocks) while NeMo
-       calls ``.strip()`` on the returned string. We flatten list content to
-       its text blocks so the ``str`` contract NeMo expects holds.
+    2. Newer models removed sampling parameters entirely — Claude Opus 5.5 /
+       Sonnet 5 answer ``400 `temperature` is deprecated for this model`` and
+       GPT-6 Astra ``400 Unsupported parameter: 'temperature'``. Because NeMo
+       re-attaches ``temperature`` as a *call* kwarg on every self-check, the
+       providers' ``_sampling_guard`` (which only clears instance attributes)
+       cannot rescue it and the rail fails closed, blocking every request. We
+       drop the rejected params from the call kwargs and retry once, then keep
+       them off for the life of the instance.
+    3. Reasoning models (Gemini ``gemini-2.5+``, OpenAI ``gpt-5+`` via the
+       Responses API, Claude extended thinking) return structured content (a
+       list of ``{"type": "reasoning" | "thinking" | "text", ...}`` blocks)
+       while NeMo calls ``.strip()`` on the returned string. We flatten list
+       content to its text blocks so the ``str`` contract NeMo expects holds.
 
-    The wrapper is installed for Gemini direct and for OpenAI reasoning models
-    routed through the Responses API; other providers stay untouched.
+    The wrapper is installed for every provider: (2) and (3) are model-specific,
+    not provider-specific, and a model that accepts the params is unaffected
+    because nothing is stripped until it complains.
     """
 
     inner: BaseChatModel
     rename_max_tokens: bool = False
+    # Flipped to True the first time the model rejects a sampling param, so later
+    # calls skip the wasted round-trip. Not a constructor argument in practice.
+    drop_sampling: bool = False
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -99,6 +113,32 @@ class _GuardrailsLLMCompat(BaseChatModel):
             kwargs = dict(kwargs)
             kwargs["max_output_tokens"] = kwargs.pop("max_tokens")
         return kwargs
+
+    def _prepare(self, kwargs: dict) -> dict:
+        """Apply the Gemini rename, then drop sampling params the model has rejected."""
+        prepared = self._rename(kwargs)
+        if self.drop_sampling and any(f in prepared for f in SAMPLING_FIELDS):
+            prepared = {k: v for k, v in prepared.items() if k not in SAMPLING_FIELDS}
+        return prepared
+
+    def _note_sampling_rejection(self, err: Exception, kwargs: dict) -> bool:
+        """Return True when ``err`` is a sampling-param rejection we can retry around.
+
+        False for anything else (or when the params are already stripped, so a retry
+        would be identical) — the caller then re-raises and the rail fails closed.
+        """
+        if self.drop_sampling:
+            return False
+        if not any(field in str(err).lower() for field in SAMPLING_FIELDS):
+            return False
+        if not any(field in self._rename(kwargs) for field in SAMPLING_FIELDS):
+            return False
+        self.drop_sampling = True
+        logger.warning(
+            "[Guardrails:InputRail] Rail model rejected a sampling parameter; "
+            "retrying without it and dropping it for subsequent checks."
+        )
+        return True
 
     @staticmethod
     def _flatten(result):
@@ -123,36 +163,52 @@ class _GuardrailsLLMCompat(BaseChatModel):
         return result
 
     def bind(self, **kwargs):
-        # Return a RunnableBinding that wraps ``self`` (not ``self.inner``) so
-        # the flatten post-processing still runs at invoke time.
+        # Return a RunnableBinding that wraps ``self`` (not ``self.inner``) so the
+        # rename / sampling-strip / flatten handling still runs at invoke time.
         from langchain_core.runnables import RunnableBinding
-        return RunnableBinding(bound=self, kwargs=self._rename(kwargs))
+        return RunnableBinding(bound=self, kwargs=kwargs)
 
     def _generate(self, messages, stop=None, **kwargs):
-        return self._flatten(
-            self.inner._generate(messages, stop=stop, **self._rename(kwargs))
-        )
+        try:
+            return self._flatten(
+                self.inner._generate(messages, stop=stop, **self._prepare(kwargs))
+            )
+        except Exception as err:  # noqa: BLE001
+            # Model removed temperature/top_p/top_k — drop them and retry once.
+            if not self._note_sampling_rejection(err, kwargs):
+                raise
+            return self._flatten(
+                self.inner._generate(messages, stop=stop, **self._prepare(kwargs))
+            )
 
     async def _agenerate(self, messages, stop=None, **kwargs):
-        return self._flatten(
-            await self.inner._agenerate(messages, stop=stop, **self._rename(kwargs))
-        )
+        try:
+            return self._flatten(
+                await self.inner._agenerate(messages, stop=stop, **self._prepare(kwargs))
+            )
+        except Exception as err:  # noqa: BLE001
+            # Model removed temperature/top_p/top_k — drop them and retry once.
+            if not self._note_sampling_rejection(err, kwargs):
+                raise
+            return self._flatten(
+                await self.inner._agenerate(messages, stop=stop, **self._prepare(kwargs))
+            )
 
 
 def _build_llm() -> BaseChatModel:
     """Build the chat model for the input rail using the shared factory.
 
-    Reasoning-capable models return structured content blocks that break
-    NeMo's ``str.strip()`` assumption — wrap them so list content gets
-    flattened to plain text. Gemini direct additionally needs the
-    ``max_tokens`` kwarg renamed.
+    Always wrapped in :class:`_GuardrailsLLMCompat`: the wrapper handles two
+    model-specific (not provider-specific) hazards — newer models that reject
+    ``temperature`` (which NeMo re-attaches on every self-check call) and
+    reasoning models whose structured content breaks NeMo's ``str.strip()``.
+    Neither costs anything on a model that doesn't hit them. Gemini direct
+    additionally needs the ``max_tokens`` kwarg renamed.
     """
     import os
 
     from chat.backend.agent.llm import ModelConfig
-    from chat.backend.agent.model_mapper import ModelMapper
     from chat.backend.agent.providers import create_chat_model
-    from chat.backend.agent.providers.openai_provider import OpenAIProvider
     from utils.security.config import config as gc
 
     model_name = gc.llm_model or ModelConfig.MAIN_MODEL
@@ -163,13 +219,11 @@ def _build_llm() -> BaseChatModel:
     from chat.backend.agent.providers import get_registry
     serving_provider = get_registry().resolve_provider_name(model_name, mode=provider_mode)
 
-    if serving_provider in ("google", "vertex"):
-        return _GuardrailsLLMCompat(inner=llm, rename_max_tokens=True)
-    if serving_provider == "openai":
-        native = ModelMapper.get_native_name(model_name, "openai")
-        if OpenAIProvider._supports_reasoning(native):
-            return _GuardrailsLLMCompat(inner=llm, rename_max_tokens=False)
-    return llm
+    # Gemini's GenerateContentConfig rejects the `max_tokens` alias NeMo sends.
+    return _GuardrailsLLMCompat(
+        inner=llm,
+        rename_max_tokens=serving_provider in ("google", "vertex"),
+    )
 
 
 def _build_rails_sync():

@@ -5,7 +5,8 @@ All notification events (investigation start/complete, action start/complete) ro
 through this module. It handles preference checking, recipient resolution, and dispatch
 to enabled channels.
 
-Investigation notifications dispatch to: email, Slack, Google Chat.
+Investigation notifications dispatch to: email, Slack, Google Chat, and (on
+completion only) a note on the originating PagerDuty incident.
 Action notifications dispatch to: email, Slack.
 
 Callers (task.py, summarization.py) make a single one-line call and remain unaware
@@ -21,6 +22,7 @@ from utils.auth.stateless_auth import (
     get_credentials_from_db,
     get_org_id_for_user,
     get_org_preference,
+    get_user_preference,
     set_rls_context,
 )
 from utils.db.connection_pool import db_pool
@@ -59,6 +61,15 @@ def _has_slack_connected(user_id: str) -> bool:
         return False
 
 
+def _has_teams_connected(user_id: str) -> bool:
+    try:
+        from chat.backend.agent.tools.teams_tool import is_teams_connected
+        return is_teams_connected(user_id)
+    except Exception:
+        logger.debug("[Dispatcher] Teams connection check failed", exc_info=True)
+        return False
+
+
 def _has_google_chat_connected(user_id: str) -> bool:
     """Check if user's org has Google Chat connected with a service account."""
     try:
@@ -72,23 +83,60 @@ def _has_google_chat_connected(user_id: str) -> bool:
 
 
 def _get_incident_data(incident_id: str, user_id: str) -> Optional[Dict[str, Any]]:
-    """Fetch incident data from database."""
+    """Fetch incident data from database.
+
+    Also carries the recurrence-group context Slack threading (dedup layer 3)
+    needs: the anchor's Slack ts/title, this incident's position in its
+    group and when the group last fired. Group membership mirrors
+    _group_is_stale (recurrence_fold.py) and the detail-view occurrences
+    query (pointer-only; 'merged' cannot occur inside a group — the fold
+    rejects merged members and the status has no writer left); ordering
+    mirrors lastFire in the client so "occurrence N" agrees with the UI. The
+    group always contains the incident itself, so a standalone incident gets
+    recurrence_of=None, occurrence_number=1, group_size=1.
+    """
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 set_rls_context(cursor, conn, user_id, log_prefix="[Dispatcher:GetIncident]")
                 cursor.execute(
                     """
-                    SELECT id, user_id, source_type, status, severity, alert_title,
-                           alert_service, aurora_status, aurora_summary, started_at,
-                           analyzed_at, created_at, slack_message_ts, google_chat_message_name
-                    FROM incidents
-                    WHERE id = %s
+                    WITH me AS (
+                        SELECT COALESCE(recurrence_of_incident_id, id) AS root_id
+                        FROM incidents WHERE id = %s
+                    ),
+                    grp AS (
+                        SELECT g.id,
+                               ROW_NUMBER() OVER (
+                                   ORDER BY COALESCE(g.alert_fired_at, g.started_at), g.started_at, g.id
+                               ) AS occurrence_number,
+                               COUNT(*) OVER () AS group_size,
+                               MAX(COALESCE(g.alert_fired_at, g.started_at)) OVER () AS last_fired_at
+                        FROM incidents g
+                        JOIN me ON g.id = me.root_id OR g.recurrence_of_incident_id = me.root_id
+                    )
+                    SELECT i.id, i.user_id, i.source_type, i.status, i.severity, i.alert_title,
+                           i.alert_service, i.aurora_status, i.aurora_summary, i.started_at,
+                           i.analyzed_at, i.created_at, i.slack_message_ts, i.google_chat_message_name,
+                           i.recurrence_of_incident_id, anchor.slack_message_ts, anchor.alert_title,
+                           grp.occurrence_number, grp.group_size, grp.last_fired_at,
+                           i.alert_metadata, i.pagerduty_note_id,
+                           i.incidentio_update_id, i.source_alert_id, i.servicenow_note_id
+                    FROM incidents i
+                    LEFT JOIN incidents anchor ON anchor.id = i.recurrence_of_incident_id
+                    JOIN grp ON grp.id = i.id
+                    WHERE i.id = %s
                     """,
-                    (incident_id,),
+                    (incident_id, incident_id),
                 )
                 result = cursor.fetchone()
                 if result:
+                    alert_metadata = result[20] or {}
+                    if isinstance(alert_metadata, str):
+                        try:
+                            alert_metadata = json.loads(alert_metadata)
+                        except (ValueError, TypeError):
+                            alert_metadata = {}
                     return {
                         'incident_id': str(result[0]),
                         'user_id': result[1],
@@ -104,6 +152,17 @@ def _get_incident_data(incident_id: str, user_id: str) -> Optional[Dict[str, Any
                         'created_at': result[11],
                         'slack_message_ts': result[12],
                         'google_chat_message_name': result[13],
+                        'recurrence_of': str(result[14]) if result[14] else None,
+                        'anchor_slack_message_ts': result[15],
+                        'anchor_alert_title': result[16],
+                        'occurrence_number': int(result[17]),
+                        'group_size': int(result[18]),
+                        'group_last_fired_at': result[19],
+                        'alert_metadata': alert_metadata,
+                        'pagerduty_note_id': result[21],
+                        'incidentio_update_id': result[22],
+                        'source_alert_id': result[23],
+                        'servicenow_note_id': result[24],
                     }
         return None
     except Exception:
@@ -254,14 +313,8 @@ One-line summary:"""
         )
 
         if response and response.content:
-            content = response.content
-            if isinstance(content, list):
-                content = " ".join(
-                    str(p.get("text") or "") if isinstance(p, dict) else str(p)
-                    for p in content
-                    if not (isinstance(p, dict) and p.get("type") in ("thinking", "reasoning"))
-                )
-            summary = " ".join(str(content).split())
+            from chat.backend.agent.utils.message_content import extract_text_from_content
+            summary = " ".join(extract_text_from_content(response.content).split())
             if summary:
                 return summary[:300]
         return None
@@ -375,12 +428,29 @@ def notify_investigation_started(user_id: str, incident_id: str) -> None:
             except Exception:
                 logger.exception("[Dispatcher] Google Chat started notification failed")
 
+        # --- Microsoft Teams ---
+        teams_enabled = bool(get_org_preference(org_id, 'teams_investigation_start_notifications', default=True))
+        if teams_enabled and _has_teams_connected(user_id):
+            try:
+                from utils.notifications.teams_notification_service import (
+                    send_teams_investigation_started_notification,
+                )
+                send_teams_investigation_started_notification(user_id, incident_data)
+            except Exception:
+                logger.exception("[Dispatcher] Teams started notification failed")
+
     except Exception:
         logger.exception("[Dispatcher] Error in notify_investigation_started")
 
 
-def notify_investigation_completed(user_id: str, incident_id: str, session_id: Optional[str] = None) -> None:
-    """Send notifications for investigation completed event across all enabled channels."""
+def notify_investigation_completed(user_id: str, incident_id: str, session_id: Optional[str] = None,
+                                   refresh_only: bool = False) -> None:
+    """Send notifications for investigation completed event across all enabled channels.
+
+    refresh_only: the completion was already announced (a follow-up chat
+    re-summarized the incident): no email, no Slack post; only the Google
+    Chat card, which is edited in place, is refreshed to match the summary.
+    """
     try:
         org_id = get_org_id_for_user(user_id)
         if not org_id:
@@ -396,30 +466,98 @@ def notify_investigation_completed(user_id: str, incident_id: str, session_id: O
 
         # --- Email ---
         email_enabled = bool(get_org_preference(org_id, 'rca_email_notifications', default=False))
-        if email_enabled:
+        if email_enabled and not refresh_only:
             _send_emails(org_id, user_id, 'send_investigation_completed_email', incident_data)
 
         # --- Slack ---
-        slack_enabled = bool(get_org_preference(org_id, 'slack_investigation_complete_notifications', default=True))
-        if slack_enabled and _has_slack_connected(user_id):
+        # The "Investigation Complete" org toggle governs ONLY the structured
+        # card posted to the incidents channel. Routed teammate messages (Aurora
+        # posting a conclusion to the relevant team channels) are the core
+        # teammate behaviour and always send when an RCA concludes — they're
+        # gated per-channel by the Slack memory, not by this toggle. So call the
+        # notifier whenever Slack is connected and pass whether the card is on.
+        card_enabled = bool(get_org_preference(org_id, 'slack_investigation_complete_notifications', default=True))
+        if not refresh_only and _has_slack_connected(user_id):
             try:
                 from utils.notifications.slack_notification_service import (
                     send_slack_investigation_completed_notification,
                 )
-                send_slack_investigation_completed_notification(user_id, incident_data)
+                send_slack_investigation_completed_notification(
+                    user_id, incident_data, post_primary_card=card_enabled,
+                )
             except Exception:
                 logger.exception("[Dispatcher] Slack completed notification failed")
 
-        # --- Google Chat ---
+        # --- Microsoft Teams ---
+        teams_card_enabled = bool(get_org_preference(org_id, 'teams_investigation_complete_notifications', default=True))
+        if not refresh_only and _has_teams_connected(user_id):
+            try:
+                from utils.notifications.teams_notification_service import (
+                    send_teams_investigation_completed_notification,
+                )
+                send_teams_investigation_completed_notification(
+                    user_id, incident_data, post_primary_card=teams_card_enabled,
+                )
+            except Exception:
+                logger.exception("[Dispatcher] Teams completed notification failed")
+
+        # --- Google Chat --- (edited in place: a refresh needs an existing card)
         google_chat_enabled = bool(get_org_preference(org_id, 'google_chat_investigation_notifications', default=True))
+        if refresh_only and not incident_data.get('google_chat_message_name'):
+            google_chat_enabled = False
         if google_chat_enabled and _has_google_chat_connected(user_id):
             try:
                 from utils.notifications.google_chat_notification_service import (
                     send_google_chat_investigation_completed_notification,
                 )
-                send_google_chat_investigation_completed_notification(user_id, incident_data)
+                send_google_chat_investigation_completed_notification(
+                    user_id, incident_data, allow_new_message=not refresh_only,
+                )
             except Exception:
                 logger.exception("[Dispatcher] Google Chat completed notification failed")
+
+        # --- PagerDuty note --- (completion only, once; opt-in per org; a folded
+        # recurrence gets a short note pointing at its anchor instead of the RCA;
+        # the service itself checks the stored credentials can write, default-deny)
+        pd_enabled = bool(get_org_preference(org_id, 'pagerduty_incident_notes', default=False))
+        if pd_enabled and not refresh_only:
+            try:
+                from utils.notifications.pagerduty_notification_service import send_pagerduty_incident_note
+                send_pagerduty_incident_note(user_id, incident_data)
+            except Exception:
+                logger.exception("[Dispatcher] PagerDuty note failed")
+
+        # --- incident.io update --- (completion only, once per incident; recurrences
+        # post too since each is a distinct incident.io incident. The post-back
+        # toggle is the one on the incident.io connector page, stored org-wide
+        # with the other incident.io RCA settings)
+        if (not refresh_only and incident_data.get('source_type') == 'incidentio'
+                and bool(get_user_preference(user_id, 'incidentio_postback_enabled', default=False))):
+            try:
+                from utils.notifications.incidentio_notification_service import send_incidentio_incident_update
+                send_incidentio_incident_update(user_id, incident_data)
+            except Exception:
+                logger.exception("[Dispatcher] incident.io update failed")
+
+        # --- ServiceNow work note --- (completion only, anchors only, once; opt-in
+        # per user on the ServiceNow connector page; the service checks the stored
+        # credentials can still write)
+        if not refresh_only and incident_data.get('source_type') == 'servicenow':
+            try:
+                from routes.servicenow.tasks import work_notes_enabled as _sn_work_notes_enabled
+                from utils.notifications.servicenow_notification_service import send_servicenow_work_note
+                if _sn_work_notes_enabled(user_id):
+                    send_servicenow_work_note(user_id, incident_data)
+            except Exception:
+                logger.exception("[Dispatcher] ServiceNow work note failed")
+
+        # --- Team-channel routing (once per incident, any connected chat platform) ---
+        if not refresh_only and (_has_slack_connected(user_id) or _has_teams_connected(user_id)):
+            try:
+                from utils.notifications.team_routing import trigger_team_routing_agent
+                trigger_team_routing_agent(user_id, incident_data)
+            except Exception:
+                logger.exception("[Dispatcher] Team routing dispatch failed")
 
     except Exception:
         logger.exception("[Dispatcher] Error in notify_investigation_completed")
@@ -447,6 +585,16 @@ def notify_investigation_failed(user_id: str, incident_id: str, error_message: O
                 send_slack_investigation_failed_notification(user_id, incident_data, error_message=error_message)
             except Exception:
                 logger.exception("[Dispatcher] Slack failed notification failed")
+
+        teams_enabled = bool(get_org_preference(org_id, 'teams_investigation_complete_notifications', default=True))
+        if teams_enabled and _has_teams_connected(user_id):
+            try:
+                from utils.notifications.teams_notification_service import (
+                    send_teams_investigation_failed_notification,
+                )
+                send_teams_investigation_failed_notification(user_id, incident_data, error_message=error_message)
+            except Exception:
+                logger.exception("[Dispatcher] Teams failed notification failed")
 
     except Exception:
         logger.exception("[Dispatcher] Error in notify_investigation_failed")
@@ -479,6 +627,16 @@ def notify_action_started(user_id: str, trigger_metadata: Dict[str, Any], sessio
                     _store_start_message_info(trigger_metadata['run_id'], msg_info, user_id)
             except Exception:
                 logger.exception("[Dispatcher] Slack action started notification failed")
+
+        teams_enabled = bool(get_org_preference(org_id, 'teams_action_start_notifications', default=True))
+        if teams_enabled and _has_teams_connected(user_id):
+            try:
+                from utils.notifications.teams_notification_service import (
+                    send_teams_action_started_notification,
+                )
+                send_teams_action_started_notification(user_id, action_data)
+            except Exception:
+                logger.exception("[Dispatcher] Teams action started notification failed")
 
     except Exception:
         logger.exception("[Dispatcher] Error in notify_action_started")
@@ -517,6 +675,16 @@ def notify_action_completed(user_id: str, trigger_metadata: Dict[str, Any], sess
                 send_slack_action_completed_notification(user_id, action_data)
             except Exception:
                 logger.exception("[Dispatcher] Slack action completed notification failed")
+
+        teams_enabled = bool(get_org_preference(org_id, 'teams_action_complete_notifications', default=True))
+        if teams_enabled and _has_teams_connected(user_id):
+            try:
+                from utils.notifications.teams_notification_service import (
+                    send_teams_action_completed_notification,
+                )
+                send_teams_action_completed_notification(user_id, action_data)
+            except Exception:
+                logger.exception("[Dispatcher] Teams action completed notification failed")
 
     except Exception:
         logger.exception("[Dispatcher] Error in notify_action_completed")

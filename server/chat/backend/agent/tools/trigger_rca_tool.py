@@ -189,6 +189,10 @@ def trigger_rca(
         from chat.background.rca_prompt_builder import build_rca_prompt
 
         trigger_metadata = {"source": "chat", "incident_id": incident_id}
+        from utils.auth.connector_access import pinned_roles
+        # The child task is a new process, so the guest pin does not follow it.
+        if pinned_roles() is not None:
+            trigger_metadata["access_as"] = "general_viewer"
 
         chat_title = f"RCA: {incident_title}"
         rca_session_id = create_background_chat_session(

@@ -64,7 +64,7 @@ def connect(user_id):
     }
 
     try:
-        store_tokens_in_db(user_id, token_payload, "thousandeyes")
+        store_tokens_in_db(user_id, token_payload, "thousandeyes", schedule_prediscovery=True)
         logger.info("[THOUSANDEYES] Stored credentials for user %s", user_id)
     except Exception as exc:
         logger.exception("[THOUSANDEYES] Failed to store credentials: %s", exc)

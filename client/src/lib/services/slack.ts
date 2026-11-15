@@ -16,7 +16,27 @@ export interface SlackConnectResponse {
   message: string;
 }
 
+export interface SlackConnectedChannel {
+  channel_id: string;
+  channel_name?: string;
+  is_private?: boolean;
+  is_member?: boolean;
+  channel_type?: string;
+  detected_platform?: string | null;
+  metadata_summary?: string | null;
+  metadata_status?: string;
+  is_dismissed?: boolean;
+}
+
+export interface SlackChannelsResponse {
+  connected: SlackConnectedChannel[];
+  dismissed: SlackConnectedChannel[];
+  // The single channel that receives the structured incident card, or null.
+  card_channel_id?: string | null;
+}
+
 const API_BASE = '/api/slack';
+const CHANNELS_BASE = '/api/slack/channels';
 
 export const slackService = {
   async getStatus(): Promise<SlackStatus | null> {
@@ -53,5 +73,77 @@ export const slackService = {
       method: 'DELETE',
       cache: 'no-store',
     });
+  },
+
+  // Fetch the org's channels. `pollMode` (?live=0) serves stored rows straight
+  // from the DB with NO Slack calls — used by the status poll, which only needs
+  // to watch metadata_status while descriptions generate and must not trigger
+  // the rate-limited workspace re-list on every tick. A normal load omits it so
+  // the backend reconciles membership + live-lists available channels.
+  async getChannels(pollMode = false): Promise<SlackChannelsResponse> {
+    const url = pollMode ? `${CHANNELS_BASE}?live=0` : `${CHANNELS_BASE}`;
+    const data = await apiRequest<SlackChannelsResponse>(url, {
+      cache: 'no-store',
+    });
+    return {
+      connected: data?.connected ?? [],
+      dismissed: data?.dismissed ?? [],
+      card_channel_id: data?.card_channel_id ?? null,
+    };
+  },
+
+  // Deactivate = Aurora calls conversations.leave and the stored row is pruned.
+  // Membership is the source of truth, so hiding without leaving would just flap
+  // back to Active on the next reconcile. Re-invite the bot to re-activate.
+  async dismissChannel(channelId: string): Promise<void> {
+    await apiRequest(`${CHANNELS_BASE}/${channelId}/dismiss`, {
+      method: 'POST',
+      cache: 'no-store',
+    });
+  },
+
+  async restoreChannel(channelId: string): Promise<void> {
+    await apiRequest(`${CHANNELS_BASE}/${channelId}/restore`, {
+      method: 'POST',
+      cache: 'no-store',
+    });
+  },
+
+  async updateChannelDescription(channelId: string, summary: string): Promise<void> {
+    await apiRequest(`${CHANNELS_BASE}/${channelId}/metadata`, {
+      method: 'PUT',
+      body: JSON.stringify({ metadata_summary: summary }),
+      cache: 'no-store',
+    });
+  },
+
+  // Designate the single channel that receives the structured incident card.
+  // Must be an active channel; the backend 409s otherwise.
+  async setCardChannel(channelId: string): Promise<void> {
+    await apiRequest(`${CHANNELS_BASE}/card-channel`, {
+      method: 'PUT',
+      body: JSON.stringify({ channel_id: channelId }),
+      cache: 'no-store',
+    });
+  },
+
+  async regenerateChannelDescription(channelId: string): Promise<void> {
+    await apiRequest(`${CHANNELS_BASE}/metadata/generate`, {
+      method: 'POST',
+      body: JSON.stringify({ channel_id: channelId }),
+      cache: 'no-store',
+    });
+  },
+
+  // Bulk-activate indexed channels: joins + describes them on the worker (so a
+  // large batch can't rate-limit/timeout the request). Returns how many were
+  // queued; rows/descriptions land asynchronously and the manage page polls.
+  async activateChannels(channelIds: string[]): Promise<{ queued: number }> {
+    const data = await apiRequest<{ queued: number }>(`${CHANNELS_BASE}/activate`, {
+      method: 'POST',
+      body: JSON.stringify({ channel_ids: channelIds }),
+      cache: 'no-store',
+    });
+    return { queued: data?.queued ?? 0 };
   },
 };

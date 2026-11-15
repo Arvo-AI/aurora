@@ -113,7 +113,7 @@ def tailscale_connect(user_id):
             "tailscale_auth_key": auth_key,
         }
 
-        store_tokens_in_db(user_id, token_data, "tailscale")
+        store_tokens_in_db(user_id, token_data, "tailscale", schedule_prediscovery=True)
         set_connection_status(user_id, "tailscale", client_id, "connected")
         logger.info(f"Tailscale connected for user {user_id}")
 

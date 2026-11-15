@@ -130,12 +130,11 @@ class TestGitHubPRAdapter:
         adapter, http = self._adapter_and_http(mock_requests)
         http.post.return_value = _response(json_data={"id": 99})
         comments = [{"path": "a.py", "line": 3, "side": "RIGHT", "body": "x"}]
-        result = adapter.post_review(
-            7, commit_id="abc", event="COMMENT", body="b", comments=comments
-        )
+        result = adapter.post_review(7, commit_id="abc", body="b", comments=comments)
         assert result == {"id": 99}
         call = http.post.call_args
         assert call.args[0].endswith("/repos/acme/widgets/pulls/7/reviews")
+        # event is hardcoded to COMMENT — Aurora must never approve a PR.
         assert call.kwargs["json"] == {
             "commit_id": "abc",
             "event": "COMMENT",
@@ -157,7 +156,7 @@ class TestGitHubPRAdapter:
 
         with caplog.at_level(logging.DEBUG):
             result = adapter.post_review(
-                7, commit_id="abc", event="COMMENT", body="b", comments=comments
+                7, commit_id="abc", body="b", comments=comments
             )
 
         assert result == {"id": 99}
@@ -174,9 +173,7 @@ class TestGitHubPRAdapter:
         adapter, http = self._adapter_and_http(mock_requests)
         http.post.return_value = _response(status=422, text="bad")
         with pytest.raises(_HTTPError):
-            adapter.post_review(
-                7, commit_id="abc", event="APPROVE", body="b", comments=[]
-            )
+            adapter.post_review(7, commit_id="abc", body="b", comments=[])
         assert http.post.call_count == 1
 
     def test_post_review_other_error_logs_and_raises(
@@ -189,7 +186,6 @@ class TestGitHubPRAdapter:
                 adapter.post_review(
                     7,
                     commit_id="abc",
-                    event="COMMENT",
                     body="b",
                     comments=[{"path": "a.py", "line": 1, "side": "RIGHT", "body": "x"}],
                 )
@@ -366,7 +362,6 @@ class TestGitHubPRAdapter:
             adapter.post_review(
                 7,
                 commit_id="abc",
-                event="COMMENT",
                 body="b",
                 comments=[{"path": "a.py", "line": 1, "side": "RIGHT", "body": "x"}],
             )

@@ -145,9 +145,26 @@ export default function IncidentIoAuthPage() {
                     onChange={(e) => setApiKey(e.target.value)}
                     required
                   />
-                  <p className="text-xs text-muted-foreground">
-                    The API key needs these permissions: <strong>View all incident data (including private incidents)</strong> and <strong>Create incidents</strong>. Keys are stored securely in Vault.
-                  </p>
+                  <div className="text-xs text-muted-foreground">
+                    <p>The API key needs these permissions:</p>
+                    <ul className="mt-1 ml-1 space-y-1 list-disc list-inside">
+                      <li><strong>View all incident data</strong> (including private incidents)</li>
+                      <li><strong>Create incidents</strong></li>
+                      <li>
+                        <strong>View data</strong> — lets Aurora read your organization&apos;s alert
+                        priorities for severity filtering; without it, RCA still runs on all alerts
+                      </li>
+                      <li>
+                        <strong>Edit incidents</strong> — lets Aurora post the root cause as an
+                        update on the incident
+                      </li>
+                      <li>
+                        <strong>Create and manage on call ressources</strong> — lets Aurora post the root cause
+                        as a note on an alert that only escalated; without it, incident updates still post
+                      </li>
+                    </ul>
+                    <p className="mt-1">Keys are stored securely in Vault.</p>
+                  </div>
                 </div>
 
                 <Button type="submit" className="w-full" disabled={loading || !apiKey}>

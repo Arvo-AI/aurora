@@ -6,7 +6,7 @@ category: observability
 connection_check:
   method: get_token_data
   provider_key: datadog
-  required_any_fields: [api_key, apiKey]
+  required_any_fields: [api_key, apiKey, accounts]
 tools:
   - query_datadog
 index: "Full-stack monitoring -- query logs, metrics, monitors, events, traces, hosts, incidents"
@@ -27,20 +27,38 @@ Datadog integration for querying observability data during Root Cause Analysis. 
 
 ### Tool Usage
 
-`query_datadog(resource_type=TYPE, query=QUERY, time_from=START, time_to=END, limit=N, interval=MS)`
+`query_datadog(resource_type=TYPE, query=QUERY, time_from=START, time_to=END, limit=N, interval=MS, account=LABEL)`
 
 ### Resource Types
 
-1. `'logs'` -- Search log entries. query=Datadog log query syntax e.g. `"service:web status:error"`
-2. `'metrics'` -- Query metric timeseries (raw points). query=metric query e.g. `"avg:system.cpu.user{*}"`
-3. `'metric_stats'` -- Percentile summary per series (p50/p95/p99/max/mean). Same metric query
+1. `'accounts'` -- List the connected Datadog organizations. Takes no query and calls no
+   Datadog API. See "Multiple Organizations" below.
+2. `'logs'` -- Search log entries. query=Datadog log query syntax e.g. `"service:web status:error"`
+3. `'metrics'` -- Query metric timeseries (raw points). query=metric query e.g. `"avg:system.cpu.user{*}"`
+4. `'metric_stats'` -- Percentile summary per series (p50/p95/p99/max/mean). Same metric query
    syntax as `'metrics'`, but returns one compact row per series instead of raw points.
    Use this for capacity and right-sizing questions over long windows.
-4. `'monitors'` -- List monitors with status. query=name filter (optional)
-5. `'events'` -- Platform events. query=source filter (optional)
-6. `'traces'` -- APM spans/traces. query=span query e.g. `"service:web @http.status_code:500"`
-7. `'hosts'` -- Infrastructure hosts. query=host filter (optional)
-8. `'incidents'` -- Datadog incidents. Lists active/recent incidents (requires Incident Management; may 403 if not enabled).
+5. `'monitors'` -- List monitors with status. query=name filter (optional)
+6. `'events'` -- Platform events. query=source filter (optional)
+7. `'traces'` -- APM spans/traces. query=span query e.g. `"service:web @http.status_code:500"`
+8. `'hosts'` -- Infrastructure hosts. query=host filter (optional)
+9. `'incidents'` -- Datadog incidents. Lists active/recent incidents (requires Incident Management; may 403 if not enabled).
+
+### Multiple Organizations
+
+Several Datadog orgs may be connected. They hold separate data: a service present in more
+than one has different logs, metrics and hosts in each.
+
+`resource_type='accounts'` returns the connected orgs with their labels, sites and org names.
+Pass `account=<label>` on any other resource type to query one; omitting it uses the primary.
+Every response carries an `account` field naming the org that answered.
+
+Labels default to each org's own Datadog name and can be overridden, so assume no particular
+naming scheme or count. Match the labels from `accounts` against the alert's own context (its
+environment, region, service or tenant tags). This matters because alerts from every org can
+arrive through one pipeline, and querying the wrong one does not error -- it returns that
+org's healthy data, which reads as "the service is fine" and derails the investigation. If no
+label clearly matches, query the primary and say so rather than guessing.
 
 ### The `interval` Parameter
 
@@ -106,8 +124,10 @@ limits drive throttling and OOM-kills. Say which field any number refers to.
 These are two different questions and must not be conflated:
 - **Reconciliation** -- "does our view match the team's?" Read the org's own monitor
   definitions with `resource_type='monitors'` to get their real `query` strings and
-  `options.thresholds`, then reproduce that formula exactly. This tells you which
-  workloads run hot. It is *not* the basis of any recommended number.
+  `options.thresholds`. Query each metric expression on its own. A monitor formula
+  (`a + b`, `avg:cpu{*} / avg:mem{*}`, comma-separated queries) is not itself a
+  metrics query. This tells you which workloads run hot. It is *not* the basis of
+  any recommended number.
 - **Sizing** -- "what should this value be?" Use `resource_type='metric_stats'` for the
   usage distribution over the window. Never derive a sizing number from a monitor threshold.
 
@@ -130,6 +150,12 @@ These are two different questions and must not be conflated:
 
 ## RCA Investigation Workflow
 
+**Step 0 -- Confirm which organization to investigate:**
+`query_datadog(resource_type='accounts')`
+
+With one connected, continue without `account`. With several, match the alert to a label and
+pass `account=<label>` on every subsequent step.
+
 **Step 1 -- Search logs for errors around the alert time:**
 `query_datadog(resource_type='logs', query='service:affected-service status:error', time_from='-1h')`
 
@@ -151,7 +177,9 @@ These are two different questions and must not be conflated:
 ## Important Rules
 
 - Datadog is a REMOTE service. Use ONLY the `query_datadog` API tool.
-- The `resource_type` parameter is required and must be one of: logs, metrics, metric_stats, monitors, events, traces, hosts, incidents.
+- The `resource_type` parameter is required and must be one of: accounts, logs, metrics, metric_stats, monitors, events, traces, hosts, incidents.
+- With several organizations connected, name the one you queried in any finding. A number from
+  the wrong organization looks identical to a correct one.
 - Time parameters accept relative strings (`'-1h'`, `'-24h'`, `'-7d'`) or ISO 8601 timestamps.
 - The `incidents` resource type requires Datadog Incident Management to be enabled; may return 403 if not.
 - Results are truncated at the output size limit. Use more specific queries to narrow results.
@@ -160,3 +188,6 @@ These are two different questions and must not be conflated:
 - Group with `by {tag}` rather than issuing one query per workload -- a single grouped query
   returns every deployment at once. A 30-day multi-group query is close to the request timeout,
   so query one environment at a time.
+- `metrics` and `metric_stats` take one expression, such as `avg:system.cpu.user{env:prod,service:api}`.
+  A comma inside `{}` is a tag filter. Commas outside `{}` are separate expressions and are
+  queried one at a time. Do not send a formula (`+`, `-`, `*`, `/` between metrics).

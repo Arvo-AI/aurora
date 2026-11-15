@@ -20,7 +20,7 @@ Deploy Aurora on any Kubernetes cluster using Helm.
 - **GCP GKE / Azure AKS:** Create a cluster with default settings
 
 :::note Third-party images
-Aurora deploys several third-party images from public registries. Your nodes must be able to pull: `postgres:15-alpine`, `redis:7-alpine`, `hashicorp/vault:1.15`, `cr.weaviate.io/semitechnologies/weaviate:1.27.6`, `searxng/searxng:*`, `memgraph/memgraph-mage:3.8.1`, `cr.weaviate.io/semitechnologies/transformers-inference:*`. Optional components (e.g. `services.minio.enabled: true`) may pull additional images. For air-gapped clusters, mirror these to a private registry and review enabled services in your `values.yaml`.
+Aurora deploys several third-party images from public registries. Your nodes must be able to pull: `postgres:15-alpine`, `redis:7-alpine`, `hashicorp/vault:1.15`, `searxng/searxng:*`, `memgraph/memgraph-mage:3.8.1`. With `services.minio.enabled: true` you also need `pgsty/silo` and `amazon/aws-cli` (bucket-creation hook). For a private mirror, set `image.images.<name>.registry` on the images you moved (`postgres`, `redis`, `vault`, `searxng`, `memgraph`, `minio`, `minioInit`). Aurora's own images use `image.registry`, or `image.images.server` / `image.images.frontend` when those two live in different registries.
 :::
 
 ### Required tools
@@ -41,7 +41,7 @@ Aurora stores files in S3-compatible object storage. Have your bucket details re
 | AWS S3 | `https://s3.amazonaws.com` | [EKS guide](./eks-setup) covers bucket creation |
 | GCS (S3 interop) | `https://storage.googleapis.com` | [Create HMAC keys](https://cloud.google.com/storage/docs/authentication/hmackeys) |
 | Cloudflare R2 | `https://<ACCOUNT_ID>.r2.cloudflarestorage.com` | Region: `auto` |
-| MinIO | `http://minio:9000` | Self-hosted |
+| MinIO | `http://minio:9000` | Self-hosted; see the [storage guide](../configuration/storage#minio) — upstream images were pulled from public registries in Sept 2026 |
 
 ### LLM provider
 
@@ -134,7 +134,7 @@ The script prompts for: container registry, storage bucket, LLM provider/key, an
 
 **After deployment**, open the frontend URL. The first user to register becomes the org admin.
 
-You're done. Skip to [Post-Deploy: DNS & TLS](#dns--tls) if you need to configure a real domain or HTTPS.
+You're done. Skip to [Post-Deploy: DNS](#dns) if you need to configure a real domain or HTTPS.
 
 ---
 
@@ -176,8 +176,15 @@ Set at minimum:
 
 ```yaml
 image:
-  registry: "ghcr.io/arvo-ai"   # prebuilt public images (no auth needed)
-  tag: "latest"                  # or "edge" for latest main, or "sha-<7char>"
+  registry: "ghcr.io/arvo-ai"   # chart default. Override for a private registry. Not applied to postgres, redis, …
+  tag: ""                        # empty = chart appVersion; or "edge", or "sha-<7char>"
+  # images:
+  #   frontend:
+  #     registry: "registry.example.com/apps"   # this image only
+  #   postgres:
+  #     registry: "mirror.example.com"          # library images stay public until set
+  # pullSecrets:
+  #   - name: regcred
 
 config:
   NEXT_PUBLIC_BACKEND_URL: "https://api.yourdomain.com"
@@ -426,11 +433,11 @@ Regardless of controller, ensure these are configured:
 
 | Setting | Value | Why |
 |---------|-------|-----|
-| Read/send timeout | `3600s` | RCA analysis can run 30+ minutes |
+| Read/send timeout | at least `INVESTIGATION_TIMEOUT_SECONDS` (chart default `7200s`) | The chart sets the nginx annotations only when `className` is `nginx` and nginx defaults are enabled. Other controllers must set this themselves. |
 | HTTP version | `1.1` | Required for WebSocket upgrade |
 | Max body size | `50m` | File uploads |
 
-When `className` is `nginx`, these are auto-applied as annotations by the chart.
+When `className` is `nginx` and `ingress.nginx.enabled` is not `false`, these are auto-applied as annotations by the chart. With nginx defaults turned off, set the timeouts on the controller yourself.
 
 ### MCP Ingress {#mcp-ingress}
 
@@ -452,17 +459,34 @@ For local dev on OrbStack, Docker Desktop, or Rancher Desktop:
 ./deploy/k8s-deploy.sh --local
 ```
 
-This builds images locally (no push), enables built-in MinIO for S3 storage, and uses nip.io URLs.
+This builds images locally (no push), enables built-in S3-compatible storage for local dev, and uses nip.io URLs. The storage image is `pgsty/silo`, a maintained MinIO fork — see the [storage guide](../configuration/storage#minio) for why.
 
 ## Upgrading
 
-```bash
-# Image-only update (reuse all existing config):
-helm upgrade aurora-oss ./deploy/helm/aurora \
-  --namespace aurora-oss --reuse-values \
-  --set image.tag=sha-<7char>
+Aurora images track the chart version, so upgrading is usually just bumping `--version` — no `image.tag` to juggle. Pick the flow that matches how you installed.
 
-# Full config update:
+```bash
+# Version upgrade (recommended). The chart pulls the matching images and
+# rolls the pods automatically. Reuses your existing config/secrets.
+helm repo update
+helm upgrade aurora-oss aurora/aurora-oss \
+  --namespace aurora-oss --version <X.Y.Z> --reuse-values
+```
+
+```bash
+# Reproducible upgrade, pinned by immutable digest. Each release attaches a
+# values.images-<X.Y.Z>.yaml (download from the GitHub Release) that pins the
+# exact image digests and does not set image.registry. With --reuse-values it
+# merges with the registry already in the release. A fresh install that passes
+# only this file uses the chart default, ghcr.io/arvo-ai. Pass your values
+# file first to keep a private registry.
+helm upgrade aurora-oss aurora/aurora-oss \
+  --namespace aurora-oss --version <X.Y.Z> --reuse-values \
+  -f values.images-<X.Y.Z>.yaml
+```
+
+```bash
+# Config change (edited values.generated.yaml):
 helm upgrade aurora-oss ./deploy/helm/aurora \
   --namespace aurora-oss --reset-values \
   -f deploy/helm/aurora/values.generated.yaml
@@ -471,12 +495,34 @@ helm upgrade aurora-oss ./deploy/helm/aurora \
 helm rollback aurora-oss -n aurora-oss
 ```
 
+Then confirm the rollout landed on the new images:
+
+```bash
+kubectl -n aurora-oss rollout status deploy -l app.kubernetes.io/part-of=aurora
+kubectl -n aurora-oss get deploy \
+  -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.template.spec.containers[0].image}{"\n"}{end}'
+```
+
+:::note Coming from an older `image.tag: "latest"` install?
+`latest` is mutable, so `helm upgrade` re-renders the same string and never rolls the pods. `--reuse-values` also keeps the persisted `image.tag: "latest"`, so clear it explicitly:
+
+```bash
+helm upgrade aurora-oss aurora/aurora-oss \
+  --namespace aurora-oss --version <X.Y.Z> --reuse-values \
+  --set-string image.tag=
+```
+
+Stock Aurora images should then read `:<X.Y.Z>` (or `@sha256:…` if digest-pinned). An `image.images.frontend` entry with its own tag or repository keeps that image; so does a legacy `frontendImage` repository.
+:::
+
 ## Building Custom Images
 
 If you need images in a private registry instead of GHCR:
 
+`make deploy-build` pushes the server image to `image.images.server.registry` (or `image.registry`) and the frontend image to `image.images.frontend.registry` when that image is still `aurora-frontend`. A frontend `repository` other than `aurora-frontend` is left as configured. For the stock names it writes the new tag to `image.tag` and removes `image.images.server.tag`, `image.images.frontend.tag`, and a legacy `frontendImage.tag`, so a digest overlay and `--set-string image.tag=` still apply. A renamed server repository gets `image.images.server.tag`, because that image does not follow `image.tag`.
+
 ```bash
-# Automated (reads registry from values.generated.yaml, builds multi-arch, pushes):
+# Automated (reads registries from values.generated.yaml, builds multi-arch, pushes):
 make deploy-build
 
 # Manual:
@@ -508,29 +554,73 @@ autoscaling:
   server:
     enabled: true
     minReplicas: 2
-    maxReplicas: 6
+    maxReplicas: 3
     targetCPU: 70
     targetMemory: 80
   celeryWorker:
     enabled: true
     minReplicas: 2
-    maxReplicas: 6
+    maxReplicas: 3
     targetCPU: 70
 ```
 
 When enabled, `replicaCounts.*` values are ignored -- HPA manages replicas.
+Size the Postgres connection budget below for `maxReplicas` before enabling it;
+`helm` refuses to render otherwise.
 
-### Per-pod concurrency
+### Per-pod concurrency and the Postgres connection budget
 
 ```yaml
 config:
-  GUNICORN_WORKERS: "4"    # 1 per vCPU
-  GUNICORN_THREADS: "4"    # threads per worker
-  DB_POOL_MAX: "20"        # >= workers x threads
-  CELERY_CONCURRENCY: "4"  # parallel tasks per pod
+  GUNICORN_WORKERS: "2"             # processes per API server pod
+  GUNICORN_THREADS: "32"            # request threads per process
+  DB_POOL_MAX: "20"                 # connections per Python process (server, worker, chatbot, beat)
+  DB_POOL_WAIT_TIMEOUT: "5"         # seconds a request waits for a pooled connection
+  DB_CONNECT_TIMEOUT: "10"          # seconds before an unreachable Postgres fails the connect
+  CELERY_CONCURRENCY: "4"           # parallel tasks (processes) per worker pod
+  SSE_MAX_STREAMS_PER_PROCESS: "8"  # open Incidents tabs per server process
+services:
+  postgres:
+    maxConnections: 300             # in-cluster Postgres only; the image default is 100
 ```
 
-Ensure PostgreSQL `max_connections` can handle `pods x DB_POOL_MAX`.
+Every Python process opens its own pool, so the worst case the configured pods
+can open is:
+
+```
+  server pods   x GUNICORN_WORKERS   x (DB_POOL_MAX + 15)   # +15 for the RBAC engine
++ worker pods   x CELERY_CONCURRENCY x DB_POOL_MAX
++ chatbot pods  x DB_POOL_MAX
++ celery-beat   x DB_POOL_MAX
++ mcp           x 10
+```
+
+With the defaults above one replica of each service is 200 connections, two
+server plus two worker replicas is 350, and the HPA's `maxReplicas` 3 + 3 is
+500. `helm` refuses to render when the worst case for your replica counts (or
+`maxReplicas`) exceeds `services.postgres.maxConnections`: raise it first, and
+size `resources.postgres.limits.memory` with it (about 10Mi per connection on
+top of `shared_buffers`). The check covers the in-cluster Postgres only; with
+an external one set `max_connections` there. Changing `maxConnections` restarts
+the in-cluster Postgres pod once.
+
+Each open Incidents tab (the list and every incident page) holds one server
+thread for its Server-Sent Events stream. `SSE_MAX_STREAMS_PER_PROCESS`
+(default 8, never more than `GUNICORN_THREADS - 2`) caps them per process; a
+tab beyond the cap is told to reconnect in 15s, and streams rotate every ~5
+minutes so it gets a slot.
+
+### API server probes
+
+Liveness is a TCP check on port 5080 (`server.probes.liveness.type: tcp`), so
+a pod whose threads are all busy is not restarted: readiness
+(`/health/readiness`, 10s timeout, 3 failures) takes it out of the Service
+until it drains, and gunicorn's `--timeout` replaces a worker whose main loop
+hangs. Set `type: http` to restart a pod that cannot answer
+`GET /health/liveness` for `failureThreshold x periodSeconds` (120s by
+default). `/health/readiness` checks Postgres and Redis with short bounded
+waits and reports a busy connection pool as `degraded` (HTTP 200) rather than
+taking the pod out of the Service.
 
 ## Using Pre-Existing Kubernetes Secrets
 
@@ -632,7 +722,7 @@ For production, use [KMS auto-unseal](./vault-kms-setup).
 kubectl get events -n aurora-oss --sort-by='.lastTimestamp'
 ```
 
-GHCR prebuilt images are public (no auth needed). If using a private registry, configure `image.pullSecrets` in values.
+GHCR prebuilt images are public (no auth needed). For a private registry, set `image.pullSecrets`. A frontend or mirrored dependency in a second registry can set `image.images.<name>.pullSecrets` instead; that list replaces the global one for that image only. An empty list drops the chart's pull secret for that image. Kubernetes can still add secrets from the pod's ServiceAccount.
 
 ### EKS: nip.io URLs not working
 

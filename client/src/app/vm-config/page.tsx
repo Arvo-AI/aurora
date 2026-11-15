@@ -112,6 +112,12 @@ export default function VMConfig() {
   const [isManualOpen, setIsManualOpen] = useState(false);
   const hasInitialized = useRef(false);
   const cacheLoaded = useRef(false);
+  // Bumped after a save or check so an older load cannot paint over Ready
+  const loadGeneration = useRef(0);
+  const manualVmsRef = useRef<VM[]>([]);
+  // Closures in reload and the connection check outlive the render that started them
+  const autoVmsRef = useRef<VM[]>([]);
+  const sshKeysRef = useRef<ManagedKey[]>([]);
 
   const seedManualDrafts = (manualList: VM[]) => {
     const drafts: Record<string, ManualVMDraft> = {};
@@ -180,6 +186,7 @@ export default function VMConfig() {
       if (!res.ok) throw new Error("Failed to load SSH keys");
       const data = await res.json();
       const loaded = data.keys || [];
+      sshKeysRef.current = loaded;
       setSshKeys(loaded);
       return loaded as ManagedKey[];
     } catch (err) {
@@ -253,7 +260,7 @@ export default function VMConfig() {
       const data = await res.json();
       if (!res.ok) {
         console.error("Failed to load manual VMs:", data.error || res.status);
-        return [];
+        return null;
       }
       const manualList: VM[] = (data.vms || []).map((vm: any) => ({
         id: `manual-${vm.id}`,
@@ -265,20 +272,63 @@ export default function VMConfig() {
         sshJumpCommand: vm.sshJumpCommand,
         sshKeyId: vm.sshKeyId,
         sshKeyConfigured: vm.connectionVerified ?? false,
+        connectionVerified: vm.connectionVerified ?? false,
         sshUsername: vm.sshUsername,
         source: "manual",
         status: "Manual",
       }));
-      // Seed drafts for edits
-      seedManualDrafts(manualList);
       return manualList;
     } catch (err) {
       console.error("Error fetching manual VMs:", err);
-      return [];
+      return null;
     }
   };
 
+  const publishManualList = (manualList: VM[]) => {
+    seedManualDrafts(manualList);
+    syncVms(autoVmsRef.current, manualList);
+    saveCache(autoVmsRef.current, manualList, sshKeysRef.current);
+    window.dispatchEvent(new CustomEvent("providerStateChanged"));
+  };
+
+  const reloadManualList = async (failure: { title: string; description: string }) => {
+    let generation = ++loadGeneration.current;
+    // One retry: a verified check can invalidate the first GET without publishing this save
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const manualList = await fetchManualVms();
+      if (generation !== loadGeneration.current) {
+        // The list did not land. Do not tell the caller this refresh succeeded.
+        if (manualList === null || attempt === 1) {
+          toast({ ...failure, variant: "destructive" });
+          return false;
+        }
+        generation = loadGeneration.current;
+        continue;
+      }
+      // [] is a real empty list; null is a failed reload
+      if (manualList === null) {
+        toast({ ...failure, variant: "destructive" });
+        return false;
+      }
+      publishManualList(manualList);
+      return true;
+    }
+    return false;
+  };
+
+  const setAutoCredential = (vmId: string, configured: boolean) => {
+    const apply = (item: VM): VM =>
+      item.id === vmId ? { ...item, sshKeyConfigured: configured } : item;
+    const nextAuto = autoVmsRef.current.map(apply);
+    autoVmsRef.current = nextAuto;
+    setAutoVms(nextAuto);
+    setVms((prev) => prev.map(apply));
+    saveCache(nextAuto, manualVmsRef.current, sshKeysRef.current);
+  };
+
   const syncVms = (autoList: VM[], manualList: VM[]) => {
+    manualVmsRef.current = manualList;
+    autoVmsRef.current = autoList;
     setAutoVms(autoList);
     setManualVms(manualList);
     // Keep manual first so they're easy to spot
@@ -286,6 +336,7 @@ export default function VMConfig() {
   };
 
   const init = async () => {
+    const generation = loadGeneration.current;
     const shouldShowSpinner =
       autoVms.length === 0 && manualVms.length === 0 && !cacheLoaded.current;
     if (shouldShowSpinner) {
@@ -297,22 +348,31 @@ export default function VMConfig() {
         fetchManualVms(),
         refreshKeys(),
       ]);
+      // A check or save already published the manual list. Keep that copy.
+      const stale = generation !== loadGeneration.current;
+      const autoLoaded = autoRes.status === "fulfilled" ? autoRes.value : null;
+      // null means the GET failed; [] is a real empty list
+      const manualLoaded =
+        manualRes.status === "fulfilled" ? manualRes.value : null;
+      const manualList = stale
+        ? manualVmsRef.current
+        : (manualLoaded ?? manualVmsRef.current);
+      const keysList = keysRes.status === "fulfilled" ? keysRes.value : sshKeysRef.current;
+      // Drafts are seeded only for a load we are actually applying
+      if (!stale && manualLoaded) seedManualDrafts(manualLoaded);
+      // init runs once. Skipping the auto list leaves it stale for the session.
+      if (autoLoaded !== null) {
+        syncVms(autoLoaded, manualList);
+      } else if (!stale) {
+        syncVms([], manualList);
+      }
 
-      const autoList = autoRes.status === "fulfilled" ? autoRes.value : [];
-      const manualList =
-        manualRes.status === "fulfilled" ? manualRes.value : [];
-      const keysList = keysRes.status === "fulfilled" ? keysRes.value : sshKeys;
-      syncVms(autoList, manualList);
-
-      const canCache =
-        autoRes.status === "fulfilled" &&
-        manualRes.status === "fulfilled" &&
-        keysRes.status === "fulfilled";
       if (keysRes.status === "rejected") {
         console.error("Failed to refresh keys:", keysRes.reason);
       }
-      if (canCache) {
-        saveCache(autoList, manualList, keysList || []);
+      const manualForCache = stale ? manualVmsRef.current : manualLoaded;
+      if (autoLoaded !== null && manualForCache !== null && keysRes.status === "fulfilled") {
+        saveCache(autoLoaded, manualForCache, keysList || []);
       }
     } catch (err) {
       console.error("Error initializing VM config:", err);
@@ -332,6 +392,9 @@ export default function VMConfig() {
     const cached = loadCache();
     if (cached) {
       cacheLoaded.current = true;
+      manualVmsRef.current = cached.manualVms || [];
+      autoVmsRef.current = cached.autoVms || [];
+      sshKeysRef.current = cached.sshKeys || [];
       setAutoVms(cached.autoVms || []);
       setManualVms(cached.manualVms || []);
       setVms([...(cached.manualVms || []), ...(cached.autoVms || [])]);
@@ -445,11 +508,9 @@ export default function VMConfig() {
         throw new Error(errorData.error || "Failed to save credentials");
       }
 
-      setVms((prev) =>
-        prev.map((item) =>
-          item.id === vmId ? { ...item, sshKeyConfigured: true } : item,
-        ),
-      );
+      // Drop a load that started before this save so it cannot clear Ready
+      loadGeneration.current += 1;
+      setAutoCredential(vmId, true);
 
       setSshUsernames((names) => {
         const next = { ...names };
@@ -466,6 +527,7 @@ export default function VMConfig() {
         next.delete(vmId);
         return next;
       });
+      window.dispatchEvent(new CustomEvent("providerStateChanged"));
 
       toast({
         title: "SSH Access Configured",
@@ -508,12 +570,11 @@ export default function VMConfig() {
         throw new Error(errorData.error || "Failed to delete credentials");
       }
 
-      setVms((prev) =>
-        prev.map((item) =>
-          item.id === vmId ? { ...item, sshKeyConfigured: false } : item,
-        ),
-      );
+      // Drop a load that started before this delete so it cannot restore Ready
+      loadGeneration.current += 1;
+      setAutoCredential(vmId, false);
       setExpandedVMs((prev) => new Set(prev).add(vmId));
+      window.dispatchEvent(new CustomEvent("providerStateChanged"));
 
       toast({
         title: "Credentials Removed",
@@ -571,8 +632,11 @@ export default function VMConfig() {
         sshKeyId: "",
         sshUsername: "",
       });
-      const manualList = await fetchManualVms();
-      syncVms(autoVms, manualList);
+      const refreshed = await reloadManualList({
+        title: "Manual VM saved",
+        description: "Saved, but the list could not be refreshed.",
+      });
+      if (!refreshed) return;
       toast({
         title: "Manual VM saved",
         description: `${data.name || "VM"} saved successfully.`,
@@ -613,8 +677,11 @@ export default function VMConfig() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to update manual VM");
-      const manualList = await fetchManualVms();
-      syncVms(autoVms, manualList);
+      const refreshed = await reloadManualList({
+        title: "Manual VM updated",
+        description: "Saved, but the list could not be refreshed.",
+      });
+      if (!refreshed) return;
       toast({
         title: "Manual VM updated",
         description: `${draft.name} saved.`,
@@ -642,8 +709,11 @@ export default function VMConfig() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to delete manual VM");
-      const manualList = await fetchManualVms();
-      syncVms(autoVms, manualList);
+      const refreshed = await reloadManualList({
+        title: "Manual VM deleted",
+        description: "Deleted, but the list could not be refreshed.",
+      });
+      if (!refreshed) return;
       setExpandedVMs((prev) => {
         const next = new Set(prev);
         next.delete(vm.id);
@@ -707,6 +777,32 @@ export default function VMConfig() {
       const data = await res.json();
       if (!res.ok || data.success === false)
         throw new Error(data.error || "SSH connection failed");
+      // Only the saved target was checked — a one-off user or key stays Not configured
+      if (data.connectionVerified) {
+        loadGeneration.current += 1;
+        const applyReady = (item: VM): VM =>
+          item.id === vm.id
+            ? {
+                ...item,
+                sshKeyConfigured: true,
+                connectionVerified: true,
+                // The check stored this user when the VM had none.
+                sshUsername: item.sshUsername || username,
+              }
+            : item;
+        const nextManual = manualVmsRef.current.map(applyReady);
+        manualVmsRef.current = nextManual;
+        setManualVms(nextManual);
+        setVms((prev) => prev.map(applyReady));
+        setManualDrafts((prev) => {
+          const draft = prev[vm.id];
+          // Leave a username the user already typed in the form.
+          if (!draft || draft.sshUsername) return prev;
+          return { ...prev, [vm.id]: { ...draft, sshUsername: username } };
+        });
+        saveCache(autoVmsRef.current, nextManual, sshKeysRef.current);
+      }
+      window.dispatchEvent(new CustomEvent("providerStateChanged"));
       toast({
         title: "Connection successful",
         description: data.connectedAs

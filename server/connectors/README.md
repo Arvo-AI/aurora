@@ -18,17 +18,25 @@ Backend configuration guides for Aurora connectors.
 |-----------|-----------|-------|
 | **GitHub** | OAuth App | [Setup](./github_connector/README.md) |
 | **Slack** | OAuth 2.0 | [Setup](./slack_connector/README.md) |
+| **Microsoft Teams** | Entra OAuth + Bot Framework | [Setup](./teams_connector/README.md) |
 
 ## Monitoring & Observability
 
 | Connector | Auth Type | Guide |
 |-----------|-----------|-------|
-| **PagerDuty** | OAuth / API Token | [Setup](./pagerduty_connector/README.md) |
+| **PagerDuty** | OAuth / API Token (user-scoped for note writing) | [Setup](./pagerduty_connector/README.md) |
 | **Grafana** | Webhook (no key needed) | [Setup](./grafana_connector/README.md) |
 | **Datadog** | API Key + App Key | [Setup](./datadog_connector/README.md) |
 | **New Relic** | User API Key (NerdGraph) | [Setup](./newrelic_connector/README.md) |
 | **Netdata** | API Token | [Setup](./netdata_connector/README.md) |
 | **Splunk** | API Token (`search` capability) | [Setup](./splunk_connector/README.md) |
+| **Elastic Cloud** | Elasticsearch API key (read-only) | [Setup](./elastic_connector/README.md) |
+
+## Messaging
+
+| Connector | Auth Type | Guide |
+|-----------|-----------|-------|
+| **RabbitMQ** | Management API user (`monitoring` tag) | [Setup](./rabbitmq_connector/README.md) |
 
 ## CI/CD
 

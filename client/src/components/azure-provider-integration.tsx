@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { useToast } from '@/hooks/use-toast';
 import { Loader2, RefreshCw, LogOut } from 'lucide-react';
 import { ProjectListItem } from '@/components/cloud-provider/ui/ProjectListItem';
-import { fetchProjects, saveProjects } from '@/components/cloud-provider/projects/projectUtils';
+import { fetchProjects } from '@/components/cloud-provider/projects/projectUtils';
 import { useSetAsRoot } from '@/components/cloud-provider/projects/useSetAsRoot';
 import { Project } from '@/components/cloud-provider/types';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -19,7 +19,6 @@ export default function AzureProviderIntegration({ onDisconnect }: AzureProvider
   const [projects, setProjects] = useState<Project[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isDisconnecting, setIsDisconnecting] = useState(false);
-  const [togglingProjectId, setTogglingProjectId] = useState<string | null>(null);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -57,34 +56,6 @@ export default function AzureProviderIntegration({ onDisconnect }: AzureProvider
       });
     } finally {
       setIsLoading(false);
-    }
-  }
-
-  async function handleToggle(projectId: string): Promise<void> {
-    setTogglingProjectId(projectId);
-    try {
-      const updatedProjects = projects.map(p =>
-        p.projectId === projectId ? { ...p, enabled: !p.enabled } : p
-      );
-      setProjects(updatedProjects);
-
-      await saveProjects('azure', updatedProjects);
-
-      const toggledProject = updatedProjects.find(p => p.projectId === projectId);
-      toast({
-        title: "Success",
-        description: `Subscription ${toggledProject?.enabled ? 'enabled' : 'disabled'}`,
-      });
-    } catch (error: any) {
-      console.error('Error toggling subscription:', error);
-      loadProjects(true);
-      toast({
-        title: "Error",
-        description: error.message || "Failed to update subscription",
-        variant: "destructive",
-      });
-    } finally {
-      setTogglingProjectId(null);
     }
   }
 
@@ -147,7 +118,8 @@ export default function AzureProviderIntegration({ onDisconnect }: AzureProvider
         <div>
           <h3 className="text-lg font-semibold">Azure Subscriptions</h3>
           <p className="text-sm text-muted-foreground">
-            Manage which Azure subscriptions Aurora can access
+            Subscriptions Aurora can access. Scope is set by the roles the setup
+            script assigned in Azure — re-run it with a management group id to narrow it.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -194,10 +166,8 @@ export default function AzureProviderIntegration({ onDisconnect }: AzureProvider
                 key={project.projectId}
                 project={project}
                 providerId="azure"
-                isLoading={togglingProjectId === project.projectId}
-                onToggle={handleToggle}
                 onSetAsRoot={handleSetAsRoot}
-                showToggle={true}
+                showToggle={false}
               />
             ))}
           </div>

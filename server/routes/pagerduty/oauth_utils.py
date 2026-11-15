@@ -7,13 +7,17 @@ import urllib.parse
 from time import time
 from typing import Dict, Optional, Tuple
 from utils.flags.feature_flags import is_pagerduty_oauth_enabled
+from utils.auth.token_management import store_tokens_in_db
 
 logger = logging.getLogger(__name__)
 
 PAGERDUTY_AUTH_URL = "https://app.pagerduty.com/oauth/authorize"
 PAGERDUTY_TOKEN_URL = "https://app.pagerduty.com/oauth/token"
-# Aurora reads incidents and services; it does not create, acknowledge, or resolve incidents.
-DEFAULT_SCOPES = "openid users.read incidents.read services.read"
+# Aurora reads incidents and services and writes incident notes (RCA results);
+# it does not create, acknowledge, or resolve incidents. incidents.write must be
+# registered on the PagerDuty OAuth app: an unregistered scope is silently
+# dropped and PagerDuty issues an openid-only token.
+DEFAULT_SCOPES = "openid users.read incidents.read incidents.write services.read"
 
 # Only load OAuth credentials if feature flag is enabled
 if is_pagerduty_oauth_enabled():
@@ -101,9 +105,39 @@ def refresh_token_if_needed(token_data: Dict) -> Tuple[bool, Optional[Dict]]:
     if not new_tokens:
         return False, None
     
-    return True, {
+    refreshed = {
         "access_token": new_tokens["access_token"],
         "expires_at": int(time()) + new_tokens.get("expires_in", 3600),
         "refresh_token": new_tokens.get("refresh_token", refresh_token),
     }
+    # PagerDuty echoes the granted scopes on refresh; keep the stored copy truthful
+    if new_tokens.get("scope"):
+        refreshed["granted_scopes"] = new_tokens["scope"]
+    return True, refreshed
 
+
+def refresh_and_store_if_needed(user_id: str, token_data: Dict) -> Tuple[bool, Dict]:
+    """refresh_token_if_needed, persisting a refreshed token before it is used.
+
+    Returns (token still valid, token data with any refreshed fields merged).
+    PagerDuty rotates the refresh token, so the new one is stored before use,
+    with one retry. If both writes fail the in-memory token still serves this
+    request, but the stored refresh token is stale and the next refresh will
+    fail, so the failure is logged as an error rather than raised.
+    """
+    success, refreshed = refresh_token_if_needed(token_data)
+    if not success:
+        return False, token_data
+    if refreshed:
+        token_data = {**token_data, **refreshed}
+        for attempt in (1, 2):
+            try:
+                store_tokens_in_db(user_id, token_data, "pagerduty")
+                break
+            except Exception:
+                if attempt == 2:
+                    logger.exception(
+                        "[PAGERDUTY] Failed to persist refreshed OAuth token; the stored refresh token "
+                        "is stale and this connection will need to be reconnected"
+                    )
+    return True, token_data

@@ -2,13 +2,11 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, List, Optional
+from typing import Any, Optional, Tuple
 
 from .background import build_background_mode_segment
-from .context_fetchers import (
-    build_knowledge_base_memory_segment,
-    build_manual_vm_access_segment,
-)
+from .context_fetchers import build_manual_vm_access_segment
+from services.memory.index_builder import build_memory_index
 from .provider_rules import (
     build_ephemeral_rules,
     build_failure_recovery_segment,
@@ -63,7 +61,7 @@ def build_system_invariant(is_background: bool = False) -> str:
     return load_core_prompt(core_dir, segments=[
         "identity",
         "security",
-        "knowledge_base",
+        "memory",
         "tool_selection",
         "ssh_access",
         "cloud_access",
@@ -127,10 +125,23 @@ def build_prompt_segments(
         except Exception as e:
             logging.warning(f"Failed to build skills index: {e}")
 
-    # Build knowledge base memory context for authenticated users
-    knowledge_base_memory = ""
-    if state and hasattr(state, 'user_id'):
-        knowledge_base_memory = build_knowledge_base_memory_segment(state.user_id)
+    # Build memory index for authenticated users (static TOC of title + description).
+    # The injector's full-content memories are appended in agent.py after this returns.
+    memory_context = ""
+    user_id = getattr(state, "user_id", None) if state else None
+    caller = ""
+    if user_id:
+        try:
+            from utils.auth.connector_access import describe_caller
+            caller = describe_caller(user_id)
+        except Exception:
+            logging.exception("Failed to describe the caller for the prompt")
+    if user_id:
+        try:
+            memory_context = build_memory_index(user_id) or ""
+        except Exception:
+            logging.exception("Failed to build memory index for prompt")
+            memory_context = ""
 
     # Build org-level command policy segment
     security_policy = ""
@@ -161,42 +172,61 @@ def build_prompt_segments(
         failure_recovery=failure_recovery,
         background_mode=background_mode,
         manual_vm_access=manual_vm_access,
-        knowledge_base_memory=knowledge_base_memory,
+        knowledge_base_memory=memory_context,
         integration_index=integration_index,
         security_policy=security_policy,
+        caller=caller,
         is_rca_background=is_background and not is_action,
     )
 
 
-def assemble_system_prompt(segments: PromptSegments) -> str:  # main prompt builder
-    parts: List[str] = []
+_POLICY_REMINDER = (
+    "REMINDER: Commands that violate the organization policy will be rejected. "
+    "Do not attempt workarounds."
+)
 
-    # Ordered optional segments
-    for segment in (
-        segments.security_policy,
-        segments.background_mode,
-        segments.knowledge_base_memory,
-        segments.ephemeral_rules,
-        segments.model_overlay,
-        segments.provider_context,
-        segments.manual_vm_access,
-        segments.integration_index,
-        segments.prerequisite_checks,
-    ):
-        if segment:
-            parts.append(segment)
 
-    parts.append(segments.system_invariant)
-    parts.append(segments.provider_constraints)
-    parts.append(segments.regional_rules)
-    if segments.long_documents_note:
-        parts.append(segments.long_documents_note)
+def assemble_system_prompt_parts(segments: PromptSegments) -> Tuple[str, str]:
+    """Split the system prompt into a static prefix and a dynamic suffix.
+
+    The prompt-cache breakpoint goes between them, so the static part must stay
+    byte-identical across sessions: no clock, no incident/org data, no unordered
+    iteration. Anything per user, per incident or time-dependent goes in dynamic.
+    """
+    static_parts = [
+        part
+        for part in (
+            segments.system_invariant,
+            segments.provider_constraints,
+            segments.regional_rules,
+        )
+        if part
+    ]
 
     is_rca_background = segments.is_rca_background
-    if segments.terraform_validation and not is_rca_background:
-        parts.append(segments.terraform_validation)
-    if segments.failure_recovery and not is_rca_background:
-        parts.append(segments.failure_recovery)
-    if segments.security_policy:
-        parts.append("REMINDER: Commands that violate the organization policy will be rejected. Do not attempt workarounds.")
-    return "\n".join(parts)
+    dynamic_parts = [
+        part
+        for part in (
+            segments.caller,
+            segments.security_policy,
+            segments.background_mode,
+            segments.knowledge_base_memory,
+            segments.ephemeral_rules,
+            segments.model_overlay,
+            segments.provider_context,
+            segments.manual_vm_access,
+            segments.integration_index,
+            segments.prerequisite_checks,
+            segments.long_documents_note,
+            segments.terraform_validation if not is_rca_background else "",
+            segments.failure_recovery if not is_rca_background else "",
+            _POLICY_REMINDER if segments.security_policy else "",
+        )
+        if part
+    ]
+    return "\n".join(static_parts), "\n".join(dynamic_parts)
+
+
+def assemble_system_prompt(segments: PromptSegments) -> str:  # main prompt builder
+    """Full system prompt as one string: static prefix, then the dynamic suffix."""
+    return "\n".join(part for part in assemble_system_prompt_parts(segments) if part)
