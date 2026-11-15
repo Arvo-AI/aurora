@@ -8,6 +8,7 @@ Provider Selection Modes:
 - 'direct': Use direct provider APIs based on model prefix (default)
 - 'auto': Same as direct - resolve provider from model, no fallback
 - 'openrouter': Use OpenRouter for all models (explicit only)
+- 'requesty': Use Requesty for all models (explicit only)
 
 Note: OpenRouter is NOT a fallback. If direct provider is unavailable,
 the call will fail with a clear error message.
@@ -15,6 +16,7 @@ the call will fail with a clear error message.
 Environment Variables:
 - LLM_PROVIDER_MODE: Selection strategy (default: 'direct')
 - OPENROUTER_API_KEY: OpenRouter API key (only needed if mode=openrouter)
+- REQUESTY_API_KEY: Requesty API key (only needed if mode=requesty)
 - OPENAI_API_KEY: Direct OpenAI API key
 - ANTHROPIC_API_KEY: Direct Anthropic API key
 - GOOGLE_AI_API_KEY: Google AI Studio API key
@@ -28,6 +30,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 
 from .base_provider import BaseLLMProvider
 from .openrouter_provider import OpenRouterProvider
+from .requesty_provider import RequestyProvider
 from .openai_provider import OpenAIProvider
 from .anthropic_provider import AnthropicProvider
 from .google_provider import GoogleProvider
@@ -47,6 +50,7 @@ _ENV_VAR_HINTS = {
     "ollama": "OLLAMA_BASE_URL",
     "bedrock": "BEDROCK_BASE_URL or BEDROCK_REGION",
     "openrouter": "OPENROUTER_API_KEY",
+    "requesty": "REQUESTY_API_KEY",
 }
 
 
@@ -62,6 +66,8 @@ class ProviderRegistry:
         """Initialize all provider instances."""
         # OpenRouter provider (explicit mode only, not a fallback)
         self._providers["openrouter"] = OpenRouterProvider()
+        # Requesty provider (explicit mode only, not a fallback)
+        self._providers["requesty"] = RequestyProvider()
 
         # Initialize direct providers
         self._providers["openai"] = OpenAIProvider()
@@ -297,6 +303,7 @@ def get_available_providers() -> Dict[str, bool]:
 __all__ = [
     "BaseLLMProvider",
     "OpenRouterProvider",
+    "RequestyProvider",
     "OpenAIProvider",
     "AnthropicProvider",
     "GoogleProvider",
