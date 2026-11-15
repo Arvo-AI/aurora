@@ -78,6 +78,8 @@ git diff --stat main...HEAD
 # Every path must start with remediation-verifier/
 ```
 
+**Git rules — the candidate pushes.** The agent may create local commits. It must never run `git push`, `git push --force`, `gh pr create`, or any command that publishes to a remote. Every commit is reviewed on the machine before it leaves it.
+
 ## 5. Source discipline
 
 - Read `scenario.yaml`, `break.sh`, `check.sh`, `README.md` (runbook) and `app/shop.yaml` at the pinned commit.
@@ -209,6 +211,7 @@ test(verifier): add snapshot fixtures for five variants (case 7)
 |---|---|
 | `make doctor` | Report Python, PyYAML, dev tools, `kubectl`, `kind`, Docker and the lab checkout; name the supported mode. |
 | `make test` | pytest. |
+| `make selfcheck` | Clone the branch into a temp directory, install from scratch and run `make ci` there. |
 | `make lint` | `ruff check` + `ruff format --check`. |
 | `make lint-ci` | `actionlint ci/github-actions-verify.yml` (local only; not in `make ci`). |
 | `make typecheck` | `mypy verifier`. |

@@ -20,7 +20,7 @@ RUN := $(VENV_PYTHON)
 endif
 
 .DEFAULT_GOAL := help
-.PHONY: help install doctor format lint lint-ci typecheck test ci clean
+.PHONY: help install doctor format lint lint-ci typecheck test selfcheck ci clean
 
 help: ## Show the available targets.
 	@echo "remediation-verifier targets:"
@@ -53,6 +53,20 @@ typecheck: ## Type-check the verifier package.
 
 test: ## Run the test suite.
 	$(RUN) -m pytest
+
+selfcheck: ## Clone this branch into a temp directory and run every gate there.
+	@set -eu; \
+	work=$$(mktemp -d); \
+	trap 'rm -rf "$$work"' EXIT; \
+	branch=$$(git rev-parse --abbrev-ref HEAD); \
+	root=$$(git rev-parse --show-toplevel); \
+	echo "selfcheck: cloning $$branch from $$root into $$work"; \
+	git clone --quiet --branch "$$branch" "$$root" "$$work/repo"; \
+	cd "$$work/repo/remediation-verifier"; \
+	$(PYTHON) -m venv .venv; \
+	./.venv/bin/python -m pip -q install --upgrade pip; \
+	./.venv/bin/python -m pip -q install -e ".[dev]"; \
+	make ci
 
 ci: lint typecheck test ## Run every gate that needs no cluster.
 
