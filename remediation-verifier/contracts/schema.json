@@ -16,7 +16,7 @@
     },
     "source": {
       "type": "object",
-      "required": ["repo", "url", "commit", "commit_date", "fork_repo", "fork_commit", "files"],
+      "required": ["repo", "url", "commit", "commit_date", "read_on", "fork_repo", "fork_commit", "files"],
       "additionalProperties": false,
       "properties": {
         "repo": {
@@ -34,6 +34,10 @@
         "commit_date": {
           "type": "string",
           "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+        },
+        "read_on": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
         },
         "fork_repo": {
           "type": "string",

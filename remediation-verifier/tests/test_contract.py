@@ -17,6 +17,7 @@ import pytest
 import yaml
 
 from verifier import doctor
+from verifier.schema import SchemaValidator
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 CONTRACTS_DIR = PROJECT_DIR / "contracts"
@@ -37,102 +38,6 @@ CHECK_IDS = [
 ORACLE_HINTS = ("tier", "selector", "endpoint", "BATCH_SIZE", "OOMKilled", "kettle", "teapot")
 
 SOURCE_PATTERN = re.compile(r"^(?:scenarios|app)/.+#L\d+")
-
-
-class SchemaValidator:
-    """The subset of JSON Schema this contract uses, resolved locally.
-
-    Adding jsonschema as a dependency for one file is not worth it, so the
-    test suite checks the keywords the schema actually contains and refuses
-    the ones it does not know.
-    """
-
-    def __init__(self, root: dict[str, Any]) -> None:
-        self.root = root
-
-    def errors(self, value: Any, schema: dict[str, Any] | None = None) -> list[str]:
-        return self._validate(value, schema if schema is not None else self.root, "$")
-
-    def _resolve(self, reference: str) -> dict[str, Any]:
-        if not reference.startswith("#/"):
-            raise AssertionError(f"only local references are supported: {reference}")
-        node: Any = self.root
-        for part in reference.removeprefix("#/").split("/"):
-            node = node[part]
-        return node  # type: ignore[no-any-return]
-
-    def _validate(self, value: Any, schema: dict[str, Any], where: str) -> list[str]:
-        if "$ref" in schema:
-            return self._validate(value, self._resolve(str(schema["$ref"])), where)
-
-        if "type" in schema:
-            declared = schema["type"]
-            names = declared if isinstance(declared, list) else [declared]
-            if not any(self._is_type(value, str(name)) for name in names):
-                return [f"{where}: expected {declared}, found {type(value).__name__}"]
-
-        errors: list[str] = []
-        if "enum" in schema and value not in schema["enum"]:
-            errors.append(f"{where}: {value!r} is not one of {schema['enum']}")
-        if isinstance(value, str):
-            errors.extend(self._check_string(value, schema, where))
-        is_number = isinstance(value, int | float) and not isinstance(value, bool)
-        if is_number and "minimum" in schema and value < schema["minimum"]:
-            errors.append(f"{where}: {value} is below {schema['minimum']}")
-        if isinstance(value, dict):
-            errors.extend(self._check_object(value, schema, where))
-        if isinstance(value, list):
-            errors.extend(self._check_array(value, schema, where))
-        return errors
-
-    def _check_string(self, value: str, schema: dict[str, Any], where: str) -> list[str]:
-        errors: list[str] = []
-        if "minLength" in schema and len(value) < schema["minLength"]:
-            errors.append(f"{where}: shorter than {schema['minLength']} characters")
-        if "pattern" in schema and re.search(str(schema["pattern"]), value) is None:
-            errors.append(f"{where}: does not match {schema['pattern']}")
-        return errors
-
-    def _check_object(self, value: dict[str, Any], schema: dict[str, Any], where: str) -> list[str]:
-        errors: list[str] = []
-        properties = schema.get("properties", {})
-        for key in schema.get("required", []):
-            if key not in value:
-                errors.append(f"{where}: missing required key {key!r}")
-        if schema.get("additionalProperties") is False:
-            errors.extend(
-                f"{where}: unexpected key {key!r}" for key in value if key not in properties
-            )
-        for key, child in properties.items():
-            if key in value:
-                errors.extend(self._validate(value[key], child, f"{where}.{key}"))
-        return errors
-
-    def _check_array(self, value: list[Any], schema: dict[str, Any], where: str) -> list[str]:
-        errors: list[str] = []
-        if "minItems" in schema and len(value) < schema["minItems"]:
-            errors.append(f"{where}: fewer than {schema['minItems']} items")
-        if "items" in schema:
-            for index, item in enumerate(value):
-                errors.extend(self._validate(item, schema["items"], f"{where}[{index}]"))
-        return errors
-
-    def _is_type(self, value: Any, name: str) -> bool:
-        if name == "object":
-            return isinstance(value, dict)
-        if name == "array":
-            return isinstance(value, list)
-        if name == "string":
-            return isinstance(value, str)
-        if name == "integer":
-            return isinstance(value, int) and not isinstance(value, bool)
-        if name == "number":
-            return isinstance(value, int | float) and not isinstance(value, bool)
-        if name == "boolean":
-            return isinstance(value, bool)
-        if name == "null":
-            return value is None
-        raise AssertionError(f"schema uses a type the validator does not know: {name}")
 
 
 def read_text(path: Path) -> str:
@@ -209,6 +114,11 @@ class TestSourcePin:
         assert re.fullmatch(
             r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", contract["source"]["commit_date"]
         )
+
+    def test_the_read_date_follows_the_commit(self, contract: dict[str, Any]) -> None:
+        source = contract["source"]
+        assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", source["read_on"])
+        assert source["read_on"] >= source["commit_date"][:10]
 
     def test_the_fork_base_is_recorded_separately(self, contract: dict[str, Any]) -> None:
         source = contract["source"]
@@ -380,7 +290,7 @@ class TestDecisions:
 
     def test_the_risky_choices_are_frozen(self) -> None:
         decisions = read_text(DECISIONS_FILE)
-        for identifier in ("D2", "D5", "D11", "D12"):
+        for identifier in ("D2", "D5", "D11", "D12", "D23", "D24"):
             assert identifier in decisions, f"{identifier} is not recorded"
 
     def test_the_resolved_tool_versions_are_recorded(self) -> None:

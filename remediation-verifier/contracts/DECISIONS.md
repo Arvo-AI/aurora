@@ -26,6 +26,8 @@ This file records the choices a reader could disagree with. A value that comes f
 | D20 | Provenance rule | Every cited path and line anchor appears in `PROVENANCE.md`, and one pinned commit applies to every row | This is R4 and R7. A row without a source is not used, and a fixture that cannot be traced is deleted instead of kept. |
 | D21 | Window opens late | The runner waits for `kubectl rollout status deploy/worker` and a non-empty frontend EndpointSlice before the window starts | A stale OOMKilled pod, or an empty slice during a rollout, would report a valid fix as a failure. |
 | D22 | Baseline gates every verdict | No variant can be positive unless the baseline run confirmed both faults | A fix cannot be verified against an incident that did not reproduce in the same run. |
+| D23 | Two endpoint checks, not one | `service_has_endpoints` reads the EndpointSlice addresses and `endpoints_ready` reads `conditions.ready` on those addresses | A pod's address joins the slice before the pod passes readiness, so a selector change that points at a pod still starting passes the first check and fails the second. Read together the two checks also name the failure: no address means the selector matches nothing, an unready address means the pod is not serving yet. |
+| D24 | Code size limits | Module 300 lines soft and 400 hard, function 40 and 50, complexity 10, nesting 3, line length 100 | Six checks in one module stay readable while each one fits on a screen. `ruff` enforces the complexity at 10 (`C90`) and the line length at 100 (`E501`), so those two fail the build. Line counts and nesting are reviewed by hand because `ruff` does not measure them, and the soft limit is where a module is split before it reaches the hard one. |
 
 ## Recorded environment
 

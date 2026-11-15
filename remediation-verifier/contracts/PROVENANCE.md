@@ -2,7 +2,7 @@
 
 Every value the verifier reads comes from `aurora-lab` at one commit. This table is the human-readable half of `contracts/scenario_12.yaml`: the YAML carries the machine-readable `source` on each check and fix, and this file carries the words and the line a reviewer can go read.
 
-Pinned commit: `4edcd9dfbc48cbd9ca8ea031e429832cf72842d0` in `Arvo-AI/aurora-lab`, committed 2026-11-06T00:30:13Z.
+Pinned commit: `4edcd9dfbc48cbd9ca8ea031e429832cf72842d0` in `Arvo-AI/aurora-lab`, committed 2026-11-06T00:30:13Z, read on 2026-11-15.
 Fork base: `kpnaranj/aurora` at `12c67cffd45c6b0b8c5da1d2e160a945e2936f49`, the merge base with `Arvo-AI/aurora:main`.
 
 Any row can be checked without a local checkout:
