@@ -1,0 +1,110 @@
+{
+  "advisory": true,
+  "generated_at": "2026-11-15T21:05:00Z",
+  "metrics": {
+    "fault_detection": {
+      "checks": 6,
+      "failed": 6
+    },
+    "remediation": {
+      "execution_error": 0,
+      "inconclusive": 0,
+      "rejected": 0,
+      "runs": 0,
+      "verified": 0
+    },
+    "runs_per_variant": {
+      "baseline": 1
+    },
+    "weak_checks": {
+      "checks": 6,
+      "passed": 0
+    }
+  },
+  "mode": "SNAPSHOT",
+  "scenario": "12-two-faults-oom-and-selector",
+  "source": {
+    "commit": "4edcd9dfbc48cbd9ca8ea031e429832cf72842d0",
+    "fork_commit": "12c67cffd45c6b0b8c5da1d2e160a945e2936f49",
+    "fork_repo": "kpnaranj/aurora",
+    "repo": "Arvo-AI/aurora-lab",
+    "url": "https://github.com/Arvo-AI/aurora-lab"
+  },
+  "title": "Two faults at once, worker OOM and a frontend Service selecting no pods; the alert covers only the worker",
+  "variants": [
+    {
+      "captured_at": "2026-11-15T20:00:00Z",
+      "checks": [
+        {
+          "evidence": {
+            "fixture": "no_oomkilled_in_window"
+          },
+          "fault": "worker-oom",
+          "id": "no_oomkilled_in_window",
+          "reason": "FAIL fixture",
+          "source": "scenarios/12-two-faults-oom-and-selector/check.sh#L1",
+          "status": "FAIL"
+        },
+        {
+          "evidence": {
+            "fixture": "restart_count_not_increasing"
+          },
+          "fault": "worker-oom",
+          "id": "restart_count_not_increasing",
+          "reason": "FAIL fixture",
+          "source": "scenarios/12-two-faults-oom-and-selector/README.md#L202",
+          "status": "FAIL"
+        },
+        {
+          "evidence": {
+            "fixture": "processing_evidence"
+          },
+          "fault": "worker-oom",
+          "id": "processing_evidence",
+          "reason": "FAIL fixture",
+          "source": "app/shop.yaml#L73",
+          "status": "FAIL"
+        },
+        {
+          "evidence": {
+            "fixture": "service_has_endpoints"
+          },
+          "fault": "frontend-selector",
+          "id": "service_has_endpoints",
+          "reason": "FAIL fixture",
+          "source": "scenarios/12-two-faults-oom-and-selector/check.sh#L2",
+          "status": "FAIL"
+        },
+        {
+          "evidence": {
+            "fixture": "endpoints_ready"
+          },
+          "fault": "frontend-selector",
+          "id": "endpoints_ready",
+          "reason": "FAIL fixture",
+          "source": "scenarios/12-two-faults-oom-and-selector/check.sh#L2",
+          "status": "FAIL"
+        },
+        {
+          "evidence": {
+            "fixture": "http_expected_response"
+          },
+          "fault": "frontend-selector",
+          "id": "http_expected_response",
+          "reason": "FAIL fixture",
+          "source": "app/shop.yaml#L256-L257",
+          "status": "FAIL"
+        }
+      ],
+      "kind": "reproduction",
+      "mode": "SNAPSHOT",
+      "reason": "the baseline failed all 6 declared checks for worker-oom, frontend-selector",
+      "reproduction_status": "CONFIRMED",
+      "status": null,
+      "timing": {},
+      "unresolved": [],
+      "variant": "baseline",
+      "weak_checks": []
+    }
+  ]
+}
