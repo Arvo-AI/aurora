@@ -1,4 +1,4 @@
-# AGENTS.md — Aurora Incident-to-Remediation Verifier
+# AGENTS.md: Aurora Incident-to-Remediation Verifier
 
 > **Placement:** copy this file to `remediation-verifier/AGENTS.md` in the Aurora fork.
 > Do **not** modify the Aurora repo's root `AGENTS.md` or `CLAUDE.md`; they already exist, and R10 forbids changes outside `remediation-verifier/`.
@@ -7,10 +7,10 @@
 
 In this order:
 
-1. `SETUP_PLAN.md` — setup, cases, CI/CD, submission.
-2. `take_home_one_pager.md` — the evaluator's rules.
-3. `JUEZ v4.md` — the scoring rubric and R1–R11 disqualifiers.
-4. `GUIA PROYECTO v4.md` — the project plan.
+1. `SETUP_PLAN.md`: setup, cases, CI/CD, submission.
+2. `take_home_one_pager.md`: the evaluator's rules.
+3. `JUEZ v4.md`: the scoring rubric and R1-R11 disqualifiers.
+4. `GUIA PROYECTO v4.md`: the project plan.
 
 When the guide and the JUEZ conflict, the JUEZ wins. When the JUEZ and the one-pager conflict, the one-pager's rules win.
 
@@ -30,7 +30,7 @@ It is **not**:
 - a browser or E2E test runner;
 - a cloud/Slack/Datadog/PagerDuty integration.
 
-## 3. Hard rules — never violate
+## 3. Hard rules (never violate)
 
 | # | Rule |
 |---|---|
@@ -78,7 +78,12 @@ git diff --stat main...HEAD
 # Every path must start with remediation-verifier/
 ```
 
-**Git rules — the candidate pushes.** The agent may create local commits. It must never run `git push`, `git push --force`, `gh pr create`, or any command that publishes to a remote. Every commit is reviewed on the machine before it leaves it.
+**Git rules: the candidate owns the repository.**
+
+- The agent only creates and edits files in the working tree.
+- The agent never runs a command that writes to the repository: no `git add`, no `git commit`, no `git push`, no `git reset`, no `git stash`, no `git checkout`, no branch or tag creation, no rewrite of any kind.
+- Read-only inspection is allowed: `git status`, `git diff`, `git log`, `git show`.
+- The candidate reviews the working tree, writes every commit and performs every push. Nothing changes in the repository without them.
 
 ## 5. Source discipline
 
@@ -162,6 +167,69 @@ Missing any of these → `INCONCLUSIVE`.
 - The README declares the verdict advisory and non-blocking.
 - No competitor numbers. No unverified Aurora claims. No "roadmap" language.
 - Cite exact URLs, commits, paths and lines.
+
+### 10.1 Typography
+
+Sources: `Wikipedia:Signs of AI writing`, section 13.5 "Overuse of em dashes"
+and its Style section,
+https://en.wikipedia.org/wiki/Wikipedia:Signs_of_AI_writing. That page reports
+that spaced em dashes are one of the most reproduced LLM tells, that a July 2026
+study found only one model family using them more than professional writers, and
+that curly quotation marks are a listed style tell. `Wikipedia:Programming style`
+is the source for the layout rules in 10.3.
+
+| # | Rule | Use instead |
+|---|---|---|
+| W1 | No em dash (U+2014) or en dash (U+2013) in prose, chat or commit messages. | A colon, a comma, parentheses, or a second sentence. Use a hyphen for ranges: 2022-2026. |
+| W2 | No curly quotation marks or apostrophes (U+2018, U+2019, U+201C, U+201D). | Straight `'` and `"`. |
+| W3 | No ellipsis character (U+2026). | Three periods. |
+| W4 | No emoji, in code, docs, commits or chat. | A word. |
+| W5 | Sentence case in headings and titles. | "How the checks work", not "How The Checks Work". |
+| W6 | At most one bold run per paragraph, and only for a label. | Plain text. |
+| W7 | No horizontal rule used as decoration. | A heading. |
+
+### 10.2 Prose patterns to avoid
+
+Each row cites the section of `Wikipedia:Signs of AI writing` that documents it.
+
+| # | Pattern | Section | Write instead |
+|---|---|---|---|
+| W8 | "not just X, but Y" and "not X, but Y". | 3.3 Negative parallelisms | State Y. |
+| W9 | Three-item lists that exist for rhythm rather than content. | 3.5 Rule of three | List what actually exists. |
+| W10 | "serves as", "stands as", "represents", "acts as". | 3.2 Avoidance of basic copulatives | "is". |
+| W11 | Trailing "-ing" clauses that assign significance ("..., highlighting its importance"). | 2.3 Superficial analyses | Delete the clause, or state the fact. |
+| W12 | "delve", "leverage", "robust", "seamless", "crucial", "pivotal", "underscore", "foster". | 3.1 AI vocabulary density | The plain word. |
+
+### 10.3 Code and document layout
+
+| # | Rule |
+|---|---|
+| W13 | Python: four spaces, never tabs. `ruff format` is the authority; do not hand-align or hand-wrap. |
+| W14 | No vertical alignment of `=` or `:` across lines. The next rename breaks it. |
+| W15 | No trailing whitespace. Exactly one newline at end of file. LF line endings in every committed file. |
+| W16 | ASCII only in `.py`, `.yml`, `.yaml`, `.toml`, `Makefile` and shell. Prose may use accents; it still follows W1 to W7. |
+| W17 | Markdown: one space after the list marker, two spaces per nesting level, one marker style per list, one blank line between blocks. |
+| W18 | Indentation must be stable under `ruff format --check` and `make lint`. If a human has to guess the depth, it is wrong. |
+
+### 10.4 The check
+
+Run this before every commit. It must print nothing.
+
+```bash
+grep -rnP '\x{2014}|\x{2013}|\x{2018}|\x{2019}|\x{201C}|\x{201D}|\x{2026}' \
+  --include='*.py' --include='*.md' --include='*.yml' --include='*.yaml' \
+  --include='Makefile' .
+```
+
+The patterns are written as escapes so this file passes its own check. `grep -P`
+is GNU grep; the project runs in WSL or Linux, where it is available.
+
+### 10.5 Why these are tables and not advice
+
+Guidance written for one assistant ("write naturally", "avoid sounding like a
+machine") depends on taste, and taste does not transfer between models. A rule
+that can be grepped transfers. If a rule here cannot be checked, it does not
+belong here.
 
 ## 11. Workflow
 

@@ -1,4 +1,4 @@
-# Remediation verifier — local workflows.
+# Remediation verifier: local workflows.
 #
 # Every target works with or without an activated virtualenv: if `.venv`
 # exists it is used, otherwise the interpreter from PATH. That is what lets
