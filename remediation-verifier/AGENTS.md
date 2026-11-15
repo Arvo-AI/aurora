@@ -78,12 +78,12 @@ git diff --stat main...HEAD
 # Every path must start with remediation-verifier/
 ```
 
-**Git rules: the candidate owns the repository.**
+**Git rules: local commits only.**
 
-- The agent only creates and edits files in the working tree.
-- The agent never runs a command that writes to the repository: no `git add`, no `git commit`, no `git push`, no `git reset`, no `git stash`, no `git checkout`, no branch or tag creation, no rewrite of any kind.
-- Read-only inspection is allowed: `git status`, `git diff`, `git log`, `git show`.
-- The candidate reviews the working tree, writes every commit and performs every push. Nothing changes in the repository without them.
+- The agent may create local commits.
+- The agent never pushes, never opens a pull request and never touches a remote: no `git push`, no `gh pr create`, no remote changes of any kind.
+- History is rewritten only when the candidate asks for it by name. Otherwise a correction is a new commit.
+- The candidate reviews every commit and decides what is published.
 
 ## 5. Source discipline
 
