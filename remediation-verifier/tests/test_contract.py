@@ -299,7 +299,8 @@ class TestDecisions:
         decisions = read_text(DECISIONS_FILE)
         frozen = ("D2", "D5", "D11", "D12", "D23", "D24", "D27")
         observation = ("D29", "D30", "D31", "D32", "D33", "D34", "D35", "D36", "D37")
-        for identifier in frozen + observation:
+        decision = ("D38", "D39", "D40")
+        for identifier in frozen + observation + decision:
             assert identifier in decisions, f"{identifier} is not recorded"
 
     def test_the_resolved_tool_versions_are_recorded(self) -> None:
