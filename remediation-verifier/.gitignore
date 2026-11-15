@@ -1,0 +1,24 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+out/
+.cache/
+*.tgz
+.env
+.kubeconfig*
+
+# Agent tooling and skills — local only, never commit
+.agents/
+skills-lock.json
+.codegraph/
+
+# Internal assessment documents — never commit
+SETUP_PLAN.md
+GUIA PROYECTO v4.md
+JUEZ v4.md
+take_home_one_pager.md
+take_home_one_pager.pdf
+docs/

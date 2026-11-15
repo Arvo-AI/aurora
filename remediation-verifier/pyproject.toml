@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "remediation-verifier"
+version = "0.1.0"
+description = "Advisory remediation verification against the full incident contract (aurora-lab scenario 12)."
+requires-python = ">=3.11"
+dependencies = ["PyYAML>=6"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+remediation-verifier = "verifier.cli:main"
+
+[tool.setuptools]
+packages = ["verifier"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-ra --strict-markers"
