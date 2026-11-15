@@ -26,7 +26,7 @@ from verifier.decision import (
     VERIFIED_WITHIN_CONTRACT,
     Verdict,
 )
-from verifier.model import FAIL, INCONCLUSIVE, Contract
+from verifier.model import FAIL, INCONCLUSIVE, PASS, Contract
 
 MODE_MIXED = "MIXED"
 MODE_UNKNOWN = "UNKNOWN"
@@ -191,3 +191,180 @@ def _reject_unbacked_positive(runs: Sequence[Run]) -> None:
                 f"the run {verdict.variant} claims a positive without evidence for "
                 f"{', '.join(unsupported)}"
             )
+
+
+def render_markdown(contract: Contract, runs: Sequence[Run], *, generated_at: str) -> str:
+    """Return the report as Markdown, without a trailing newline."""
+    runs = tuple(runs)
+    _reject_unbacked_positive(runs)
+    metrics = metrics_for(contract, runs)
+    lines = ["# Remediation verification report", ""]
+    lines.append("Advisory. This report is evidence for a human reviewer and never a merge gate.")
+    lines.append("")
+    lines += _metadata(contract, runs, generated_at)
+    lines += ["## Metrics", ""]
+    lines += _metrics_table(metrics)
+    lines += ["## Variants", ""]
+    lines += _variants_table(runs)
+    seen: dict[str, int] = {}
+    for run in runs:
+        name = run.verdict.variant
+        seen[name] = seen.get(name, 0) + 1
+        lines += _variant_section(run, seen[name])
+    lines += _provenance(contract)
+    lines += _limitations()
+    return "\n".join(lines).rstrip("\n")
+
+
+def write_markdown(
+    contract: Contract,
+    runs: Sequence[Run],
+    path: Path | str,
+    *,
+    generated_at: str,
+) -> Path:
+    """Write the Markdown report and return where it landed."""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    text = render_markdown(contract, runs, generated_at=generated_at)
+    target.write_text(f"{text}\n", encoding=ENCODING)
+    return target
+
+
+def _metadata(contract: Contract, runs: Sequence[Run], generated_at: str) -> list[str]:
+    source = contract.source
+    return [
+        f"- Scenario: `{contract.scenario}`",
+        f"- Title: {contract.title}",
+        f"- Mode: `{_mode(runs)}`",
+        f"- Generated: `{generated_at}`",
+        f"- Lab commit: `{source.commit}`",
+        f"- Fork commit: `{source.fork_commit}`",
+        "",
+    ]
+
+
+def _metrics_table(metrics: Mapping[str, Any]) -> list[str]:
+    detection = metrics["fault_detection"]
+    weak = metrics["weak_checks"]
+    remediation = metrics["remediation"]
+    denominator = f"{remediation['runs']} remediation runs"
+    rows = ["| Metric | Value | Denominator |", "|---|---|---|"]
+    if detection is None:
+        rows.append("| Fault detection | not measured | no baseline |")
+    else:
+        rows.append(
+            f"| Fault detection | {detection['failed']} failed | {detection['checks']} checks |"
+        )
+    if weak is None:
+        rows.append("| Weak checks | not measured | no baseline |")
+    else:
+        rows.append(f"| Weak checks | {weak['passed']} passed | {weak['checks']} checks |")
+    for label, key in (
+        ("Verified", "verified"),
+        ("Rejected", "rejected"),
+        ("Inconclusive", "inconclusive"),
+        ("Execution errors", "execution_error"),
+    ):
+        rows.append(f"| {label} | {remediation[key]} | {denominator} |")
+    rows.append("")
+    return rows
+
+
+def _variants_table(runs: Sequence[Run]) -> list[str]:
+    if not runs:
+        return ["No runs in this report.", ""]
+    rows = [
+        "| Variant | Kind | Mode | Status | Reproduction | Passed |",
+        "|---|---|---|---|---|---|",
+    ]
+    for run in runs:
+        verdict = run.verdict
+        passed = sum(1 for result in verdict.results if result.status == PASS)
+        status = verdict.status or "not applicable"
+        rows.append(
+            f"| {_cell(verdict.variant)} | {_cell(verdict.kind)} | {_cell(run.mode)} "
+            f"| {_cell(status)} | {_cell(verdict.reproduction_status)} "
+            f"| {passed}/{len(verdict.results)} |"
+        )
+    rows.append("")
+    return rows
+
+
+def _variant_section(run: Run, ordinal: int) -> list[str]:
+    verdict = run.verdict
+    heading = f"### {verdict.variant}" if ordinal == 1 else f"### {verdict.variant} (run {ordinal})"
+    status = verdict.status or "not applicable"
+    lines = [
+        heading,
+        "",
+        f"- Status: `{status}`",
+        f"- Reproduction status: `{verdict.reproduction_status}`",
+        f"- Mode: `{run.mode}`",
+        f"- Captured: `{run.captured_at}`",
+        f"- Reason: {verdict.reason}",
+    ]
+    if verdict.weak_checks:
+        weak = ", ".join(f"`{check_id}`" for check_id in verdict.weak_checks)
+        lines.append(f"- Weak checks: {weak}")
+    lines.append("")
+    if verdict.unresolved:
+        lines += ["Unresolved elements:", ""]
+        for element in verdict.unresolved:
+            lines.append(f"- `{element.id}` from `{element.source}`: {element.reason}")
+        lines.append("")
+    lines += ["| Check | Fault | Status | Reason | Source |", "|---|---|---|---|---|"]
+    for result in verdict.results:
+        lines.append(
+            f"| {_cell(result.id)} | {_cell(result.fault)} | {_cell(result.status)} "
+            f"| {_cell(result.reason)} | {_cell(result.source)} |"
+        )
+    lines.append("")
+    for result in verdict.results:
+        lines += [
+            f"<details><summary>Evidence for {result.id}</summary>",
+            "",
+            "```json",
+            json.dumps(dict(result.evidence), indent=2, sort_keys=True),
+            "```",
+            "",
+            "</details>",
+            "",
+        ]
+    return lines
+
+
+def _provenance(contract: Contract) -> list[str]:
+    source = contract.source
+    lines = [
+        "## Provenance",
+        "",
+        f"- Contract commit: `{source.commit}`",
+        f"- Fork commit: `{source.fork_commit}`",
+        "",
+        "| Check | Source |",
+        "|---|---|",
+    ]
+    for fault in contract.oracle.faults.values():
+        for check in fault.checks:
+            lines.append(f"| `{check.id}` | `{check.source}` |")
+    lines.append("")
+    return lines
+
+
+def _limitations() -> list[str]:
+    return [
+        "## Limitations",
+        "",
+        "- This report checks the conditions declared in the incident contract. "
+        "It does not prove that no other defect exists.",
+        "- A SNAPSHOT run is a recording. It does not call Kubernetes and does not "
+        "prove the live cluster is healthy.",
+        "- The verdict is advisory and never blocks a merge.",
+        "- Only the faults declared in the contract are covered.",
+        "",
+    ]
+
+
+def _cell(value: str) -> str:
+    return value.replace("|", "\\|").replace("\n", " ")
