@@ -44,20 +44,11 @@ HTTP_TIMEOUT = (3.5, 5)
 
 
 def _check_grafana(user_id: str, org_id: str) -> Dict[str, Any]:
-    """Grafana is webhook-based — check is_active directly (no secret_ref needed)."""
+    """Grafana is webhook-based: connected once a webhook carrying its secret has arrived (same rule as /grafana/status)."""
     try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
-                cursor.execute(
-                    """SELECT 1 FROM user_tokens
-                       WHERE (user_id = %s OR org_id = %s)
-                         AND provider = 'grafana'
-                         AND is_active = TRUE
-                       LIMIT 1""",
-                    (user_id, org_id),
-                )
-                return {"connected": cursor.fetchone() is not None}
+        from routes.grafana.grafana_routes import grafana_connected
+
+        return {"connected": grafana_connected(get_token_data(user_id, "grafana"))}
     except Exception as exc:
         logger.warning("[STATUS] grafana check failed: %s", exc)
         return {"connected": False}

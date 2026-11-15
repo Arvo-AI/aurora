@@ -53,8 +53,10 @@ In Aurora, go to **Connectors** > **Jira** > connect your account. Once connecte
 The URL format is:
 
 ```text
-https://<your-aurora-domain>/jira/webhook/<your-user-id>
+https://<your-aurora-domain>/jira/webhook/<your-user-id>?secret=<webhook-secret>
 ```
+
+The `secret` authenticates Jira to Aurora; requests without it are rejected with `401`. Treat the URL like a password. Showing it needs the connectors write permission. See [Alert webhook authentication](./connectors.md#alert-webhook-authentication).
 
 ### 2. Configure Jira Webhook
 
@@ -114,9 +116,9 @@ Instead of system webhooks, you can use Jira Automation for more control:
 2. Trigger: **Issue created**
 3. Condition: **Issue type is Bug**
 4. Action: **Send web request**
-   - URL: your Aurora webhook URL
+   - URL: your Aurora webhook URL (including `?secret=...`)
    - Method: POST
-   - Headers: `Content-Type: application/json`
+   - Headers: `Content-Type: application/json`. Instead of the `secret` in the URL, you can add the header `X-Aurora-Webhook-Secret` with the secret as its value
    - Body: `{{issue}}`
 5. Enable the rule
 

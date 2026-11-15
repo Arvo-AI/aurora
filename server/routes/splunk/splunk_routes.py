@@ -7,6 +7,7 @@ import requests
 from flask import Blueprint, jsonify, request
 
 from routes.splunk.tasks import process_splunk_alert
+from routes.webhook_secret_routes import register_webhook_secret_routes
 from utils.db.connection_pool import db_pool
 from utils.web.public_url import external_backend_url
 from utils.auth.stateless_auth import (
@@ -17,9 +18,11 @@ from utils.auth.stateless_auth import (
 )
 from utils.auth.rbac_decorators import require_permission
 from utils.log_sanitizer import sanitize, hash_for_log
+from utils.auth.token_management import get_token_data
 from utils.secrets.secret_ref_utils import delete_user_secret
 from utils.splunk_accounts import (
     account_allowed,
+    accounts_from_creds,
     account_id_for_url,
     account_summary,
     find_account,
@@ -32,6 +35,13 @@ from utils.splunk_accounts import (
 SPLUNK_TIMEOUT = 15
 
 from utils.splunk_config import SPLUNK_SSL_VERIFY
+from utils.web.webhook_auth import (
+    WEBHOOK_HEADER_NAME,
+    ensure_webhook_secret,
+    redact_webhook_headers,
+    reject_unauthenticated_webhook,
+    webhook_url_with_secret,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -286,7 +296,8 @@ def connect(user_id):
 @require_permission("connectors", "read")
 def status(user_id):
     """Check every connected Splunk. One dead token does not hide the others."""
-    accounts = list_splunk_accounts(user_id)
+    creds = get_token_data(user_id, "splunk")
+    accounts = accounts_from_creds(creds) if isinstance(creds, dict) else []
     if not accounts:
         return jsonify({"connected": False, "accounts": []})
 
@@ -296,7 +307,9 @@ def status(user_id):
     except Exception:
         logger.warning("[SPLUNK] Could not sync connection rows for user %s", hash_for_log(user_id))
 
-    return jsonify(_connected_payload(user_id, accounts))
+    payload = _connected_payload(user_id, accounts)
+    payload["hasWebhookSecret"] = bool(creds.get("webhook_secret"))
+    return jsonify(payload)
 
 
 def _selector_from_body() -> Optional[str]:
@@ -370,25 +383,22 @@ def alert_webhook(user_id: str):
         return jsonify({"error": "user_id is required"}), 400
 
     # Check if user has Splunk connected
-    if not list_splunk_accounts(user_id):
+    creds = get_token_data(user_id, "splunk")
+    if not isinstance(creds, dict) or not accounts_from_creds(creds):
         logger.warning("[SPLUNK] Webhook received for user %s with no Splunk connection", sanitize(user_id))
         return jsonify({"error": "Splunk not connected for this user"}), 404
+
+    rejection = reject_unauthenticated_webhook(
+        creds, request, provider_name="Splunk", log_prefix="[SPLUNK]", user_id=user_id,
+    )
+    if rejection:
+        return rejection
 
     payload = request.get_json(silent=True) or {}
     logger.info("[SPLUNK] Received alert webhook for user %s: %s", sanitize(user_id), sanitize(payload.get("search_name", "unknown")))
 
-    # Sanitize headers - redact sensitive values
-    sensitive_headers = {"authorization", "cookie", "set-cookie", "proxy-authorization", "x-api-key", "x-csrf-token"}
-    sanitized_headers = {}
-    for key, value in request.headers:
-        key_lower = key.lower()
-        if key_lower in sensitive_headers or "token" in key_lower or "secret" in key_lower:
-            sanitized_headers[key] = "<REDACTED>"
-        else:
-            sanitized_headers[key] = value
-
     metadata = {
-        "headers": sanitized_headers,
+        "headers": redact_webhook_headers(request.headers),
         "remote_addr": request.remote_addr,
     }
 
@@ -478,21 +488,34 @@ def get_alerts(user_id):
 
 
 @splunk_bp.route("/alerts/webhook-url", methods=["GET"])
-@require_permission("connectors", "read")
+@require_permission("connectors", "write")
 def get_webhook_url(user_id):
-    """Get the webhook URL that should be configured in Splunk."""
+    """Get the webhook URL that should be configured in Splunk.
+
+    Splunk's webhook alert action cannot send custom headers, so the secret is
+    carried in the URL. Requires ``connectors:write`` because it reveals the secret.
+    """
+    creds = get_token_data(user_id, "splunk")
+    if not creds:
+        return jsonify({"error": "Splunk not connected"}), 404
+    webhook_secret = ensure_webhook_secret(user_id, "splunk", creds)
+    if not webhook_secret:
+        return jsonify({"error": "Failed to create Splunk webhook secret"}), 500
+
     base_url = external_backend_url()
 
     webhook_url = f"{base_url}/splunk/alerts/webhook/{user_id}"
 
     return jsonify({
-        "webhookUrl": webhook_url,
+        "webhookUrl": webhook_url_with_secret(webhook_url, webhook_secret),
+        "webhookSecret": webhook_secret,
+        "headerName": WEBHOOK_HEADER_NAME,
         "instructions": [
             "1. Go to your Splunk instance",
             "2. Navigate to Settings -> Searches, reports, and alerts",
             "3. Find your saved search/alert and click Edit -> Edit Alert",
             "4. Under 'Trigger Actions', click 'Add Actions' -> 'Webhook'",
-            "5. Paste the webhook URL above",
+            "5. Paste the webhook URL above (it includes your webhook secret; treat it like a password)",
             "6. Save the alert configuration",
             "7. The alert will now send notifications to Aurora when triggered"
         ]
@@ -531,3 +554,6 @@ def update_rca_settings(user_id):
         "success": True,
         "rcaEnabled": rca_enabled,
     })
+
+
+register_webhook_secret_routes(splunk_bp, "splunk", "Splunk")

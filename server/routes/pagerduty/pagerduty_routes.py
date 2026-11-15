@@ -22,6 +22,7 @@ from utils.auth.stateless_auth import (
     store_org_preference,
 )
 from utils.log_sanitizer import sanitize
+from routes.webhook_secret_routes import register_webhook_secret_routes
 from routes.pagerduty.oauth_utils import get_auth_url, exchange_code_for_token, refresh_and_store_if_needed
 from routes.pagerduty.pagerduty_helpers import (
     PD_READ_ONLY_ROLES,
@@ -31,6 +32,14 @@ from routes.pagerduty.pagerduty_helpers import (
     error_response,
 )
 from utils.secrets.secret_ref_utils import delete_user_secret
+from utils.web.webhook_auth import (
+    WEBHOOK_HEADER_NAME,
+    ensure_webhook_secret,
+    redact_webhook_headers,
+    reject_unauthenticated_webhook,
+    webhook_url_with_secret,
+    with_webhook_secret,
+)
 
 logger = logging.getLogger(__name__)
 pagerduty_bp = Blueprint("pagerduty", __name__)
@@ -89,6 +98,7 @@ def _status_payload(creds: dict) -> dict:
         "externalUserName": creds.get("external_user_name"),
         "externalUserRole": creds.get("external_user_role"),
         "accountSubdomain": creds.get("account_subdomain"),
+        "hasWebhookSecret": bool(creds.get("webhook_secret")),
     }
     if capabilities.get("can_write_incidents") is not True:
         # Single source for the client's "why can't I turn notes on" text
@@ -189,6 +199,7 @@ def pagerduty_connect(user_id):
     }
 
     try:
+        token_data = with_webhook_secret(user_id, "pagerduty", token_data)
         store_tokens_in_db(user_id, token_data, "pagerduty", schedule_prediscovery=True)
     except Exception:
         logger.exception("[PAGERDUTY] Failed to store token data for user %s", user_id)
@@ -281,6 +292,7 @@ def oauth_callback():
             **token_info
         }
         
+        oauth_token_data = with_webhook_secret(user_id, "pagerduty", oauth_token_data)
         store_tokens_in_db(user_id, oauth_token_data, "pagerduty", schedule_prediscovery=True)
         # A reconnect without incidents.write must not leave the toggle on
         try:
@@ -359,20 +371,32 @@ def enable_incident_notes(user_id):
 
 
 @pagerduty_bp.route("/webhook-url", methods=["GET"])
-@require_permission("connectors", "read")
+@require_permission("connectors", "write")
 def get_webhook_url(user_id):
-    """Get the webhook URL that should be configured in PagerDuty."""
+    """Get the webhook URL that should be configured in PagerDuty.
+
+    Requires ``connectors:write`` because the response reveals the webhook secret.
+    """
+    creds = get_token_data(user_id, "pagerduty")
+    if not creds:
+        return jsonify({"error": "PagerDuty not connected"}), 404
+    webhook_secret = ensure_webhook_secret(user_id, "pagerduty", creds)
+    if not webhook_secret:
+        return jsonify({"error": "Failed to create PagerDuty webhook secret"}), 500
+
     base_url = external_backend_url()
 
     webhook_url = f"{base_url}/pagerduty/webhook/{user_id}"
     
     return jsonify({
-        "webhookUrl": webhook_url,
+        "webhookUrl": webhook_url_with_secret(webhook_url, webhook_secret),
+        "webhookSecret": webhook_secret,
+        "headerName": WEBHOOK_HEADER_NAME,
         "instructions": [
             "1. Go to your PagerDuty account",
             "2. Navigate to Integrations → Generic Webhooks (v3)",
             "3. Click 'New Webhook'",
-            "4. Paste the webhook URL above",
+            "4. Paste the webhook URL above (it includes your webhook secret; treat it like a password)",
             "5. Select the events you want to subscribe to (incident.triggered, incident.acknowledged, incident.resolved)",
             "6. Save the webhook configuration"
         ]
@@ -390,6 +414,12 @@ def webhook(user_id: str):
     if not creds:
         logger.warning("[PAGERDUTY] Webhook received for user %s with no PagerDuty connection", sanitize(user_id))
         return jsonify({"error": "PagerDuty not connected for this user"}), 404
+
+    rejection = reject_unauthenticated_webhook(
+        creds, request, provider_name="PagerDuty", log_prefix="[PAGERDUTY]", user_id=user_id,
+    )
+    if rejection:
+        return rejection
     
     payload = request.get_json(silent=True) or {}
     
@@ -430,7 +460,7 @@ def webhook(user_id: str):
     # Enqueue for background processing
     from routes.pagerduty.tasks import process_pagerduty_event
     
-    metadata = {"headers": dict(request.headers), "remote_addr": request.remote_addr}
+    metadata = {"headers": redact_webhook_headers(request.headers), "remote_addr": request.remote_addr}
     process_pagerduty_event.delay(
         raw_payload=payload,
         event_data=event,
@@ -442,3 +472,6 @@ def webhook(user_id: str):
     return jsonify({"received": True})
 
 
+
+
+register_webhook_secret_routes(pagerduty_bp, "pagerduty", "PagerDuty")

@@ -8,6 +8,7 @@ from flask import Blueprint, jsonify, request
 
 from routes.opsgenie.config import OPSGENIE_TIMEOUT, REGION_URLS
 from routes.opsgenie.tasks import process_opsgenie_event
+from routes.webhook_secret_routes import register_webhook_secret_routes
 from utils.db.connection_pool import db_pool
 from utils.web.public_url import external_backend_url
 from utils.log_sanitizer import sanitize
@@ -15,6 +16,14 @@ from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, resolve_org_id, set_rls_context
 from utils.secrets.secret_ref_utils import delete_user_secret
+from utils.web.webhook_auth import (
+    WEBHOOK_HEADER_NAME,
+    ensure_webhook_secret,
+    redact_webhook_headers,
+    reject_unauthenticated_webhook,
+    webhook_url_with_secret,
+    with_webhook_secret,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -513,6 +522,7 @@ def connect(user_id):
             "validated_at": datetime.now(timezone.utc).isoformat(),
         }
         try:
+            token_payload = with_webhook_secret(user_id, "opsgenie", token_payload)
             store_tokens_in_db(user_id, token_payload, "opsgenie", schedule_prediscovery=True)
             logger.info("[OPSGENIE] Stored JSM credentials for user %s (site=%s)", user_id, site_url)
         except Exception as exc:
@@ -558,6 +568,7 @@ def connect(user_id):
     }
 
     try:
+        token_payload = with_webhook_secret(user_id, "opsgenie", token_payload)
         store_tokens_in_db(user_id, token_payload, "opsgenie", schedule_prediscovery=True)
         logger.info("[OPSGENIE] Stored credentials for user %s (region=%s)", sanitize(user_id), sanitize(region))
     except Exception as exc:
@@ -601,6 +612,7 @@ def status(user_id):
         "accountName": account_data.get("name"),
         "plan": account_data.get("plan"),
         "authType": auth_type,
+        "hasWebhookSecret": bool(creds.get("webhook_secret")),
     }
     if auth_type == "jsm_basic":
         result["siteUrl"] = creds.get("site_url")
@@ -645,9 +657,15 @@ def webhook(user_id: str):
         logger.warning("[OPSGENIE] Webhook received for user %s with no OpsGenie connection", sanitize(user_id))
         return jsonify({"error": "OpsGenie not connected for this user"}), 404
 
+    rejection = reject_unauthenticated_webhook(
+        creds, request, provider_name="OpsGenie", log_prefix="[OPSGENIE]", user_id=user_id,
+    )
+    if rejection:
+        return rejection
+
     payload = request.get_json(silent=True) or {}
     metadata = {
-        "headers": dict(request.headers),
+        "headers": redact_webhook_headers(request.headers),
         "remote_addr": request.remote_addr,
     }
     logger.info("[OPSGENIE] Received webhook for user %s action=%s", sanitize(user_id), sanitize(payload.get("action")))
@@ -657,25 +675,32 @@ def webhook(user_id: str):
 
 
 @opsgenie_bp.route("/webhook-url", methods=["GET"])
-@require_permission("connectors", "read")
+@require_permission("connectors", "write")
 def webhook_url(user_id):
+    """Webhook URL and secret. Requires ``connectors:write`` because it reveals the secret."""
     base_url = external_backend_url()
 
     if not base_url:
         return jsonify({"error": "NEXT_PUBLIC_BACKEND_URL is not configured. Cannot generate webhook URL."}), 500
 
-    url = f"{base_url}/opsgenie/webhook/{user_id}"
+    creds = _get_stored_opsgenie_credentials(user_id)
+    if not creds:
+        return jsonify({"error": "OpsGenie not connected"}), 404
+    webhook_secret = ensure_webhook_secret(user_id, "opsgenie", creds)
+    if not webhook_secret:
+        return jsonify({"error": "Failed to create OpsGenie webhook secret"}), 500
+
+    url = webhook_url_with_secret(f"{base_url}/opsgenie/webhook/{user_id}", webhook_secret)
 
     # Determine auth type for instructions
-    creds = _get_stored_opsgenie_credentials(user_id)
-    auth_type = creds.get("auth_type", "opsgenie") if creds else "opsgenie"
+    auth_type = creds.get("auth_type", "opsgenie")
 
     if auth_type == "jsm_basic":
         instructions = [
             "1. In Jira, click the Settings gear (top right) → under Jira admin settings, click Operations.",
             "2. In the left sidebar, click Integrations.",
             "3. Click Add integration, search for Webhook, and add it.",
-            "4. Click Edit settings, select 'Authenticate with a Webhook account', and paste the URL above.",
+            "4. Click Edit settings, select 'Authenticate with a Webhook account', and paste the URL above (it includes your webhook secret; treat it like a password).",
             "5. Check 'Add alert description to payload' and 'Add alert details to payload', then Save.",
             "6. Under Alert actions, select Create, Acknowledge, Close, and any others you want.",
             "7. Click Turn on integration.",
@@ -684,13 +709,15 @@ def webhook_url(user_id):
         instructions = [
             "1. Navigate to Settings → Integrations in OpsGenie.",
             "2. Add a new Webhook (Outgoing) integration.",
-            "3. Paste the URL above into the webhook URL field.",
+            "3. Paste the URL above into the webhook URL field (it includes your webhook secret; treat it like a password).",
             "4. Select the alert actions you want to receive (e.g. Create, Acknowledge, Close).",
             "5. Save the integration and test the webhook to verify connectivity.",
         ]
 
     return jsonify({
         "webhookUrl": url,
+        "webhookSecret": webhook_secret,
+        "headerName": WEBHOOK_HEADER_NAME,
         "instructions": instructions,
         "authType": auth_type,
     })
@@ -764,3 +791,6 @@ def list_ingested_events(user_id):
     except Exception as exc:
         logger.exception("[OPSGENIE] Failed to list ingested events for user %s: %s", user_id, exc)
         return jsonify({"error": "Failed to load OpsGenie webhook events"}), 500
+
+
+register_webhook_secret_routes(opsgenie_bp, "opsgenie", "OpsGenie")

@@ -6,6 +6,7 @@ import requests
 from flask import Blueprint, jsonify, request
 
 from routes.datadog.tasks import process_datadog_event
+from routes.webhook_secret_routes import register_webhook_secret_routes
 from utils.db.connection_pool import db_pool
 from utils.web.public_url import external_backend_url
 from utils.log_sanitizer import sanitize, hash_for_log
@@ -13,6 +14,14 @@ from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, resolve_org_id, set_rls_context
 from utils.secrets.secret_ref_utils import delete_user_secret
+from utils.web.webhook_auth import (
+    WEBHOOK_HEADER_NAME,
+    ensure_webhook_secret,
+    redact_webhook_headers,
+    reject_unauthenticated_webhook,
+    webhook_url_with_secret,
+    with_webhook_secret,
+)
 logger = logging.getLogger(__name__)
 
 datadog_bp = Blueprint("datadog", __name__)
@@ -365,7 +374,11 @@ def list_datadog_accounts(user_id: str) -> list:
     with org count. Upgrade path is user_connections rows plus one Vault secret
     per account.
     """
-    creds = _get_stored_datadog_credentials(user_id)
+    return _accounts_from_creds(_get_stored_datadog_credentials(user_id))
+
+
+def _accounts_from_creds(creds: Optional[Dict[str, Any]]) -> list:
+    """The account list inside one stored Datadog blob (see list_datadog_accounts)."""
     if not creds:
         return []
     accounts = creds.get("accounts")
@@ -430,6 +443,9 @@ def _store_accounts(user_id: str, accounts: list, schedule_prediscovery=None) ->
     """
     stored = dict(accounts[0])
     stored["accounts"] = accounts
+    # The webhook secret lives on the blob, not on an account, so re-saving the
+    # list (connect, removing one org) must carry it over.
+    stored = with_webhook_secret(user_id, "datadog", stored)
     store_tokens_in_db(user_id, stored, "datadog", schedule_prediscovery=schedule_prediscovery)
 
 
@@ -558,7 +574,8 @@ def connect(user_id):
 @datadog_bp.route("/status", methods=["GET"])
 @require_permission("connectors", "read")
 def status(user_id):
-    accounts = list_datadog_accounts(user_id)
+    creds = _get_stored_datadog_credentials(user_id) or {}
+    accounts = _accounts_from_creds(creds)
     if not accounts:
         return jsonify({"connected": False, "accounts": []})
 
@@ -579,6 +596,7 @@ def status(user_id):
         "validatedAt": primary.get("validated_at"),
         "label": primary_summary["label"],
         "accounts": summaries,
+        "hasWebhookSecret": bool(creds.get("webhook_secret")),
     }
 
     if not any_valid:
@@ -843,12 +861,15 @@ def webhook(user_id: str):
         logger.warning("[DATADOG] Webhook received for user %s with no Datadog connection", sanitize(user_id))
         return jsonify({"error": "Datadog not connected for this user"}), 404
 
-    payload_text = request.get_data(as_text=True) or ""
-    # Webhook signature verification removed for OSS version
+    rejection = reject_unauthenticated_webhook(
+        creds, request, provider_name="Datadog", log_prefix="[DATADOG]", user_id=user_id,
+    )
+    if rejection:
+        return rejection
 
     payload = request.get_json(silent=True) or {}
     metadata = {
-        "headers": dict(request.headers),
+        "headers": redact_webhook_headers(request.headers),
         "remote_addr": request.remote_addr,
     }
     logger.info("[DATADOG] Received webhook for user %s type=%s", sanitize(user_id), sanitize(payload.get("event_type")))
@@ -858,8 +879,16 @@ def webhook(user_id: str):
 
 
 @datadog_bp.route("/webhook-url", methods=["GET"])
-@require_permission("connectors", "read")
+@require_permission("connectors", "write")
 def webhook_url(user_id):
+    """Webhook URL and secret. Requires ``connectors:write`` because it reveals the secret."""
+    creds = _get_stored_datadog_credentials(user_id)
+    if not creds:
+        return jsonify({"error": "Datadog not connected"}), 404
+    webhook_secret = ensure_webhook_secret(user_id, "datadog", creds)
+    if not webhook_secret:
+        return jsonify({"error": "Failed to create Datadog webhook secret"}), 500
+
     base_url = external_backend_url()
 
     url = f"{base_url}/datadog/webhook/{user_id}"
@@ -868,7 +897,7 @@ def webhook_url(user_id):
     # and a prod Datadog connected must create this same webhook in each of them.
     instructions = [
         "1. Navigate to Integrations → Webhooks in Datadog.",
-        "2. Create a new webhook with the URL above.",
+        "2. Create a new webhook with the URL above (it includes your webhook secret; treat it like a password).",
         "3. (Optional) Configure a custom payload to include monitor or event context.",
         "4. Add the webhook to your monitors or event rules.",
         "5. Save and test the webhook to verify connectivity.",
@@ -876,7 +905,12 @@ def webhook_url(user_id):
     ]
 
     return jsonify({
-        "webhookUrl": url,
+        "webhookUrl": webhook_url_with_secret(url, webhook_secret),
+        "webhookSecret": webhook_secret,
+        "headerName": WEBHOOK_HEADER_NAME,
         "instructions": instructions,
         "perOrganization": True,
     })
+
+
+register_webhook_secret_routes(datadog_bp, "datadog", "Datadog")

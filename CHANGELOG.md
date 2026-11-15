@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- Alert webhooks for PagerDuty, Datadog, Grafana, New Relic, Netdata, Splunk,
+  Dynatrace, OpsGenie / JSM Operations and Jira now require the connection's
+  webhook secret. They used to accept any request carrying a valid `user_id`,
+  which every org member can read, so anyone could post a forged alert and start
+  an investigation as another user, with that user's connected credentials, and
+  use up the per-user RCA rate limit so real alerts went uninvestigated.
+  Requests without the secret get `401`.
+- Grafana: a webhook no longer creates or re-activates a Grafana connection.
+  Opening the Grafana connector page creates a pending connection; it shows as
+  connected once the first webhook carrying the secret arrives (normally
+  Grafana's Test notification), and that first webhook does not start an RCA.
+- The webhook URL endpoints of these connectors need the connectors write
+  permission, since they now return the secret.
+
+### Added
+- `POST /<connector>/webhook-secret/rotate` for the same nine connectors issues
+  a new webhook secret; the old one stops working immediately.
+
+### Changed
+- **Breaking, action needed:** for each of these connectors, open its page in
+  Aurora and paste the new webhook URL (it ends in `?secret=...`) into the
+  vendor. Opening the page adds a secret to connections saved before this
+  release. Until then, their alerts are rejected and the server logs a warning
+  naming the connector. The secret can also be sent as the
+  `X-Aurora-Webhook-Secret` header, a Bearer token or a Basic-auth password.
+
 ## [1.5.24] - 2026-11-12
 
 ### Fixed
