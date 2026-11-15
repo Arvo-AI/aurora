@@ -11,9 +11,11 @@ Five JSON goldens cover the shapes the document takes: a baseline only, a
 verified remediation, a remediation blocked by its pre-fix gate, a remediation
 with unresolved checks, and a run that produced no check results.
 
-A state that differs from another only in its words is asserted in
-`tests/test_report.py` instead of being repeated here: a golden that is 90
-percent a copy of its neighbour pins nothing new.
+Two Markdown goldens cover the document a person reads, because the Markdown
+adds tables, a status line and collapsible evidence that the JSON does not
+have. A state that differs from another only in its words is asserted in
+`tests/test_report.py` and `tests/test_markdown.py` instead of being repeated
+here: a golden that is 90 percent a copy of its neighbour pins nothing new.
 """
 
 from __future__ import annotations
@@ -33,7 +35,7 @@ from verifier.decision import (
     execution_error,
 )
 from verifier.model import FAIL, INCONCLUSIVE, PASS, CheckResult, Contract, Status
-from verifier.report import Run, report_document
+from verifier.report import Run, render_markdown, report_document
 from verifier.results import build_result
 
 GENERATED = "2026-11-15T21:05:00Z"
@@ -61,6 +63,10 @@ JSON_STATES = (
     "verified",
     "blocked",
     "inconclusive",
+    "execution_error",
+)
+MARKDOWN_STATES = (
+    "verified",
     "execution_error",
 )
 
@@ -151,6 +157,13 @@ def test_the_json_report_matches_its_golden(state: str, contract: Contract) -> N
     compare(GOLDEN_DIR / f"{state}.json", actual)
 
 
+@pytest.mark.parametrize("state", MARKDOWN_STATES)
+def test_the_markdown_report_matches_its_golden(state: str, contract: Contract) -> None:
+    text = render_markdown(contract, runs_for(state, contract), generated_at=GENERATED)
+    compare(GOLDEN_DIR / f"{state}.md", text + "\n")
+
+
 def test_the_golden_directory_holds_only_the_expected_files() -> None:
     expected = {f"{state}.json" for state in JSON_STATES}
+    expected |= {f"{state}.md" for state in MARKDOWN_STATES}
     assert {path.name for path in GOLDEN_DIR.glob("*")} == expected
