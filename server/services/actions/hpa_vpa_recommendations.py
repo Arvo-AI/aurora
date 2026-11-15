@@ -328,7 +328,8 @@ _SUMMARY_FIELDS = (
 )
 
 # Rows per call. Chosen so a full page of _SUMMARY_FIELDS rows stays well inside
-# cap_tool_output's 40 KB pass-through threshold (~380 B/row x 100 ~= 38 KB is
+# Budget against cap_tool_output's default 40 KB pass-through threshold
+# (~380 B/row x 100 ~= 38 KB is
 # too close, so 80 leaves real headroom). Above the threshold the payload is
 # LLM-summarized, which would paraphrase the workload keys and cooldown dates
 # this list exists to be matched against exactly.
@@ -349,7 +350,7 @@ def list_recommendations(user_id: str) -> dict:
 
     Rows are projected down to the fields the decision actually needs, and the
     page is capped. The full row is ~1 KB, so the original 200-row page was
-    ~200 KB -- five times ``cap_tool_output``'s 40 KB pass-through threshold, so
+    ~200 KB -- five times ``cap_tool_output``'s default 40 KB pass-through threshold, so
     it was routed through an LLM summarizer, which would paraphrase the workload
     keys and cooldown dates the anti-nag check matches on exactly. The agent
     would then re-propose a workload a human already dismissed, which is the one
