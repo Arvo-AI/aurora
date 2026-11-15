@@ -20,6 +20,14 @@ from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, resolve_org_id, set_rls_context
 from utils.secrets.secret_ref_utils import delete_user_secret
+from utils.web.webhook_auth import (
+    WEBHOOK_HEADER_NAME,
+    ensure_webhook_secret,
+    redact_webhook_headers,
+    reject_unauthenticated_webhook,
+    webhook_url_with_secret,
+    with_webhook_secret,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +150,7 @@ def connect(user_id):
         ],
         "validated_at": datetime.now(timezone.utc).isoformat(),
     }
+    token_payload = with_webhook_secret(token_payload, _get_stored_newrelic_credentials(user_id))
 
     try:
         store_tokens_in_db(user_id, token_payload, "newrelic", schedule_prediscovery=True)
@@ -191,6 +200,7 @@ def status(user_id):
         "validatedAt": creds.get("validated_at"),
         "hasLicenseKey": bool(creds.get("license_key")),
         "accessibleAccounts": creds.get("accessible_accounts", []),
+        "hasWebhookSecret": bool(creds.get("webhook_secret")),
     })
 
 
@@ -221,16 +231,26 @@ def disconnect(user_id):
 
 
 @newrelic_bp.route("/webhook-url", methods=["GET"])
-@require_permission("connectors", "read")
+@require_permission("connectors", "write")
 def webhook_url(user_id):
-    """Get the webhook URL to configure in New Relic."""
+    """Get the webhook URL to configure in New Relic.
+
+    Requires ``connectors:write`` because the response reveals the webhook secret.
+    """
+    creds = _get_stored_newrelic_credentials(user_id)
+    if not creds:
+        return jsonify({"error": "New Relic not connected"}), 404
+    webhook_secret = ensure_webhook_secret(user_id, "newrelic", creds)
+    if not webhook_secret:
+        return jsonify({"error": "Failed to create New Relic webhook secret"}), 500
+
     base_url = external_backend_url()
 
     url = f"{base_url}/newrelic/webhook/{user_id}"
 
     instructions = [
         "1. In New Relic, navigate to Alerts → Destinations.",
-        "2. Create a new Webhook destination with the URL above.",
+        "2. Create a new Webhook destination with the URL above (it includes your webhook secret; treat it like a password).",
         "3. Under Workflows, create or edit a workflow.",
         "4. Add a notification channel using the webhook destination.",
         "5. Configure the workflow filter for the issues you want Aurora to investigate.",
@@ -238,7 +258,9 @@ def webhook_url(user_id):
     ]
 
     return jsonify({
-        "webhookUrl": url,
+        "webhookUrl": webhook_url_with_secret(url, webhook_secret),
+        "webhookSecret": webhook_secret,
+        "headerName": WEBHOOK_HEADER_NAME,
         "instructions": instructions,
     })
 
@@ -361,12 +383,18 @@ def webhook(user_id: str):
         logger.warning("[NEWRELIC] Webhook received for user %s with no connection", sanitize(user_id))
         return jsonify({"error": "New Relic not connected for this user"}), 404
 
+    rejection = reject_unauthenticated_webhook(
+        creds, request, provider_name="New Relic", log_prefix="[NEWRELIC]", user_id=user_id,
+    )
+    if rejection:
+        return rejection
+
     payload = request.get_json(force=True, silent=True) or {}
     if not payload:
         return jsonify({"error": "Empty payload"}), 400
 
     metadata = {
-        "headers": {k: v for k, v in request.headers if k.lower() not in ("authorization", "api-key")},
+        "headers": redact_webhook_headers(request.headers),
         "remote_addr": request.remote_addr,
     }
 

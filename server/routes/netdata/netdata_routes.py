@@ -13,6 +13,14 @@ from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.secrets.secret_ref_utils import delete_user_secret
+from utils.web.webhook_auth import (
+    WEBHOOK_HEADER_NAME,
+    ensure_webhook_secret,
+    redact_webhook_headers,
+    reject_unauthenticated_webhook,
+    webhook_url_with_secret,
+    with_webhook_secret,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +60,7 @@ def connect(user_id):
         "base_url": base_url,
         "space_name": space_name,
     }
+    token_payload = with_webhook_secret(token_payload, _get_stored_netdata_credentials(user_id))
 
     try:
         store_tokens_in_db(user_id, token_payload, "netdata", schedule_prediscovery=True)
@@ -90,6 +99,7 @@ def status(user_id):
         "connected": True,
         "baseUrl": creds.get("base_url"),
         "spaceName": creds.get("space_name"),
+        "hasWebhookSecret": bool(creds.get("webhook_secret")),
     })
 
 
@@ -140,6 +150,12 @@ def alert_webhook(user_id: str):
         logger.warning("[NETDATA] Webhook received for user %s with no Netdata connection", sanitize(user_id))
         return jsonify({"error": "Netdata not connected for this user"}), 404
 
+    rejection = reject_unauthenticated_webhook(
+        creds, request, provider_name="Netdata", log_prefix="[NETDATA]", user_id=user_id,
+    )
+    if rejection:
+        return rejection
+
     payload = request.get_json(silent=True) or {}
     # Netdata v2 API structure has alert.name nested under "alert" key
     alert_obj = payload.get("alert") or {}
@@ -174,7 +190,7 @@ def alert_webhook(user_id: str):
         except Exception as e:
             logger.error(f"[NETDATA] Failed to store verification token: {e}")
 
-    metadata = {"headers": dict(request.headers), "remote_addr": request.remote_addr}
+    metadata = {"headers": redact_webhook_headers(request.headers), "remote_addr": request.remote_addr}
     process_netdata_alert.delay(payload, metadata, user_id)
     return jsonify({"received": True})
 
@@ -261,12 +277,22 @@ def get_alerts(user_id):
 
 
 @netdata_bp.route("/alerts/webhook-url", methods=["GET"])
-@require_permission("connectors", "read")
+@require_permission("connectors", "write")
 def get_webhook_url(user_id):
-    """Get the webhook URL and verification token for Netdata configuration."""
+    """Get the webhook URL and verification token for Netdata configuration.
+
+    Requires ``connectors:write`` because the response reveals the webhook secret.
+    """
+    creds = _get_stored_netdata_credentials(user_id)
+    if not creds:
+        return jsonify({"error": "Netdata not connected"}), 404
+    webhook_secret = ensure_webhook_secret(user_id, "netdata", creds)
+    if not webhook_secret:
+        return jsonify({"error": "Failed to create Netdata webhook secret"}), 500
+
     base_url = external_backend_url()
 
-    webhook_url = f"{base_url}/netdata/alerts/webhook/{user_id}"
+    webhook_url = webhook_url_with_secret(f"{base_url}/netdata/alerts/webhook/{user_id}", webhook_secret)
     
     # Get verification token from DB
     verification_token = None
@@ -286,5 +312,7 @@ def get_webhook_url(user_id):
 
     return jsonify({
         "webhookUrl": webhook_url,
+        "webhookSecret": webhook_secret,
+        "headerName": WEBHOOK_HEADER_NAME,
         "verificationToken": verification_token,
     })

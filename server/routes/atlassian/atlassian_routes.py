@@ -33,12 +33,23 @@ from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import set_rls_context
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.db.connection_pool import db_pool
+from utils.web.webhook_auth import with_webhook_secret
 
 logger = logging.getLogger(__name__)
 
 atlassian_bp = Blueprint("atlassian", __name__)
 
 VALID_PRODUCTS = {"confluence", "jira", "jsm_ops"}
+
+# Providers whose alert webhook is authenticated by a stored webhook secret.
+_WEBHOOK_PROVIDERS = {"jira", "opsgenie"}
+
+
+def _store_connection(user_id: str, payload: Dict[str, Any], provider: str) -> None:
+    """Store credentials, carrying over the webhook secret so a reconnect keeps the vendor's webhook working."""
+    if provider in _WEBHOOK_PROVIDERS:
+        payload = with_webhook_secret(payload, get_token_data(user_id, provider))
+    store_tokens_in_db(user_id, payload, provider, schedule_prediscovery=True)
 
 
 def _refresh_credentials(user_id: str, creds: Dict[str, Any], provider: str) -> Optional[Dict[str, Any]]:
@@ -167,7 +178,7 @@ def connect(user_id):
                     "site_url": base_url.rstrip("/"),
                     "cloud_id": data.get("cloudId"),
                 }
-                store_tokens_in_db(user_id, token_payload_jsm, "opsgenie", schedule_prediscovery=True)
+                _store_connection(user_id, token_payload_jsm, "opsgenie")
                 results[product] = {"connected": True, "authType": "jsm_pat", "baseUrl": base_url}
             else:
                 token_payload: Dict[str, Any] = {
@@ -175,7 +186,7 @@ def connect(user_id):
                     "base_url": base_url.rstrip("/"),
                     "pat_token": pat_token,
                 }
-                store_tokens_in_db(user_id, token_payload, product, schedule_prediscovery=True)
+                _store_connection(user_id, token_payload, product)
                 results[product] = {"connected": True, "authType": "pat", "baseUrl": base_url}
 
         return jsonify({"success": True, "results": results})
@@ -268,7 +279,7 @@ def connect(user_id):
                 "cloud_id": cloud_id,
                 "site_url": base_url.rstrip("/") if base_url else "",
             }
-            store_tokens_in_db(user_id, jsm_payload, "opsgenie", schedule_prediscovery=True)
+            _store_connection(user_id, jsm_payload, "opsgenie")
             results[product] = {"connected": True, "authType": "jsm_oauth", "baseUrl": base_url, "cloudId": cloud_id}
         else:
             payload: Dict[str, Any] = {
@@ -278,7 +289,7 @@ def connect(user_id):
                 "refresh_token": refresh_token,
                 "cloud_id": cloud_id,
             }
-            store_tokens_in_db(user_id, payload, product, schedule_prediscovery=True)
+            _store_connection(user_id, payload, product)
             results[product] = {"connected": True, "authType": "oauth", "baseUrl": base_url, "cloudId": cloud_id}
 
     return jsonify({"success": True, "connected": True, "results": results})

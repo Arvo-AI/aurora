@@ -21,6 +21,14 @@ from utils.auth.token_management import get_token_data, store_tokens_in_db
 from routes.dynatrace.config import DYNATRACE_TIMEOUT
 from utils.auth.rbac_decorators import require_permission
 from utils.secrets.secret_ref_utils import delete_user_secret
+from utils.web.webhook_auth import (
+    WEBHOOK_HEADER_NAME,
+    ensure_webhook_secret,
+    redact_webhook_headers,
+    reject_unauthenticated_webhook,
+    webhook_url_with_secret,
+    with_webhook_secret,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +132,11 @@ def connect(user_id):
     version = client.get_cluster_version()
 
     try:
-        store_tokens_in_db(user_id, {"api_token": api_token, "environment_url": environment_url, "version": version}, "dynatrace", schedule_prediscovery=True)
+        token_payload = with_webhook_secret(
+            {"api_token": api_token, "environment_url": environment_url, "version": version},
+            _get_stored_credentials(user_id),
+        )
+        store_tokens_in_db(user_id, token_payload, "dynatrace", schedule_prediscovery=True)
     except Exception as exc:
         logger.exception("[DYNATRACE] Failed to store credentials for user %s: %s", user_id, exc)
         return jsonify({"error": "Failed to store Dynatrace credentials"}), 500
@@ -143,6 +155,7 @@ def status(user_id):
         "connected": True,
         "environmentUrl": creds["environment_url"],
         "version": creds.get("version"),
+        "hasWebhookSecret": bool(creds.get("webhook_secret")),
     })
 
 
@@ -169,16 +182,16 @@ def webhook(user_id: str):
         logger.warning("[DYNATRACE] Webhook received for user %s with no connection", sanitize(user_id))
         return jsonify({"error": "Dynatrace not connected for this user"}), 404
 
+    rejection = reject_unauthenticated_webhook(
+        creds, request, provider_name="Dynatrace", log_prefix="[DYNATRACE]", user_id=user_id,
+    )
+    if rejection:
+        return rejection
+
     payload = request.get_json(silent=True) or {}
     logger.info("[DYNATRACE] Received webhook for user %s: %s", sanitize(user_id), sanitize(payload.get("ProblemTitle", "unknown")))
 
-    _REDACTED_HEADERS = {"authorization", "cookie", "set-cookie", "proxy-authorization", "x-api-key"}
-    sanitized_headers = {
-        k: ("<REDACTED>" if k.lower() in _REDACTED_HEADERS or "token" in k.lower() or "secret" in k.lower() else v)
-        for k, v in request.headers
-    }
-
-    process_dynatrace_problem.delay(payload, {"headers": sanitized_headers, "remote_addr": request.remote_addr}, user_id)
+    process_dynatrace_problem.delay(payload, {"headers": redact_webhook_headers(request.headers), "remote_addr": request.remote_addr}, user_id)
     return jsonify({"received": True})
 
 
@@ -232,12 +245,22 @@ def get_alerts(user_id):
 
 
 @dynatrace_bp.route("/webhook-url", methods=["GET"])
-@require_permission("connectors", "read")
+@require_permission("connectors", "write")
 def get_webhook_url(user_id):
+    """Webhook URL and secret. Requires ``connectors:write`` because it reveals the secret."""
+    creds = _get_stored_credentials(user_id)
+    if not creds:
+        return jsonify({"error": "Dynatrace not connected"}), 404
+    webhook_secret = ensure_webhook_secret(user_id, "dynatrace", creds)
+    if not webhook_secret:
+        return jsonify({"error": "Failed to create Dynatrace webhook secret"}), 500
+
     base_url = external_backend_url()
 
     return jsonify({
-        "webhookUrl": f"{base_url}/dynatrace/webhook/{user_id}",
+        "webhookUrl": webhook_url_with_secret(f"{base_url}/dynatrace/webhook/{user_id}", webhook_secret),
+        "webhookSecret": webhook_secret,
+        "headerName": WEBHOOK_HEADER_NAME,
         "suggestedPayload": json.dumps({
             "ProblemID": "{ProblemID}",
             "PID": "{PID}",
@@ -252,7 +275,7 @@ def get_webhook_url(user_id):
         "instructions": [
             "1. In Dynatrace, open the classic UI: https://<your-env-id>.live.dynatrace.com/ui/settings/integration/notifications",
             "2. Click 'Add notification' and select 'Custom Integration'",
-            "3. Paste the webhook URL above into the 'Webhook URL' field",
+            "3. Paste the webhook URL above into the 'Webhook URL' field (it includes your webhook secret; treat it like a password)",
             "4. Paste the suggested payload into the 'Custom payload' field",
             "5. Optionally assign an Alerting Profile to filter problems",
             "6. Click 'Send test notification' to verify, then save",

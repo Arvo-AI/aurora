@@ -30,6 +30,12 @@ from utils.web.public_url import external_backend_url
 from utils.auth.token_management import get_token_data, store_tokens_in_db
 from utils.log_sanitizer import sanitize
 from utils.secrets.secret_ref_utils import delete_user_secret
+from utils.web.webhook_auth import (
+    WEBHOOK_HEADER_NAME,
+    ensure_webhook_secret,
+    reject_unauthenticated_webhook,
+    webhook_url_with_secret,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -496,6 +502,7 @@ def jira_status(user_id):
         "authType": auth_type,
         "baseUrl": base_url,
         "cloudId": creds.get("cloud_id"),
+        "hasWebhookSecret": bool(creds.get("webhook_secret")),
     })
 
 
@@ -641,6 +648,12 @@ def webhook(user_id: str):
         logger.warning("[JIRA][WEBHOOK] Webhook for user %s with no Jira connection", sanitize(user_id))
         return jsonify({"error": "Jira not connected for this user"}), 404
 
+    rejection = reject_unauthenticated_webhook(
+        creds, request, provider_name="Jira", log_prefix="[JIRA][WEBHOOK]", user_id=user_id,
+    )
+    if rejection:
+        return rejection
+
     payload = request.get_json(silent=True)
     if not payload:
         return jsonify({"error": "Invalid or missing JSON payload"}), 400
@@ -691,10 +704,20 @@ def webhook(user_id: str):
 # ------------------------------------------------------------------
 
 @jira_bp.route("/webhook-url", methods=["GET"])
-@require_permission("connectors", "read")
+@require_permission("connectors", "write")
 def get_webhook_url(user_id):
-    """Return the Jira webhook URL for the authenticated user."""
+    """Return the Jira webhook URL (with its secret) for the authenticated user.
+
+    Requires ``connectors:write`` because the response reveals the webhook secret.
+    """
     import os
+    creds = get_token_data(user_id, "jira")
+    if not creds:
+        return jsonify({"error": "Jira not connected"}), 404
+    webhook_secret = ensure_webhook_secret(user_id, "jira", creds)
+    if not webhook_secret:
+        return jsonify({"error": "Failed to create Jira webhook secret"}), 500
+
     # NEXT_PUBLIC_BACKEND_URL can be a cluster-internal address that Jira
     # can't reach. Prefer the ngrok tunnel in local dev, then a public URL.
     backend_url = os.getenv("NEXT_PUBLIC_BACKEND_URL", "http://localhost:5080").rstrip("/")
@@ -705,6 +728,8 @@ def get_webhook_url(user_id):
     url = f"{base_url}/jira/webhook/{user_id}"
     # Recommended events, not an allowlist. Creates and updates start RCA when a filter matches.
     return jsonify({
-        "webhook_url": url,
+        "webhook_url": webhook_url_with_secret(url, webhook_secret),
+        "webhookSecret": webhook_secret,
+        "headerName": WEBHOOK_HEADER_NAME,
         "recommended_events": ["jira:issue_created", "jira:issue_updated"],
     })
