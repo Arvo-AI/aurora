@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Final, Literal
 
 
 class ContractError(ValueError):
@@ -233,3 +233,26 @@ class Observations:
             missing = ", ".join(self.missing_metadata)
             raise ObservationError(f"observation is missing required metadata: {missing}")
         return self
+
+
+Status = Literal["PASS", "FAIL", "INCONCLUSIVE"]
+PASS: Final[Status] = "PASS"
+FAIL: Final[Status] = "FAIL"
+INCONCLUSIVE: Final[Status] = "INCONCLUSIVE"
+
+
+@dataclass(frozen=True)
+class CheckResult:
+    """One check's status, with the evidence that supports it.
+
+    `id`, `fault` and `source` tie the result to the contract, so a report can
+    cite where the rule came from. `evidence` is the raw observation the
+    status was read from, never a summary.
+    """
+
+    id: str
+    fault: str
+    status: Status
+    reason: str
+    source: str
+    evidence: Mapping[str, Any]
