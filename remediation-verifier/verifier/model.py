@@ -1,8 +1,10 @@
-"""The frozen data model of the incident contract.
+"""The frozen data model of the contract and of the observations.
 
-These dataclasses are what the rest of the verifier receives. They are frozen
-and built only by `verifier.contract.load_contract`, so a caller can read a
-field but cannot invent one or change one after validation.
+These dataclasses are what the rest of the verifier receives. The contract
+types are built only by `verifier.contract.load_contract`; the observation
+types are built only by `verifier.observations.from_snapshot`. Both are frozen,
+so a caller can read a field but cannot invent one or change one after
+validation.
 """
 
 from __future__ import annotations
@@ -117,3 +119,116 @@ class Contract:
     source: Source
     agent: AgentView
     oracle: OracleView
+
+
+class ObservationError(ValueError):
+    """The observation document is unreadable or malformed."""
+
+
+@dataclass(frozen=True)
+class Meta:
+    """Where an observation came from and when it was captured."""
+
+    lab_commit: str
+    variant: str
+    mode: str
+    captured_at: str
+    provenance: str
+
+
+@dataclass(frozen=True)
+class ContainerStatus:
+    """One container of a pod, flattened to what the checks read."""
+
+    name: str
+    ready: bool
+    restart_count: int
+    waiting_reason: str | None = None
+    last_terminated_reason: str | None = None
+    last_exit_code: int | None = None
+
+
+@dataclass(frozen=True)
+class Pod:
+    """One pod. `last_state` is flattened to the terminated reason and exit code."""
+
+    name: str
+    uid: str
+    phase: str
+    ready: bool
+    restart_count: int
+    waiting_reason: str | None = None
+    last_terminated_reason: str | None = None
+    last_exit_code: int | None = None
+    containers: tuple[ContainerStatus, ...] = ()
+
+
+@dataclass(frozen=True)
+class Service:
+    """One service and the selector a check compares with the pods."""
+
+    name: str
+    selector: Mapping[str, str]
+    ports: tuple[int, ...] = ()
+    cluster_ip: str = ""
+
+
+@dataclass(frozen=True)
+class EndpointAddress:
+    """One address of an EndpointSlice and whether it is ready."""
+
+    address: str
+    ready: bool
+
+
+@dataclass(frozen=True)
+class EndpointSlice:
+    """One EndpointSlice for the service under test."""
+
+    name: str
+    addresses: tuple[EndpointAddress, ...] = ()
+
+
+@dataclass(frozen=True)
+class HttpProbe:
+    """One request through the service. `error` is set when it did not answer."""
+
+    route: str
+    status: int | None = None
+    body: str | None = None
+    duration_seconds: float | None = None
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class Logs:
+    """The two log streams the checks read."""
+
+    worker: tuple[str, ...] = ()
+    loadgen: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class Observations:
+    """One normalized capture, from kubectl or from a snapshot file."""
+
+    meta: Meta
+    pods: tuple[Pod, ...]
+    services: tuple[Service, ...]
+    endpoints: tuple[EndpointSlice, ...]
+    http: tuple[HttpProbe, ...]
+    logs: Logs
+    timing: Mapping[str, float]
+    missing_metadata: tuple[str, ...] = ()
+
+    @property
+    def is_complete(self) -> bool:
+        """True when every field the checks need was captured."""
+        return not self.missing_metadata
+
+    def require_complete(self) -> Observations:
+        """Return self, or raise when the capture cannot support a verdict."""
+        if self.missing_metadata:
+            missing = ", ".join(self.missing_metadata)
+            raise ObservationError(f"observation is missing required metadata: {missing}")
+        return self

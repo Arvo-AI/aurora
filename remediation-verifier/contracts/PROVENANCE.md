@@ -77,6 +77,14 @@ Two rules apply to every row below. A value with no row is not used. A quote is 
 |---|---|---|---|
 | `oracle_view.observation.window_seconds` | `scenarios/12-two-faults-oom-and-selector/README.md` | `#L202` | The runbook watches the worker through two batch cycles of five seconds. The window is 60 seconds so a rollout, one restart and two batch lines all fit inside it. |
 
+## Supporting sources
+
+The observation layer reads two things that no check consumes. They are listed here because every cited path needs a row (D20).
+
+| Used by | Path | Anchor | Quote |
+|---|---|---|---|
+| `logs.loadgen` | `app/shop.yaml` | `#L236-L243` | `name: loadgen` |
+
 ## Aurora's claim
 
 This row is a README citation, not a verifier input. It is here because the evaluator asks for the claim and its source in one place.

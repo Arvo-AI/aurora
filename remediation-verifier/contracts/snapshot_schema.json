@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Remediation verifier snapshot",
+  "description": "The shape of a snapshot document. No section is required: a missing one is reported in missing_metadata and produces INCONCLUSIVE (R11), while a present section of the wrong type is a malformed document and is rejected. Unknown keys are tolerated so an added field does not break an old reader.",
+  "type": "object",
+  "properties": {
+    "meta": {"$ref": "#/$defs/meta"},
+    "pods": {"type": "array", "items": {"$ref": "#/$defs/pod"}},
+    "services": {"type": "array", "items": {"$ref": "#/$defs/service"}},
+    "endpoints": {"type": "array", "items": {"$ref": "#/$defs/slice"}},
+    "http": {"type": "array", "items": {"$ref": "#/$defs/probe"}},
+    "logs": {"$ref": "#/$defs/logs"}
+  },
+  "$defs": {
+    "meta": {
+      "type": "object",
+      "properties": {
+        "lab_commit": {"type": "string"},
+        "variant": {"type": "string"},
+        "mode": {"type": "string"},
+        "captured_at": {"type": "string"},
+        "provenance": {"type": "string"}
+      }
+    },
+    "pod": {
+      "type": "object",
+      "properties": {
+        "name": {"type": "string"},
+        "uid": {"type": "string"},
+        "phase": {"type": "string"},
+        "ready": {"type": "boolean"},
+        "restart_count": {"type": "integer", "minimum": 0},
+        "waiting_reason": {"type": ["string", "null"]},
+        "last_terminated_reason": {"type": ["string", "null"]},
+        "last_exit_code": {"type": ["integer", "null"]},
+        "containers": {"type": "array", "items": {"$ref": "#/$defs/container"}}
+      }
+    },
+    "container": {
+      "type": "object",
+      "properties": {
+        "name": {"type": "string"},
+        "ready": {"type": "boolean"},
+        "restart_count": {"type": "integer", "minimum": 0},
+        "waiting_reason": {"type": ["string", "null"]},
+        "last_terminated_reason": {"type": ["string", "null"]},
+        "last_exit_code": {"type": ["integer", "null"]}
+      }
+    },
+    "service": {
+      "type": "object",
+      "properties": {
+        "name": {"type": "string"},
+        "selector": {"type": "object"},
+        "ports": {"type": "array", "items": {"type": "integer"}},
+        "cluster_ip": {"type": "string"}
+      }
+    },
+    "slice": {
+      "type": "object",
+      "properties": {
+        "name": {"type": "string"},
+        "addresses": {"type": "array", "items": {"$ref": "#/$defs/address"}}
+      }
+    },
+    "address": {
+      "type": "object",
+      "properties": {
+        "address": {"type": "string"},
+        "ready": {"type": "boolean"}
+      }
+    },
+    "probe": {
+      "type": "object",
+      "properties": {
+        "route": {"type": "string"},
+        "status": {"type": ["integer", "null"], "minimum": 100},
+        "body": {"type": ["string", "null"]},
+        "duration_seconds": {"type": ["number", "null"], "minimum": 0},
+        "error": {"type": ["string", "null"]}
+      }
+    },
+    "logs": {
+      "type": "object",
+      "properties": {
+        "worker": {"type": "array", "items": {"type": "string"}},
+        "loadgen": {"type": "array", "items": {"type": "string"}}
+      }
+    }
+  }
+}

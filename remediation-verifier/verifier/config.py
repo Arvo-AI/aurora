@@ -16,6 +16,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CONTRACTS_DIR = PROJECT_ROOT / "contracts"
 DEFAULT_CONTRACT_PATH = CONTRACTS_DIR / "scenario_12.yaml"
 SCHEMA_NAME = "schema.json"
+SNAPSHOT_SCHEMA_NAME = "snapshot_schema.json"
 ENCODING = "utf-8"
 
 CONTRACT_PATH_ENV = "REMEDIATION_VERIFIER_CONTRACT"
@@ -34,3 +35,8 @@ def default_contract_path() -> Path:
 def schema_path_for(contract_path: Path) -> Path:
     """Return the schema that belongs to a contract: its sibling file."""
     return contract_path.parent / SCHEMA_NAME
+
+
+def snapshot_schema_path() -> Path:
+    """Return the schema that describes a snapshot document."""
+    return CONTRACTS_DIR / SNAPSHOT_SCHEMA_NAME

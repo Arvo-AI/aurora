@@ -21,6 +21,7 @@ from typing import Any
 
 import yaml
 
+from verifier import parse
 from verifier.config import ENCODING, SCHEMA_NAME, default_contract_path, schema_path_for
 from verifier.model import (
     AgentView,
@@ -232,9 +233,7 @@ def _fix_to_dict(fix: Fix) -> dict[str, Any]:
 
 
 def _as_mapping(value: Any, where: str) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        raise ContractError(f"{where}: expected a mapping")
-    return value
+    return dict(parse.as_mapping(value, where, ContractError))
 
 
 def _mapping(node: Mapping[str, Any], key: str, where: str) -> dict[str, Any]:
@@ -247,51 +246,31 @@ def _optional_mapping(node: Mapping[str, Any], key: str, where: str) -> Mapping[
 
 
 def _sequence(node: Mapping[str, Any], key: str, where: str) -> list[Any]:
-    value = node.get(key)
-    if not isinstance(value, list):
-        raise ContractError(f"{where}.{key}: expected a list")
-    return value
+    return parse.as_list(node.get(key), f"{where}.{key}", ContractError)
 
 
 def _items_of(node: Mapping[str, Any], key: str, where: str) -> list[str]:
-    return [_as_text(value, f"{where}.{key}") for value in _sequence(node, key, where)]
-
-
-def _as_text(value: Any, where: str) -> str:
-    if not isinstance(value, str):
-        raise ContractError(f"{where}: expected a string")
-    return value
+    return parse.text_list(_sequence(node, key, where), f"{where}.{key}", ContractError)
 
 
 def _text(node: Mapping[str, Any], key: str, where: str) -> str:
-    return _as_text(node.get(key), f"{where}.{key}")
+    return parse.required(node, key, where, ContractError)
 
 
 def _optional_text(node: Mapping[str, Any], key: str, where: str) -> str | None:
-    value = node.get(key)
-    if value is None:
-        return None
-    return _as_text(value, f"{where}.{key}")
+    return parse.optional_text(node.get(key), f"{where}.{key}", ContractError)
 
 
 def _integer(node: Mapping[str, Any], key: str, where: str) -> int:
-    value = node.get(key)
-    if not isinstance(value, int) or isinstance(value, bool):
+    value = parse.optional_int(node.get(key), f"{where}.{key}", ContractError)
+    if value is None:
         raise ContractError(f"{where}.{key}: expected an integer")
     return value
 
 
 def _optional_int(node: Mapping[str, Any], key: str, where: str) -> int | None:
-    value = node.get(key)
-    if value is None:
-        return None
-    return _integer(node, key, where)
+    return parse.optional_int(node.get(key), f"{where}.{key}", ContractError)
 
 
 def _optional_number(node: Mapping[str, Any], key: str, where: str) -> float | None:
-    value = node.get(key)
-    if value is None:
-        return None
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        raise ContractError(f"{where}.{key}: expected a number")
-    return float(value)
+    return parse.optional_number(node.get(key), f"{where}.{key}", ContractError)

@@ -23,6 +23,7 @@ PROJECT_DIR = Path(__file__).resolve().parent.parent
 CONTRACTS_DIR = PROJECT_DIR / "contracts"
 CONTRACT_FILE = CONTRACTS_DIR / "scenario_12.yaml"
 SCHEMA_FILE = CONTRACTS_DIR / "schema.json"
+SNAPSHOT_SCHEMA_FILE = CONTRACTS_DIR / "snapshot_schema.json"
 PROVENANCE_FILE = CONTRACTS_DIR / "PROVENANCE.md"
 DECISIONS_FILE = CONTRACTS_DIR / "DECISIONS.md"
 
@@ -79,7 +80,13 @@ def cited_paths(oracle: dict[str, Any]) -> set[str]:
 
 class TestContractFile:
     def test_the_frozen_records_are_present(self) -> None:
-        for path in (CONTRACT_FILE, SCHEMA_FILE, PROVENANCE_FILE, DECISIONS_FILE):
+        for path in (
+            CONTRACT_FILE,
+            SCHEMA_FILE,
+            SNAPSHOT_SCHEMA_FILE,
+            PROVENANCE_FILE,
+            DECISIONS_FILE,
+        ):
             assert path.is_file(), f"missing {path.relative_to(PROJECT_DIR)}"
 
     def test_the_contract_matches_the_schema(self) -> None:
@@ -290,7 +297,9 @@ class TestDecisions:
 
     def test_the_risky_choices_are_frozen(self) -> None:
         decisions = read_text(DECISIONS_FILE)
-        for identifier in ("D2", "D5", "D11", "D12", "D23", "D24", "D27"):
+        frozen = ("D2", "D5", "D11", "D12", "D23", "D24", "D27")
+        observation = ("D29", "D30", "D31", "D32", "D33")
+        for identifier in frozen + observation:
             assert identifier in decisions, f"{identifier} is not recorded"
 
     def test_the_resolved_tool_versions_are_recorded(self) -> None:
