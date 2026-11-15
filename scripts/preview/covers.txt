@@ -1,0 +1,26 @@
+# What a preview run actually boots, as path patterns, one per line.
+#
+# Aurora compares a pull request's changed files against this list and reports
+# the ones outside it, so a green run is never read as "everything was tested".
+# A change to the Helm chart, for example, passes the preview untouched because
+# the preview runs on Docker Compose and never renders the chart.
+#
+# "Covered" means built into, or started by, the preview stack. It does not
+# mean every line is exercised.
+#
+# Pattern rules: a pattern ending in /** covers everything under that
+# directory; anything else is matched as a shell-style glob.
+
+# Built into the images the stack runs
+server/**
+client/**
+
+# The stack definition and the config mounted into it
+docker-compose.prod-local.yml
+.env.example
+config/**
+
+# The scripts that boot and check the stack
+scripts/preview/**
+scripts/generate-local-secrets.sh
+scripts/vault-init-persistent.sh

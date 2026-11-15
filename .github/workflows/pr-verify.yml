@@ -182,11 +182,13 @@ jobs:
           done
 
       - name: Boot the stack
+        id: boot
         env:
           PREVIEW_BUILD: "0"
         run: scripts/preview/up.sh
 
       - name: Smoke checks
+        id: smoke
         run: scripts/preview/smoke.sh
 
       - name: Set up Node.js
@@ -202,6 +204,7 @@ jobs:
           npx playwright install --with-deps chromium
 
       - name: Browser smoke test
+        id: browser
         working-directory: client
         env:
           CI: "true"
@@ -232,6 +235,31 @@ jobs:
             client/tests/playwright-report/
             client/tests/test-results/
           if-no-files-found: ignore
+          retention-days: 14
+
+      # The machine-readable result. It goes up as its own small artifact so
+      # Aurora can fetch a few kilobytes instead of every log and trace. Aurora
+      # pulls it with its GitHub App when the run finishes; this workflow sends
+      # nothing anywhere and still needs no secrets.
+      - name: Build verification report
+        if: always()
+        env:
+          BOOT_OUTCOME: ${{ steps.boot.outcome }}
+          SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
+          BROWSER_OUTCOME: ${{ steps.browser.outcome }}
+        run: |
+          python3 scripts/preview/report.py \
+            --boot-outcome "$BOOT_OUTCOME" \
+            --smoke-outcome "$SMOKE_OUTCOME" \
+            --browser-outcome "$BROWSER_OUTCOME"
+
+      - name: Upload verification report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: aurora-verification
+          path: preview-evidence/verification.json
+          if-no-files-found: warn
           retention-days: 14
 
       # The runner is thrown away regardless. Tearing down explicitly keeps
