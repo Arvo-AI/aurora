@@ -29,6 +29,7 @@ ROUTE = "http://frontend.shop.svc.cluster.local/api/items"
 WORKER_LOG = "processed batch of 2500 items"
 LOADGEN_LOG = "GET /api/items -> 503"
 
+DEPLOYMENT_ARGS = ["-n", "shop", "get", "deployment", "worker"]
 PODS_ARGS = ["-n", "shop", "get", "pods", "-l", "app=worker"]
 SERVICE_ARGS = ["-n", "shop", "get", "service", "frontend"]
 SLICE_ARGS = ["-n", "shop", "get", "endpointslices", "-l", "kubernetes.io/service-name=frontend"]
@@ -50,6 +51,10 @@ ENDPOINTS_PAYLOAD = json.loads(
     '{"addresses": ["10.244.0.5"], "conditions": {"ready": false}},'
     '{"addresses": ["10.244.0.6"], "conditions": {"ready": true}}]}]}'
 )
+DEPLOYMENT_PAYLOAD = json.loads(
+    '{"metadata": {"name": "worker"}, "spec": {"template": {"spec": {"containers": ['
+    '{"name": "worker", "env": [{"name": "BATCH_SIZE", "value": "2500"}]}]}}}}'
+)
 
 
 class FakeKubectl:
@@ -58,6 +63,7 @@ class FakeKubectl:
     def __init__(self) -> None:
         self.get_calls: list[list[str]] = []
         self.text_calls: list[list[str]] = []
+        self.deployment: dict[str, Any] = copy.deepcopy(DEPLOYMENT_PAYLOAD)
 
     def get(self, args: list[str]) -> dict[str, Any]:
         self.get_calls.append(list(args))
@@ -65,6 +71,8 @@ class FakeKubectl:
             return copy.deepcopy(PODS_PAYLOAD)
         if "service" in args:
             return copy.deepcopy(SERVICE_PAYLOAD)
+        if "deployment" in args:
+            return copy.deepcopy(self.deployment)
         return copy.deepcopy(ENDPOINTS_PAYLOAD)
 
     def text(self, args: list[str]) -> str:
@@ -157,7 +165,7 @@ def test_the_worker_and_loadgen_logs_are_captured(capture: Capture) -> None:
 
 def test_every_collection_phase_is_timed(capture: Capture) -> None:
     timing = capture.observations.timing
-    assert set(timing) == {"pods", "services", "endpoints", "http", "logs"}
+    assert set(timing) == {"deployment", "pods", "services", "endpoints", "http", "logs"}
     assert all(value >= 0 for value in timing.values())
 
 
@@ -184,13 +192,33 @@ def test_the_meta_marks_a_live_capture(capture: Capture) -> None:
     assert meta.captured_at == CAPTURED_AT
 
 
-def test_the_kubectl_calls_are_the_five_documented_ones(capture: Capture) -> None:
-    assert len(capture.kubectl.get_calls) == 3
-    for expected in (PODS_ARGS, SERVICE_ARGS, SLICE_ARGS):
+def test_the_kubectl_calls_are_the_six_documented_ones(capture: Capture) -> None:
+    assert len(capture.kubectl.get_calls) == 4
+    for expected in (DEPLOYMENT_ARGS, PODS_ARGS, SERVICE_ARGS, SLICE_ARGS):
         assert expected in capture.kubectl.get_calls
     assert len(capture.kubectl.text_calls) == 2
     for expected in (WORKER_LOG_ARGS, LOADGEN_LOG_ARGS):
         assert expected in capture.kubectl.text_calls
+
+
+def test_the_current_batch_size_is_captured(capture: Capture) -> None:
+    assert capture.observations.batch_size == 2500
+    assert capture.observations.is_complete
+
+
+def test_a_deployment_without_the_variable_reports_the_batch_size() -> None:
+    kubectl = FakeKubectl()
+    kubectl.deployment = {"spec": {"template": {"spec": {"containers": [{"name": "worker"}]}}}}
+    observations = from_live(
+        load_contract(),
+        VARIANT,
+        kubectl=kubectl,
+        probe=FakeProbe(),
+        sleep=FakeSleep(),
+        captured_at=CAPTURED_AT,
+    )
+    assert observations.batch_size is None
+    assert "batch_size" in observations.missing_metadata
 
 
 def test_three_probes_are_taken_with_the_route_and_the_timeout(capture: Capture) -> None:

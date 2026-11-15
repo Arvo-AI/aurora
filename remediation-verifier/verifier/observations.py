@@ -76,6 +76,7 @@ def from_snapshot(source: Path | str | Mapping[str, Any]) -> Observations:
         endpoints=_endpoints(document, missing),
         http=_http(document, missing),
         logs=_logs(document, missing),
+        batch_size=_batch_size(document, missing),
         timing={},
         missing_metadata=tuple(dict.fromkeys(missing)),
     )
@@ -103,6 +104,7 @@ def snapshot_document(observations: Observations) -> dict[str, Any]:
         "endpoints": [_as_dict(slice_) for slice_ in observations.endpoints],
         "http": [_as_dict(probe) for probe in observations.http],
         "logs": _as_dict(observations.logs),
+        "worker": {"batch_size": observations.batch_size},
     }
     return cast(dict[str, Any], _json_ready(document))
 
@@ -300,6 +302,19 @@ def _logs(document: Mapping[str, Any], missing: list[str]) -> Logs:
         worker=tuple(parse.text_list(raw.get("worker", []), "$.logs.worker", ObservationError)),
         loadgen=tuple(parse.text_list(raw.get("loadgen", []), "$.logs.loadgen", ObservationError)),
     )
+
+
+def _batch_size(document: Mapping[str, Any], missing: list[str]) -> int | None:
+    """Read the worker's current BATCH_SIZE, or report that it was not captured."""
+    if "worker" not in document:
+        missing.append("batch_size")
+        return None
+    raw = _as_mapping(document["worker"], "$.worker")
+    value = _optional_int(raw.get("batch_size"), "$.worker.batch_size")
+    if value is None or value <= 0:
+        missing.append("batch_size")
+        return None
+    return value
 
 
 def _section(document: Mapping[str, Any], key: str, missing: list[str]) -> list[Mapping[str, Any]]:

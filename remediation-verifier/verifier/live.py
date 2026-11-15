@@ -59,6 +59,10 @@ def from_live(
     phases: dict[str, float] = dict(timing or {})
 
     started = time.monotonic()
+    batch_size = _batch_size_of(runner, worker)
+    phases["deployment"] = _elapsed(started)
+
+    started = time.monotonic()
     pods = _pods_of(runner, worker)
     phases["pods"] = _elapsed(started)
 
@@ -94,6 +98,7 @@ def from_live(
         "endpoints": endpoints,
         "http": http,
         "logs": logs,
+        "worker": {"batch_size": batch_size},
     }
     parsed = from_snapshot(document)
     LOGGER.debug("captured live observation for %s with %d pods", variant, len(parsed.pods))
@@ -148,6 +153,24 @@ def normalize_endpoints(items: Sequence[Any]) -> list[dict[str, Any]]:
 def normalize_logs(text: str) -> list[str]:
     """Split kubectl log output into lines, keeping empty output empty."""
     return text.splitlines()
+
+
+def _batch_size_of(runner: Kubectl, worker: Fault) -> int | None:
+    """Read BATCH_SIZE from the worker Deployment, the source the contract names."""
+    if not worker.deployment:
+        raise LiveError("the worker fault declares no deployment")
+    document = runner.get(["-n", worker.namespace, "get", "deployment", worker.deployment])
+    template = _mapping(_mapping(document.get("spec")).get("template"))
+    pod_spec = _mapping(template.get("spec"))
+    for container in _sequence(pod_spec.get("containers")):
+        node = _mapping(container)
+        if worker.container and node.get("name") != worker.container:
+            continue
+        for variable in _sequence(node.get("env")):
+            entry = _mapping(variable)
+            if entry.get("name") == "BATCH_SIZE":
+                return _positive_int(entry.get("value"))
+    return None
 
 
 def _pods_of(runner: Kubectl, worker: Fault) -> list[dict[str, Any]]:
@@ -296,3 +319,14 @@ def _text(value: Any) -> str:
 
 def _number(value: Any) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def _positive_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if isinstance(value, str) and value.isdigit():
+        parsed = int(value)
+        return parsed if parsed > 0 else None
+    return None

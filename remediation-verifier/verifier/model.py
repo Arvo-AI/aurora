@@ -219,6 +219,7 @@ class Observations:
     http: tuple[HttpProbe, ...]
     logs: Logs
     timing: Mapping[str, float]
+    batch_size: int | None = None
     missing_metadata: tuple[str, ...] = ()
 
     @property

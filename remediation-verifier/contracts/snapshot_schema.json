@@ -9,9 +9,16 @@
     "services": {"type": "array", "items": {"$ref": "#/$defs/service"}},
     "endpoints": {"type": "array", "items": {"$ref": "#/$defs/slice"}},
     "http": {"type": "array", "items": {"$ref": "#/$defs/probe"}},
-    "logs": {"$ref": "#/$defs/logs"}
+    "logs": {"$ref": "#/$defs/logs"},
+    "worker": {"$ref": "#/$defs/worker"}
   },
   "$defs": {
+    "worker": {
+      "type": "object",
+      "properties": {
+        "batch_size": {"type": ["integer", "null"], "minimum": 1}
+      }
+    },
     "meta": {
       "type": "object",
       "properties": {

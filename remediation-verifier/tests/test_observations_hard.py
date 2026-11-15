@@ -57,6 +57,7 @@ def document():
         "services": [{"name": "frontend", "selector": {"app": "frontend"}, "ports": [80]}],
         "endpoints": [{"name": "s", "addresses": [{"address": "10.244.0.5", "ready": False}]}],
         "http": [{"route": ROUTE, "status": 503, "body": "", "error": None}],
+        "worker": {"batch_size": 2500},
         "logs": {"worker": ["processed batch of 2500 items"]},
     }
 
@@ -68,6 +69,9 @@ CASES = [
     pytest.param("http", 3, RAISES, id="http-not-a-list"),
     pytest.param("logs", [], RAISES, id="logs-not-an-object"),
     pytest.param("meta", [], RAISES, id="meta-not-an-object"),
+    pytest.param("worker", [], RAISES, id="worker-not-an-object"),
+    pytest.param("worker.batch_size", 0, RAISES, id="batch-size-zero"),
+    pytest.param("worker.batch_size", "500", RAISES, id="batch-size-string"),
     pytest.param("pods.0.name", MISSING, RAISES, id="pod-name-missing"),
     pytest.param("pods.0.name", 7, RAISES, id="pod-name-not-a-string"),
     pytest.param("pods.0.containers.0.name", MISSING, RAISES, id="container-name-missing"),
@@ -175,7 +179,15 @@ class TestFilesAndWriting:
         assert text == json.dumps(json.loads(text), indent=2, sort_keys=True) + "\n"
         assert "timing" not in text and from_snapshot(path).is_complete
         written = snapshot_document(original)
-        assert set(written) == {"meta", "pods", "services", "endpoints", "http", "logs"}
+        assert set(written) == {
+            "meta",
+            "pods",
+            "services",
+            "endpoints",
+            "http",
+            "logs",
+            "worker",
+        }
         first, second = to_snapshot(original, tmp_path / "a"), to_snapshot(original, tmp_path / "b")
         assert first.read_bytes() == second.read_bytes()
         restored = from_snapshot(first)
@@ -193,6 +205,10 @@ class TestFilesAndWriting:
 
 SERVICE = {"metadata": {"name": "frontend"}, "spec": {"selector": {"app": "frontend"}, "ports": []}}
 OK_PROBE = {"status": 200, "body": "{}", "error": None}
+DEPLOYMENT = json.loads(
+    '{"spec": {"template": {"spec": {"containers": ['
+    '{"name": "worker", "env": [{"name": "BATCH_SIZE", "value": "500"}]}]}}}}'
+)
 
 
 def kubectl_pods(*statuses):
@@ -217,6 +233,8 @@ class FakeKubectl:
             return copy.deepcopy(self.pods)
         if "service" in args:
             return copy.deepcopy(SERVICE)
+        if "deployment" in args:
+            return copy.deepcopy(DEPLOYMENT)
         return copy.deepcopy(self.endpoints or kubectl_endpoints(("10.244.0.5", False)))
 
     def text(self, args):

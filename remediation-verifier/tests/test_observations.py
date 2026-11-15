@@ -88,6 +88,7 @@ def canonical() -> dict[str, Any]:
             "worker": ["processed batch of 2500 items"],
             "loadgen": ["GET /api/items -> 503"],
         },
+        "worker": {"batch_size": 2500},
     }
 
 
@@ -123,6 +124,11 @@ class TestReading:
         del data["pods"][0]["restart_count"]
         del data["pods"][0]["containers"][0]["restart_count"]
         assert "restart_counts" in from_snapshot(data).missing_metadata
+
+    def test_a_document_without_the_worker_section_reports_the_batch_size(self) -> None:
+        data = fresh()
+        del data["worker"]
+        assert "batch_size" in from_snapshot(data).missing_metadata
 
     @pytest.mark.parametrize("field", ["lab_commit", "variant"])
     def test_an_absent_identity_field_is_named(self, field: str) -> None:
@@ -191,9 +197,17 @@ class TestReading:
 
 
 class TestWriting:
-    def test_the_document_has_the_six_sections_and_no_timing(self) -> None:
+    def test_the_document_has_the_seven_sections_and_no_timing(self) -> None:
         written = snapshot_document(from_snapshot(fresh()))
-        assert set(written) == {"meta", "pods", "services", "endpoints", "http", "logs"}
+        assert set(written) == {
+            "meta",
+            "pods",
+            "services",
+            "endpoints",
+            "http",
+            "logs",
+            "worker",
+        }
         assert "timing" not in json.dumps(written)
         assert written["meta"]["mode"] == MODE_SNAPSHOT
 

@@ -298,7 +298,7 @@ class TestDecisions:
     def test_the_risky_choices_are_frozen(self) -> None:
         decisions = read_text(DECISIONS_FILE)
         frozen = ("D2", "D5", "D11", "D12", "D23", "D24", "D27")
-        observation = ("D29", "D30", "D31", "D32", "D33")
+        observation = ("D29", "D30", "D31", "D32", "D33", "D34")
         for identifier in frozen + observation:
             assert identifier in decisions, f"{identifier} is not recorded"
 
