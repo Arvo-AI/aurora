@@ -248,7 +248,8 @@ def _metrics_table(metrics: Mapping[str, Any]) -> list[str]:
     detection = metrics["fault_detection"]
     weak = metrics["weak_checks"]
     remediation = metrics["remediation"]
-    denominator = f"{remediation['runs']} remediation runs"
+    runs = remediation["runs"]
+    denominator = f"{runs} remediation run" if runs == 1 else f"{runs} remediation runs"
     rows = ["| Metric | Value | Denominator |", "|---|---|---|"]
     if detection is None:
         rows.append("| Fault detection | not measured | no baseline |")
