@@ -704,6 +704,13 @@ def login():
 
                 record_audit_event(_audit_org, _audit_uid, "login", "session", _audit_uid, {"email": email}, request)
 
+                # Stamp the sign-in time so admins can spot dormant accounts.
+                cursor.execute(
+                    "UPDATE users SET last_login_at = NOW() WHERE id = %s",
+                    (user_id,),
+                )
+                conn.commit()
+
                 return jsonify({
                     "id": user_id,
                     "email": user_email,
