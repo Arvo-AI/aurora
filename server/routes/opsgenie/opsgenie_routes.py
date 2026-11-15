@@ -8,6 +8,7 @@ from flask import Blueprint, jsonify, request
 
 from routes.opsgenie.config import OPSGENIE_TIMEOUT, REGION_URLS
 from routes.opsgenie.tasks import process_opsgenie_event
+from routes.webhook_secret_routes import register_webhook_secret_routes
 from utils.db.connection_pool import db_pool
 from utils.web.public_url import external_backend_url
 from utils.log_sanitizer import sanitize
@@ -520,8 +521,8 @@ def connect(user_id):
             "site_url": site_url,
             "validated_at": datetime.now(timezone.utc).isoformat(),
         }
-        token_payload = with_webhook_secret(token_payload, _get_stored_opsgenie_credentials(user_id))
         try:
+            token_payload = with_webhook_secret(user_id, "opsgenie", token_payload)
             store_tokens_in_db(user_id, token_payload, "opsgenie", schedule_prediscovery=True)
             logger.info("[OPSGENIE] Stored JSM credentials for user %s (site=%s)", user_id, site_url)
         except Exception as exc:
@@ -565,9 +566,9 @@ def connect(user_id):
         "plan": account_data.get("plan", {}).get("name") if isinstance(account_data.get("plan"), dict) else None,
         "validated_at": datetime.now(timezone.utc).isoformat(),
     }
-    token_payload = with_webhook_secret(token_payload, _get_stored_opsgenie_credentials(user_id))
 
     try:
+        token_payload = with_webhook_secret(user_id, "opsgenie", token_payload)
         store_tokens_in_db(user_id, token_payload, "opsgenie", schedule_prediscovery=True)
         logger.info("[OPSGENIE] Stored credentials for user %s (region=%s)", sanitize(user_id), sanitize(region))
     except Exception as exc:
@@ -790,3 +791,6 @@ def list_ingested_events(user_id):
     except Exception as exc:
         logger.exception("[OPSGENIE] Failed to list ingested events for user %s: %s", user_id, exc)
         return jsonify({"error": "Failed to load OpsGenie webhook events"}), 500
+
+
+register_webhook_secret_routes(opsgenie_bp, "opsgenie", "OpsGenie")

@@ -22,6 +22,7 @@ from utils.auth.stateless_auth import (
     store_org_preference,
 )
 from utils.log_sanitizer import sanitize
+from routes.webhook_secret_routes import register_webhook_secret_routes
 from routes.pagerduty.oauth_utils import get_auth_url, exchange_code_for_token, refresh_and_store_if_needed
 from routes.pagerduty.pagerduty_helpers import (
     PD_READ_ONLY_ROLES,
@@ -190,14 +191,15 @@ def pagerduty_connect(user_id):
         logger.warning("[PAGERDUTY] Token validation failed for user %s: %s", user_id, e)
         return error_response(e)
 
-    token_data = with_webhook_secret({
+    token_data = {
         "auth_type": "api_token",
         "api_token": token,
         "display_name": display_name,
         **token_info
-    }, get_token_data(user_id, "pagerduty"))
+    }
 
     try:
+        token_data = with_webhook_secret(user_id, "pagerduty", token_data)
         store_tokens_in_db(user_id, token_data, "pagerduty", schedule_prediscovery=True)
     except Exception:
         logger.exception("[PAGERDUTY] Failed to store token data for user %s", user_id)
@@ -290,7 +292,7 @@ def oauth_callback():
             **token_info
         }
         
-        oauth_token_data = with_webhook_secret(oauth_token_data, get_token_data(user_id, "pagerduty"))
+        oauth_token_data = with_webhook_secret(user_id, "pagerduty", oauth_token_data)
         store_tokens_in_db(user_id, oauth_token_data, "pagerduty", schedule_prediscovery=True)
         # A reconnect without incidents.write must not leave the toggle on
         try:
@@ -470,3 +472,6 @@ def webhook(user_id: str):
     return jsonify({"received": True})
 
 
+
+
+register_webhook_secret_routes(pagerduty_bp, "pagerduty", "PagerDuty")

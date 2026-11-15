@@ -7,6 +7,7 @@ import requests
 from flask import Blueprint, jsonify, request
 
 from routes.splunk.tasks import process_splunk_alert
+from routes.webhook_secret_routes import register_webhook_secret_routes
 from utils.db.connection_pool import db_pool
 from utils.web.public_url import external_backend_url
 from utils.auth.stateless_auth import (
@@ -21,6 +22,7 @@ from utils.auth.token_management import get_token_data
 from utils.secrets.secret_ref_utils import delete_user_secret
 from utils.splunk_accounts import (
     account_allowed,
+    accounts_from_creds,
     account_id_for_url,
     account_summary,
     find_account,
@@ -294,7 +296,8 @@ def connect(user_id):
 @require_permission("connectors", "read")
 def status(user_id):
     """Check every connected Splunk. One dead token does not hide the others."""
-    accounts = list_splunk_accounts(user_id)
+    creds = get_token_data(user_id, "splunk")
+    accounts = accounts_from_creds(creds) if isinstance(creds, dict) else []
     if not accounts:
         return jsonify({"connected": False, "accounts": []})
 
@@ -305,7 +308,7 @@ def status(user_id):
         logger.warning("[SPLUNK] Could not sync connection rows for user %s", hash_for_log(user_id))
 
     payload = _connected_payload(user_id, accounts)
-    payload["hasWebhookSecret"] = bool(get_token_data(user_id, "splunk").get("webhook_secret"))
+    payload["hasWebhookSecret"] = bool(creds.get("webhook_secret"))
     return jsonify(payload)
 
 
@@ -380,12 +383,13 @@ def alert_webhook(user_id: str):
         return jsonify({"error": "user_id is required"}), 400
 
     # Check if user has Splunk connected
-    if not list_splunk_accounts(user_id):
+    creds = get_token_data(user_id, "splunk")
+    if not isinstance(creds, dict) or not accounts_from_creds(creds):
         logger.warning("[SPLUNK] Webhook received for user %s with no Splunk connection", sanitize(user_id))
         return jsonify({"error": "Splunk not connected for this user"}), 404
 
     rejection = reject_unauthenticated_webhook(
-        get_token_data(user_id, "splunk"), request, provider_name="Splunk", log_prefix="[SPLUNK]", user_id=user_id,
+        creds, request, provider_name="Splunk", log_prefix="[SPLUNK]", user_id=user_id,
     )
     if rejection:
         return rejection
@@ -550,3 +554,6 @@ def update_rca_settings(user_id):
         "success": True,
         "rcaEnabled": rca_enabled,
     })
+
+
+register_webhook_secret_routes(splunk_bp, "splunk", "Splunk")

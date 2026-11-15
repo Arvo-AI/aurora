@@ -13,6 +13,7 @@ from connectors.atlassian_auth.auth import refresh_access_token
 from connectors.jira_connector.client import JiraClient
 from connectors.jira_connector.adf_converter import markdown_to_adf, text_to_adf
 from routes.jira.field_options import status_names, unique_names
+from routes.webhook_secret_routes import register_webhook_secret_routes
 from routes.jira.rca_filters import (
     PROJECT_KEY_RE as _PROJECT_KEY_RE,
     decide_webhook,
@@ -733,3 +734,6 @@ def get_webhook_url(user_id):
         "headerName": WEBHOOK_HEADER_NAME,
         "recommended_events": ["jira:issue_created", "jira:issue_updated"],
     })
+
+
+register_webhook_secret_routes(jira_bp, "jira", "Jira")

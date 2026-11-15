@@ -6,6 +6,7 @@ import requests
 from flask import Blueprint, jsonify, request
 
 from routes.datadog.tasks import process_datadog_event
+from routes.webhook_secret_routes import register_webhook_secret_routes
 from utils.db.connection_pool import db_pool
 from utils.web.public_url import external_backend_url
 from utils.log_sanitizer import sanitize, hash_for_log
@@ -373,7 +374,11 @@ def list_datadog_accounts(user_id: str) -> list:
     with org count. Upgrade path is user_connections rows plus one Vault secret
     per account.
     """
-    creds = _get_stored_datadog_credentials(user_id)
+    return _accounts_from_creds(_get_stored_datadog_credentials(user_id))
+
+
+def _accounts_from_creds(creds: Optional[Dict[str, Any]]) -> list:
+    """The account list inside one stored Datadog blob (see list_datadog_accounts)."""
     if not creds:
         return []
     accounts = creds.get("accounts")
@@ -440,7 +445,7 @@ def _store_accounts(user_id: str, accounts: list, schedule_prediscovery=None) ->
     stored["accounts"] = accounts
     # The webhook secret lives on the blob, not on an account, so re-saving the
     # list (connect, removing one org) must carry it over.
-    stored = with_webhook_secret(stored, _get_stored_datadog_credentials(user_id))
+    stored = with_webhook_secret(user_id, "datadog", stored)
     store_tokens_in_db(user_id, stored, "datadog", schedule_prediscovery=schedule_prediscovery)
 
 
@@ -569,7 +574,8 @@ def connect(user_id):
 @datadog_bp.route("/status", methods=["GET"])
 @require_permission("connectors", "read")
 def status(user_id):
-    accounts = list_datadog_accounts(user_id)
+    creds = _get_stored_datadog_credentials(user_id) or {}
+    accounts = _accounts_from_creds(creds)
     if not accounts:
         return jsonify({"connected": False, "accounts": []})
 
@@ -590,7 +596,7 @@ def status(user_id):
         "validatedAt": primary.get("validated_at"),
         "label": primary_summary["label"],
         "accounts": summaries,
-        "hasWebhookSecret": bool((_get_stored_datadog_credentials(user_id) or {}).get("webhook_secret")),
+        "hasWebhookSecret": bool(creds.get("webhook_secret")),
     }
 
     if not any_valid:
@@ -905,3 +911,6 @@ def webhook_url(user_id):
         "instructions": instructions,
         "perOrganization": True,
     })
+
+
+register_webhook_secret_routes(datadog_bp, "datadog", "Datadog")

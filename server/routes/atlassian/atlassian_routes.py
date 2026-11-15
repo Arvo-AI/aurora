@@ -48,7 +48,7 @@ _WEBHOOK_PROVIDERS = {"jira", "opsgenie"}
 def _store_connection(user_id: str, payload: Dict[str, Any], provider: str) -> None:
     """Store credentials, carrying over the webhook secret so a reconnect keeps the vendor's webhook working."""
     if provider in _WEBHOOK_PROVIDERS:
-        payload = with_webhook_secret(payload, get_token_data(user_id, provider))
+        payload = with_webhook_secret(user_id, provider, payload)
     store_tokens_in_db(user_id, payload, provider, schedule_prediscovery=True)
 
 

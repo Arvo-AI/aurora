@@ -202,7 +202,7 @@ def store_splunk_accounts(
     """
     if not accounts:
         raise ValueError("no splunk accounts")
-    from utils.auth.token_management import get_token_data, store_tokens_in_db
+    from utils.auth.token_management import store_tokens_in_db
     from utils.web.webhook_auth import with_webhook_secret
 
     records = [_normalize_account(a) for a in accounts]
@@ -213,7 +213,7 @@ def store_splunk_accounts(
     stored["accounts"] = records
     # The webhook secret lives on the blob, not on an instance, so re-saving the
     # list (connect, removing one instance) must carry it over.
-    stored = with_webhook_secret(stored, get_token_data(user_id, "splunk"))
+    stored = with_webhook_secret(user_id, "splunk", stored)
     store_tokens_in_db(user_id, stored, "splunk", schedule_prediscovery=schedule_prediscovery)
     sync_splunk_connections(user_id, records)
 

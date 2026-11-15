@@ -8,6 +8,7 @@ import requests
 from flask import Blueprint, jsonify, request
 
 from routes.dynatrace.tasks import process_dynatrace_problem
+from routes.webhook_secret_routes import register_webhook_secret_routes
 from utils.db.connection_pool import db_pool
 from utils.web.public_url import external_backend_url
 from utils.log_sanitizer import sanitize
@@ -133,8 +134,8 @@ def connect(user_id):
 
     try:
         token_payload = with_webhook_secret(
+            user_id, "dynatrace",
             {"api_token": api_token, "environment_url": environment_url, "version": version},
-            _get_stored_credentials(user_id),
         )
         store_tokens_in_db(user_id, token_payload, "dynatrace", schedule_prediscovery=True)
     except Exception as exc:
@@ -300,3 +301,6 @@ def update_rca_settings(user_id):
     store_user_preference(user_id, "dynatrace_rca_enabled", rca_enabled)
     logger.info("[DYNATRACE] Updated RCA settings for user %s: rcaEnabled=%s", sanitize(user_id), rca_enabled)
     return jsonify({"success": True, "rcaEnabled": rca_enabled})
+
+
+register_webhook_secret_routes(dynatrace_bp, "dynatrace", "Dynatrace")

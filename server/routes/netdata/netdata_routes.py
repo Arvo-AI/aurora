@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional
 from flask import Blueprint, jsonify, request
 
 from routes.netdata.tasks import process_netdata_alert
+from routes.webhook_secret_routes import register_webhook_secret_routes
 from utils.db.connection_pool import db_pool
 from utils.web.public_url import external_backend_url
 from utils.log_sanitizer import sanitize
@@ -60,9 +61,9 @@ def connect(user_id):
         "base_url": base_url,
         "space_name": space_name,
     }
-    token_payload = with_webhook_secret(token_payload, _get_stored_netdata_credentials(user_id))
 
     try:
+        token_payload = with_webhook_secret(user_id, "netdata", token_payload)
         store_tokens_in_db(user_id, token_payload, "netdata", schedule_prediscovery=True)
         logger.info(f"[NETDATA] Stored credentials for user {user_id}")
     except Exception as exc:
@@ -316,3 +317,6 @@ def get_webhook_url(user_id):
         "headerName": WEBHOOK_HEADER_NAME,
         "verificationToken": verification_token,
     })
+
+
+register_webhook_secret_routes(netdata_bp, "netdata", "Netdata")

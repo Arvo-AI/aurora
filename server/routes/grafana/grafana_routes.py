@@ -1,9 +1,10 @@
 import logging
-from typing import Tuple
+from typing import Any, Dict, Tuple
 
 from flask import Blueprint, jsonify, request
 
 from routes.grafana.tasks import process_grafana_alert
+from routes.webhook_secret_routes import register_webhook_secret_routes
 from utils.db.connection_pool import db_pool
 from utils.web.public_url import external_backend_url
 from utils.log_sanitizer import sanitize
@@ -12,15 +13,25 @@ from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, validate_user_exists, set_rls_context
 from utils.web.webhook_auth import (
     WEBHOOK_HEADER_NAME,
+    ensure_webhook_secret,
     redact_webhook_headers,
     reject_unauthenticated_webhook,
+    webhook_secret_lock,
     webhook_url_with_secret,
-    with_webhook_secret,
 )
 
 logger = logging.getLogger(__name__)
 
 grafana_bp = Blueprint("grafana", __name__)
+
+# Set when the connection and its secret are created; cleared by the first
+# webhook that carries the secret, so "connected" means Grafana really reaches Aurora.
+PENDING_KEY = "awaiting_first_webhook"
+
+
+def grafana_connected(creds: Dict[str, Any]) -> bool:
+    """Connected once Grafana has delivered a webhook carrying the connection's secret."""
+    return bool(creds.get("webhook_secret")) and not creds.get(PENDING_KEY)
 
 
 def _has_grafana_row(user_id: str) -> Tuple[bool, bool]:
@@ -73,13 +84,8 @@ def _set_grafana_active(user_id: str, active: bool) -> bool:
 @grafana_bp.route("/status", methods=["GET"])
 @require_permission("connectors", "read")
 def status(user_id):
-    row_exists, is_active = _has_grafana_row(user_id)
-
-    if not row_exists or not is_active:
-        return jsonify({"connected": False})
-
     creds = get_token_data(user_id, "grafana")
-    return jsonify({"connected": True, "hasWebhookSecret": bool(creds.get("webhook_secret"))})
+    return jsonify({"connected": grafana_connected(creds), "hasWebhookSecret": bool(creds.get("webhook_secret"))})
 
 
 @grafana_bp.route("/disconnect", methods=["POST", "DELETE"])
@@ -110,7 +116,8 @@ def alert_webhook(user_id: str):
 
     Authenticated by the connection's webhook secret. A request never creates
     or re-activates a connection: that happens from the authenticated
-    webhook-url endpoint.
+    webhook-url endpoint. The first authenticated webhook (normally Grafana's
+    Test notification) completes the connection and is stored without RCA.
     """
     if not user_id:
         logger.warning("[GRAFANA] Webhook received without user_id")
@@ -124,12 +131,16 @@ def alert_webhook(user_id: str):
         logger.warning("[GRAFANA] Webhook received for user %s with no Grafana connection", sanitize(user_id))
         return jsonify({"error": "Grafana not connected for this user"}), 404
 
+    creds = get_token_data(user_id, "grafana")
     rejection = reject_unauthenticated_webhook(
-        get_token_data(user_id, "grafana"), request,
-        provider_name="Grafana", log_prefix="[GRAFANA]", user_id=user_id,
+        creds, request, provider_name="Grafana", log_prefix="[GRAFANA]", user_id=user_id,
     )
     if rejection:
         return rejection
+
+    skip_rca = bool(creds.get(PENDING_KEY))
+    if skip_rca:
+        _complete_connection(user_id)
 
     payload = request.get_json(silent=True) or {}
 
@@ -140,9 +151,24 @@ def alert_webhook(user_id: str):
         "remote_addr": request.remote_addr,
     }
 
-    process_grafana_alert.delay(payload, metadata, user_id)
+    process_grafana_alert.delay(payload, metadata, user_id, skip_rca=skip_rca)
 
     return jsonify({"received": True})
+
+
+def _complete_connection(user_id: str) -> None:
+    """Clear the pending flag after the first authenticated webhook. A failure only delays it."""
+    from utils.secrets.secret_ref_utils import get_token_owner_id
+
+    try:
+        with webhook_secret_lock(user_id, "grafana"):
+            current = get_token_data(user_id, "grafana", raise_on_error=True)
+            if current.get(PENDING_KEY):
+                completed = {k: v for k, v in current.items() if k != PENDING_KEY}
+                store_tokens_in_db(get_token_owner_id(user_id, "grafana"), completed, "grafana")
+                logger.info("[GRAFANA] Connection completed by first webhook for user %s", sanitize(user_id))
+    except Exception:
+        logger.exception("[GRAFANA] Failed to complete connection for user %s", sanitize(user_id))
 
 
 @grafana_bp.route("/alerts", methods=["GET"])
@@ -231,25 +257,21 @@ def get_webhook_url(user_id):
     """Get the webhook URL (with its secret) that should be configured in Grafana.
 
     Grafana has no API credentials to connect with, so the first call creates
-    the connection and its webhook secret. Requires ``connectors:write``
-    because the response reveals the secret.
+    a pending connection and its webhook secret; the first webhook carrying the
+    secret completes it. Requires ``connectors:write`` because the response
+    reveals the secret.
 
     When credentials are org-shared, returns the URL belonging to the token
     owner so org members see the same webhook URL without needing their own row.
     """
     from utils.secrets.secret_ref_utils import get_token_owner_id
 
-    creds = get_token_data(user_id, "grafana")
-    webhook_secret = creds.get("webhook_secret")
+    webhook_secret = ensure_webhook_secret(
+        user_id, "grafana", get_token_data(user_id, "grafana"),
+        allow_new_connection=True, new_secret_fields={PENDING_KEY: True},
+    )
     if not webhook_secret:
-        payload = with_webhook_secret(creds, None)
-        try:
-            store_tokens_in_db(get_token_owner_id(user_id, "grafana"), payload, "grafana")
-        except Exception:
-            logger.exception("[GRAFANA] Failed to create webhook secret for user %s", sanitize(user_id))
-            return jsonify({"error": "Failed to create Grafana webhook secret"}), 500
-        webhook_secret = payload["webhook_secret"]
-        logger.info("[GRAFANA] Created connection and webhook secret for user %s", sanitize(user_id))
+        return jsonify({"error": "Failed to create Grafana webhook secret"}), 500
 
     webhook_owner_id = get_token_owner_id(user_id, "grafana")
 
@@ -271,3 +293,6 @@ def get_webhook_url(user_id):
             "7. Save the contact point and add it to your notification policies"
         ]
     })
+
+
+register_webhook_secret_routes(grafana_bp, "grafana", "Grafana")

@@ -16,9 +16,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   use up the per-user RCA rate limit so real alerts went uninvestigated.
   Requests without the secret get `401`.
 - Grafana: a webhook no longer creates or re-activates a Grafana connection.
-  Opening the Grafana connector page creates it.
+  Opening the Grafana connector page creates a pending connection; it shows as
+  connected once the first webhook carrying the secret arrives (normally
+  Grafana's Test notification), and that first webhook does not start an RCA.
 - The webhook URL endpoints of these connectors need the connectors write
   permission, since they now return the secret.
+
+### Added
+- `POST /<connector>/webhook-secret/rotate` for the same nine connectors issues
+  a new webhook secret; the old one stops working immediately.
 
 ### Changed
 - **Breaking, action needed:** for each of these connectors, open its page in

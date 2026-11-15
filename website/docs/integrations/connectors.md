@@ -1155,6 +1155,7 @@ Prefer a header when the tool supports one: a query string can end up in proxy o
 
 - The secret is created when the connector is connected, and kept when you reconnect or rotate the vendor credentials, so the configured webhook keeps working.
 - Opening the webhook URL on a connector page needs the connectors **write** permission, because it reveals the secret.
+- **Rotating:** if the URL or secret leaks, `POST /<connector>/webhook-secret/rotate` (for example `/datadog/webhook-secret/rotate`, connectors write permission) issues a new secret and the old one stops working at once. Then paste the new webhook URL into the vendor.
 - **Upgrading:** connections saved before webhook secrets existed reject all alerts until you open the connector page in Aurora (which adds a secret) and paste the new webhook URL into the vendor. The server logs a warning naming the connector for each rejected alert.
 
 ### PagerDuty
@@ -1294,19 +1295,19 @@ Webhook-based connection for Grafana Cloud or self-hosted instances. No API key 
 
 #### Setup
 
-1. Open the **Grafana** integration page in Aurora (needs the connectors write permission). This creates the connection and its webhook secret
+1. Open the **Grafana** integration page in Aurora (needs the connectors write permission). This creates a pending connection and its webhook secret
 2. Copy the webhook URL shown on screen. It includes the secret, so treat it like a password
 3. In Grafana: **Alerts & IRM** > **Alerting** > **Notification Configuration** > **Contact points** > **New contact point**
    - Type: **Webhook**
    - URL: paste the Aurora webhook URL (`https://your-aurora-domain/grafana/alerts/webhook/{user_id}?secret=...`)
-4. Click **Test** to send a test notification
+4. Click **Test** to send a test notification. Aurora shows Grafana as connected once this first notification arrives with the secret; that first notification is stored but does not start an investigation
 5. Save the contact point, then add it to a notification policy under **Alerting** > **Notification Configuration** > **Notification policies**
 
 Webhooks without the secret are rejected; see [Alert webhook authentication](#alert-webhook-authentication). A webhook never creates or re-activates a Grafana connection.
 
 #### Disconnect / Reconnect
 
-Disconnecting in Aurora deactivates the connection, and incoming webhooks are rejected. Opening the Grafana page again reconnects with a **new** secret, so paste the new webhook URL into the Grafana contact point.
+Disconnecting in Aurora deactivates the connection, and incoming webhooks are rejected. To reconnect, open the Grafana page again: it shows a **new** webhook URL. Paste it into the Grafana contact point and click **Test**; Grafana shows as connected once that notification arrives.
 
 #### How Aurora Processes Grafana Webhooks
 

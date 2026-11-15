@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional
 from flask import Blueprint, jsonify, request
 
 from connectors.newrelic_connector.client import NewRelicClient, NewRelicAPIError
+from routes.webhook_secret_routes import register_webhook_secret_routes
 from utils.db.connection_pool import db_pool
 from utils.web.public_url import external_backend_url
 from utils.log_sanitizer import sanitize
@@ -150,9 +151,9 @@ def connect(user_id):
         ],
         "validated_at": datetime.now(timezone.utc).isoformat(),
     }
-    token_payload = with_webhook_secret(token_payload, _get_stored_newrelic_credentials(user_id))
 
     try:
+        token_payload = with_webhook_secret(user_id, "newrelic", token_payload)
         store_tokens_in_db(user_id, token_payload, "newrelic", schedule_prediscovery=True)
         logger.info("[NEWRELIC] Stored credentials for user %s (account=%s)", sanitize(user_id), sanitize(account_id))
     except Exception as exc:
@@ -416,3 +417,6 @@ def webhook(user_id: str):
     process_newrelic_event.delay(payload, metadata, user_id)
 
     return jsonify({"accepted": True, "issueId": str(issue_id)}), 202
+
+
+register_webhook_secret_routes(newrelic_bp, "newrelic", "New Relic")
