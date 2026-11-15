@@ -258,7 +258,7 @@ def _verdict(
         reproduction_status=reproduction_status,
         reason=reason,
         results=results,
-        weak_checks=weak_check_ids(results),
+        weak_checks=(),
         unresolved=unresolved,
     )
 

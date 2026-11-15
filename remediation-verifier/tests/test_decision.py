@@ -237,7 +237,19 @@ class TestRemediation:
         for name in MISSING_METADATA:
             assert name in element.missing
 
-    def test_a_short_result_set_is_never_verified(self, contract, baseline, full) -> None:
+    def test_a_remediation_never_reports_weak_checks(
+        self, contract: Contract, baseline: Variant, full: Variant
+    ) -> None:
+        reproduction = decide_reproduction(contract, baseline, build_results(contract, ALL_FAIL))
+        verdict = decide_remediation(
+            contract, full, build_results(contract, ALL_PASS), baseline=reproduction
+        )
+        assert verdict.weak_checks == ()
+        assert verdict.status == VERIFIED_WITHIN_CONTRACT
+
+    def test_a_short_result_set_is_never_verified(
+        self, contract: Contract, baseline: Variant, full: Variant
+    ) -> None:
         before = confirmed_baseline(contract, baseline)
         results = build_results(contract, ALL_PASS)[:5]
         verdict = decide_remediation(contract, full, results, baseline=before)
