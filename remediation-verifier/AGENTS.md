@@ -104,7 +104,7 @@ git diff --stat main...HEAD
 - LIVE and SNAPSHOT share `observations.py` and `decision.py`. SNAPSHOT never calls Kubernetes.
 - No LLM calls, no browser, no external services.
 - Shell out to `kubectl` with explicit timeouts; do not use a heavy Kubernetes client.
-- Python 3.11+, `pathlib`, type hints, dataclasses. Dependencies: `PyYAML`, `pytest`. Nothing else unless justified.
+- Python 3.11+, `pathlib`, type hints, dataclasses. Runtime dependency: `PyYAML`. Test dependency: `pytest`. Dev-only and pinned: `ruff`, `mypy` (justified in `contracts/DECISIONS.md` D12). Nothing else.
 - Deterministic output: sorted keys, stable ordering, no volatile fields in golden tests except `captured_at`.
 
 ## 7. The six checks
@@ -183,12 +183,13 @@ git diff --stat main...HEAD
 
 Update the case tracker with status and evidence path.
 
-**Commit messages:**
+**Commit messages:** Conventional Commits, as the repo history does (`fix(prediscovery): ... (#821)`), with the case tag for traceability:
 
 ```
-case-1: freeze scenario 12 contract and provenance
-case-4: add six independent checks
-case-7: add snapshot fixtures for five variants
+chore(verifier): add quality gates and make targets (case 0.5)
+feat(verifier): freeze scenario 12 contract and provenance (case 1)
+feat(verifier): add six independent checks (case 4)
+test(verifier): add snapshot fixtures for five variants (case 7)
 ```
 
 ## 12. Testing rules
@@ -206,11 +207,15 @@ case-7: add snapshot fixtures for five variants
 
 | Target | Requirement |
 |---|---|
+| `make doctor` | Report Python, PyYAML, dev tools, `kubectl`, `kind`, Docker and the lab checkout; name the supported mode. |
 | `make test` | pytest. |
+| `make lint` | `ruff check` + `ruff format --check`. |
+| `make lint-ci` | `actionlint ci/github-actions-verify.yml` (local only; not in `make ci`). |
+| `make typecheck` | `mypy verifier`. |
 | `make verify-snapshot` | No Kind, no network, <60 s, prints the five-variant table. |
 | `make verify` | Kind + pinned lab; five variants; LIVE evidence. |
 | `make capture` | LIVE run that writes the five snapshots. |
-| `make ci` | `make test && make verify-snapshot`. |
+| `make ci` | lint + typecheck + test + verify-snapshot. |
 | `make lab-pin` | Clone/checkout the pinned lab if missing. |
 | `make lab-up` | `lab.sh up` (idempotent). |
 | `make clean` | Remove generated artifacts. |
