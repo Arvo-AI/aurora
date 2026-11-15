@@ -1139,6 +1139,24 @@ Data Center short links work correctly.
 
 ## Observability Tools
 
+### Alert webhook authentication
+
+Alert webhooks from PagerDuty, Datadog, Grafana, New Relic, Netdata, Splunk, Dynatrace, OpsGenie / JSM Operations and Jira are authenticated with a **per-connection webhook secret**. The `<user_id>` in a webhook URL only says which connection an alert belongs to; it is not a credential. Requests without the right secret are rejected with `401`, before anything is stored or investigated.
+
+The webhook URL shown on each connector page already carries the secret as `?secret=...`, so pasting that URL is all most tools need. Where the tool can send headers, you can instead use the plain URL and send the secret in one of:
+
+| Location | Value |
+|----------|-------|
+| `X-Aurora-Webhook-Secret` header | the secret |
+| `Authorization` header | `Bearer <secret>` |
+| HTTP Basic auth | any username, the secret as the password |
+
+Prefer a header when the tool supports one: a query string can end up in proxy or load-balancer access logs. Treat the URL like a password.
+
+- The secret is created when the connector is connected, and kept when you reconnect or rotate the vendor credentials, so the configured webhook keeps working.
+- Opening the webhook URL on a connector page needs the connectors **write** permission, because it reveals the secret.
+- **Upgrading:** connections saved before webhook secrets existed reject all alerts until you open the connector page in Aurora (which adds a secret) and paste the new webhook URL into the vendor. The server logs a warning naming the connector for each rejected alert.
+
 ### PagerDuty
 
 OAuth 2.0 or API Token authentication.
@@ -1258,7 +1276,7 @@ organization, so organizations on different Datadog sites can coexist.
 
 1. In Datadog: **Integrations** > **Webhooks** > **+ New**
 2. Name: `aurora`
-3. URL: `https://your-aurora-domain/datadog/webhook/{user_id}`
+3. URL: the webhook URL shown on the Datadog connector page (`https://your-aurora-domain/datadog/webhook/{user_id}?secret=...`). Alternatively use the plain URL and add the header `X-Aurora-Webhook-Secret` under **Custom Headers**; see [Alert webhook authentication](#alert-webhook-authentication)
 4. In monitors, add `@webhook-aurora` to notifications
 
 :::warning One URL, every organization
@@ -1276,18 +1294,19 @@ Webhook-based connection for Grafana Cloud or self-hosted instances. No API key 
 
 #### Setup
 
-1. Open the **Grafana** integration page in Aurora
-2. Copy the webhook URL shown on screen
+1. Open the **Grafana** integration page in Aurora (needs the connectors write permission). This creates the connection and its webhook secret
+2. Copy the webhook URL shown on screen. It includes the secret, so treat it like a password
 3. In Grafana: **Alerts & IRM** > **Alerting** > **Notification Configuration** > **Contact points** > **New contact point**
    - Type: **Webhook**
-   - URL: paste the Aurora webhook URL (`https://your-aurora-domain/grafana/alerts/webhook/{user_id}`)
+   - URL: paste the Aurora webhook URL (`https://your-aurora-domain/grafana/alerts/webhook/{user_id}?secret=...`)
 4. Click **Test** to send a test notification
-5. Aurora auto-connects when it receives the test webhook
-6. Save the contact point, then add it to a notification policy under **Alerting** > **Notification Configuration** > **Notification policies**
+5. Save the contact point, then add it to a notification policy under **Alerting** > **Notification Configuration** > **Notification policies**
+
+Webhooks without the secret are rejected; see [Alert webhook authentication](#alert-webhook-authentication). A webhook never creates or re-activates a Grafana connection.
 
 #### Disconnect / Reconnect
 
-Disconnecting in Aurora deactivates the connection — incoming webhooks are rejected until the user clicks **Reconnect**. The Grafana contact point does not need to be reconfigured.
+Disconnecting in Aurora deactivates the connection, and incoming webhooks are rejected. Opening the Grafana page again reconnects with a **new** secret, so paste the new webhook URL into the Grafana contact point.
 
 #### How Aurora Processes Grafana Webhooks
 
@@ -1365,7 +1384,7 @@ All queries go through a single endpoint: `POST https://api.newrelic.com/graphql
 To receive New Relic alerts in Aurora:
 
 1. In New Relic: **Alerts > Destinations** > create a new **Webhook** destination
-2. Webhook URL: `https://your-aurora-domain/newrelic/webhook/{user_id}`
+2. Webhook URL: the URL shown on the New Relic connector page (`https://your-aurora-domain/newrelic/webhook/{user_id}?secret=...`); see [Alert webhook authentication](#alert-webhook-authentication)
 3. Under **Workflows**, create or edit a workflow
 4. Add a notification channel using the webhook destination
 5. Configure the workflow filter for the issues you want Aurora to investigate

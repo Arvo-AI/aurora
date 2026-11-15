@@ -95,6 +95,8 @@ Your Atlassian account must have access to JSM Operations on the target site. If
 
 After connecting, Aurora displays a **webhook URL** on the setup page. Configure your OpsGenie or JSM instance to send alert events to this URL for real-time alert ingestion and automatic RCA.
 
+The URL ends in `?secret=...`: that per-connection secret is what authenticates OpsGenie/JSM to Aurora, and requests without it are rejected with `401`. Treat the URL like a password. See [Alert webhook authentication](./connectors.md#alert-webhook-authentication).
+
 ### OpsGenie Webhook Setup
 
 1. In OpsGenie, go to **Settings** > **Integrations**
