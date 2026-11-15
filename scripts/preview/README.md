@@ -10,7 +10,10 @@ anything CI does can be reproduced on a laptop.
 | `up.sh` | Generates secrets, initialises Vault, starts every service, waits until the API and frontend answer |
 | `smoke.sh` | Deterministic checks: containers, health, ports, trust boundaries, a Vault round trip, a log scan |
 | `evidence.sh` | Saves container state, resource use and redacted logs to `preview-evidence/` |
+| `report.py` | Writes `preview-evidence/verification.json`, the machine-readable result Aurora reads |
 | `down.sh` | Removes the containers, the volumes and the preview env file |
+
+`covers.txt` lists the paths a preview run actually boots.
 
 ## Run it locally
 
@@ -53,3 +56,33 @@ vault-init logs and paste the token into `.env`" step of a first install.
 - `WARN` does not. It marks a check whose baseline is not clean yet, such as
   Python tracebacks during boot. Once a warning reads clean on `main`, change
   it to `FAIL` in `smoke.sh` so it cannot regress.
+
+## How Aurora picks up the result
+
+In CI, `report.py` folds the boot, smoke and browser results into one file,
+`verification.json`, and the workflow uploads it as an artifact named
+`aurora-verification`. That artifact is the whole contract:
+
+1. GitHub tells Aurora the workflow run finished (a `workflow_run` webhook).
+2. Aurora fetches the artifact with its GitHub App. CI sends Aurora nothing,
+   so the workflow needs no Aurora credentials and stays safe on fork PRs.
+3. Aurora stores the result (`verification_runs`) and posts one "Aurora
+   Verification" comment on the pull request, replacing the previous one.
+
+The comment adds two things GitHub's check list cannot:
+
+- **What the run did not exercise.** Changed files outside `covers.txt` are
+  listed, so a green run is not read as "everything was tested". A Helm values
+  change passes the preview untouched, because the preview runs on Compose.
+- **Whether the pull request changed its own checks.** Edits to the workflow
+  or to the files named in `DEFINED_BY` (`report.py`) are called out.
+
+The repo must have **Incident Prevention** switched on in Aurora's GitHub
+connector; verification uses the same toggle. The server side lives in
+`server/tasks/verification.py` and `server/services/verification/`.
+
+The report is written by the pull request's own code, so Aurora treats every
+field as untrusted: it recomputes the status, bounds sizes and escapes all
+text before posting. It cannot stop a pull request from faking its own checks,
+which is why the comment says who produced the result and flags changes to
+the checks themselves.
