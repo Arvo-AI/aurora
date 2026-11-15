@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Try a review: paste a public GitHub PR URL or any diff and get Aurora's
+  pre-merge incident-risk review with nothing connected. No GitHub install, no
+  credentials, nothing written back. The review is told it has the diff only,
+  and the result shows exactly what was read and stored.
+
 ## [1.5.24] - 2026-11-12
 
 ### Fixed
