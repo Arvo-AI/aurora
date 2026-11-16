@@ -661,9 +661,7 @@ def test_fanout_limit_still_queries_every_broker(monkeypatch, tool):
 def test_account_id_still_works_with_many_brokers(monkeypatch, tool):
     accounts = _many(tool.MAX_FANOUT + 3)
     monkeypatch.setattr(tool, "list_rabbitmq_accounts", lambda user_id: accounts)
-    import utils.rabbitmq_accounts as accounts_mod
-
-    monkeypatch.setattr(accounts_mod, "account_allowed", lambda user_id, account_id: True)
+    monkeypatch.setattr(sys.modules[account_allowed.__module__], "account_allowed", lambda user_id, account_id: True)
     monkeypatch.setattr(tool.RabbitMQClient, "overview", lambda self: {"ok": True})
 
     out = json.loads(tool.rabbitmq_get_overview(user_id=USER, account_id="broker-7"))
@@ -797,3 +795,161 @@ def test_node_summary_reports_partitions():
 
     assert summarize_node({"name": "a", "partitions": ["rabbit@b"]})["partitions"] == ["rabbit@b"]
     assert summarize_node({"name": "a"})["partitions"] == []
+
+
+# --- per-broker access on management routes ------------------------------------
+
+
+def _grant_only(monkeypatch, routes, *granted):
+    monkeypatch.setattr(routes, "account_allowed", lambda user_id, account_id: account_id in granted)
+
+
+def test_connect_cannot_overwrite_a_broker_the_caller_was_not_granted(monkeypatch, routes):
+    _fake_broker_calls(monkeypatch, routes)
+    _grant_only(monkeypatch, routes, "10.0.0.1:15672")
+    stored = []
+    monkeypatch.setattr(routes, "list_rabbitmq_accounts", lambda user_id, raise_on_error=False: [
+        _broker("10.0.0.1:15672"), _broker("10.0.0.2:15672"),
+    ])
+    monkeypatch.setattr(routes, "store_rabbitmq_accounts", lambda *args, **kwargs: stored.append(args))
+
+    with _app().test_request_context("/rabbitmq/connect", method="POST", json={
+        "url": "http://10.0.0.2:15672", "username": "monitor", "password": "new",
+    }):
+        body, status = _call(routes.connect)
+
+    assert status == 403
+    assert body["code"] == "CONNECTOR_DENIED"
+    assert stored == []
+
+
+def test_connect_may_still_add_a_new_broker_with_a_partial_grant(monkeypatch, routes):
+    _fake_broker_calls(monkeypatch, routes)
+    _grant_only(monkeypatch, routes, "10.0.0.1:15672", "10.0.0.3:15672")
+    stored = []
+    monkeypatch.setattr(routes, "list_rabbitmq_accounts", lambda user_id, raise_on_error=False: [
+        _broker("10.0.0.1:15672"), _broker("10.0.0.2:15672"),
+    ])
+    monkeypatch.setattr(routes, "store_rabbitmq_accounts", lambda *args, **kwargs: stored.append(args))
+
+    with _app().test_request_context("/rabbitmq/connect", method="POST", json={
+        "url": "http://10.0.0.3:15672", "username": "monitor", "password": "pw",
+    }):
+        body, status = _call(routes.connect)
+
+    assert status == 200
+    hidden = next(a for a in body["accounts"] if a["accountId"] == "10.0.0.2:15672")
+    assert set(hidden) == {"accountId", "name", "displayName", "allowed"}
+
+
+def test_disconnect_refuses_a_broker_the_caller_was_not_granted(monkeypatch, routes):
+    _grant_only(monkeypatch, routes, "10.0.0.1:15672")
+    stored = []
+    monkeypatch.setattr(routes, "list_rabbitmq_accounts", lambda user_id, raise_on_error=False: [
+        _broker("10.0.0.1:15672", name="prod"), _broker("10.0.0.2:15672", name="staging"),
+    ])
+    monkeypatch.setattr(routes, "store_rabbitmq_accounts", lambda *args, **kwargs: stored.append(args))
+
+    with _app().test_request_context("/rabbitmq/disconnect?account=staging", method="DELETE"):
+        body, status = _call(routes.disconnect)
+
+    assert status == 403
+    assert body["code"] == "CONNECTOR_DENIED"
+    assert stored == []
+
+
+def test_disconnect_all_keeps_brokers_the_caller_was_not_granted(monkeypatch, routes):
+    _grant_only(monkeypatch, routes, "10.0.0.1:15672")
+    stored = []
+    retired = []
+    monkeypatch.setattr(routes, "list_rabbitmq_accounts", lambda user_id, raise_on_error=False: [
+        _broker("10.0.0.1:15672"), _broker("10.0.0.2:15672"),
+    ])
+    monkeypatch.setattr(routes, "store_rabbitmq_accounts", lambda user_id, accounts, **kwargs: stored.append(accounts))
+    monkeypatch.setattr(routes, "retire_rabbitmq_connections", lambda user_id: retired.append(user_id))
+
+    with _app().test_request_context("/rabbitmq/disconnect", method="DELETE"):
+        _body, status = _call(routes.disconnect)
+
+    assert status == 200
+    assert [a["account_id"] for a in stored[0]] == ["10.0.0.2:15672"]
+    assert retired == []
+
+
+def test_unknown_broker_error_lists_only_granted_brokers(monkeypatch, routes):
+    _grant_only(monkeypatch, routes, "10.0.0.1:15672")
+    monkeypatch.setattr(routes, "list_rabbitmq_accounts", lambda user_id, raise_on_error=False: [
+        _broker("10.0.0.1:15672"), _broker("10.0.0.2:15672"),
+    ])
+    with _app().test_request_context("/rabbitmq/disconnect?account=10.9.9.9:15672", method="DELETE"):
+        body, status = _call(routes.disconnect)
+    assert status == 404
+    assert "10.0.0.2" not in body["error"]
+
+
+def test_status_hides_and_never_probes_an_ungranted_broker(monkeypatch, routes):
+    _fake_broker_calls(monkeypatch, routes)
+    _grant_only(monkeypatch, routes, "10.0.0.2:15672")
+    probed = []
+    original = routes.RabbitMQClient.whoami
+    monkeypatch.setattr(routes.RabbitMQClient, "whoami", lambda self: probed.append(self.url) or original(self))
+    monkeypatch.setattr(routes, "list_rabbitmq_accounts", lambda user_id, raise_on_error=False: [
+        _broker("10.0.0.1:15672", name="prod"), _broker("10.0.0.2:15672", name="staging"),
+    ])
+    monkeypatch.setattr(routes, "sync_rabbitmq_connections", lambda user_id, accounts: None)
+
+    with _app().test_request_context("/rabbitmq/status"):
+        body, _status = _call(routes.status)
+
+    hidden, shown = body["accounts"]
+    assert hidden == {"accountId": "10.0.0.1:15672", "name": "prod", "displayName": "prod", "allowed": False}
+    assert shown["valid"] is True
+    assert probed == ["http://10.0.0.2:15672"]
+    # The top-level fields describe the visible broker, not the hidden first one.
+    assert body["url"] == "http://10.0.0.2:15672"
+
+
+def test_status_uses_a_short_timeout(monkeypatch, routes):
+    seen = []
+    real_init = routes.RabbitMQClient.__init__
+
+    def init(self, *args, **kwargs):
+        seen.append(kwargs.get("timeout"))
+        real_init(self, *args, **kwargs)
+
+    _fake_broker_calls(monkeypatch, routes)
+    monkeypatch.setattr(routes.RabbitMQClient, "__init__", init)
+    routes._status_summary(USER, _broker("10.0.0.1:15672"))
+    assert seen == [routes._STATUS_TIMEOUT]
+
+
+def test_tool_clients_fail_fast_on_connect(tool):
+    client = tool._build_client(_broker("10.0.0.1:15672"))
+    try:
+        assert client.timeout == tool.TOOL_TIMEOUT
+        assert client.timeout[0] <= 5
+    finally:
+        client.close()
+
+
+def test_escaped_previews_stay_within_the_output_cap(monkeypatch, tool):
+    targets = [_broker(f"10.0.0.{i}:15672") for i in range(1, 4)]
+    _targets(monkeypatch, tool, targets)
+    # Quotes and backslashes double when the preview is serialized again.
+    monkeypatch.setattr(tool.RabbitMQClient, "overview", lambda self: {"blob": '\\"' * tool.MAX_OUTPUT_CHARS})
+
+    text = tool.rabbitmq_get_overview(user_id=USER)
+    out = json.loads(text)
+
+    assert len(text) <= tool.MAX_OUTPUT_CHARS
+    assert "results_by_account" in out
+    assert len(out["results_by_account"]) == 3
+    assert all(item["truncated"] for item in out["results_by_account"].values())
+
+
+def test_an_empty_online_list_is_kept():
+    from connectors.rabbitmq_connector.client import summarize_queue
+
+    summary = summarize_queue({"name": "q", "type": "quorum", "members": ["a", "b", "c"], "online": []})
+    assert summary["online"] == []
+    assert "leader" not in summarize_queue({"name": "q", "leader": ""})

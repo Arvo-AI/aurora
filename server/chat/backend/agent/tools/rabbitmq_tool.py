@@ -61,12 +61,18 @@ def is_rabbitmq_connected(user_id: str) -> bool:
     return error is None and bool(targets)
 
 
+# (connect, read) seconds. An unreachable broker fails in seconds and does not hold
+# a fan-out; a reachable one still gets the full read time for a large listing.
+TOOL_TIMEOUT = (4, 20)
+
+
 def _build_client(account: Dict[str, Any]) -> RabbitMQClient:
     return RabbitMQClient(
         url=account["url"],
         username=account["username"],
         password=account["password"],
         default_vhost=account.get("vhost") or "/",
+        timeout=TOOL_TIMEOUT,
     )
 
 
@@ -98,16 +104,31 @@ def _pick_a_broker(targets: list) -> str:
 
 
 def _fit(item: Dict[str, Any], budget: int, account: Dict[str, Any]) -> Dict[str, Any]:
-    """Cut one broker's result to its share, so a large broker cannot crowd out the rest."""
+    """Cut one broker's result to its share, so a large broker cannot crowd out the rest.
+
+    The budget is for the serialized replacement, so quotes and backslashes the
+    preview gains when it is escaped again are counted too.
+    """
     text = json.dumps(item, default=str)
     if len(text) <= budget:
         return item
-    return {
+    replacement = {
         **_broker_fields(account),
         "truncated": True,
         "message": "This broker's result exceeded its share of the output. Retry with its account_id, or narrow by vhost or name.",
-        "preview": text[:max(budget - 500, 0)],
+        "preview": "",
     }
+    room = budget - len(json.dumps(replacement, default=str))
+    cut = max(room, 0)
+    # Escaping can only grow the text, so shrink until the serialized object fits.
+    while cut > 0:
+        replacement["preview"] = text[:cut]
+        over = len(json.dumps(replacement, default=str)) - budget
+        if over <= 0:
+            return replacement
+        cut -= max(over, 1)
+    replacement["preview"] = ""
+    return replacement
 
 
 def _clamp_page(page: int, page_size: int) -> tuple:
@@ -189,7 +210,10 @@ def _by_account(fn: Callable[..., Any], targets: list, user_id: str, kwargs: Dic
 
     Each broker gets an equal share of the output cap.
     """
-    budget = max((MAX_OUTPUT_CHARS - _FANOUT_OVERHEAD_CHARS) // len(targets), 1_000)
+    # Reserve the enclosing response: the broker list and each results_by_account key.
+    envelope = len(json.dumps({"brokers": [_broker_fields(a) for a in targets], "results_by_account": {}}, default=str))
+    keys = sum(len(json.dumps(str(a["account_id"]))) + 4 for a in targets)
+    budget = max((MAX_OUTPUT_CHARS - envelope - keys - _FANOUT_OVERHEAD_CHARS) // len(targets), 1_000)
 
     def one(account):
         item = dict(_run_one(fn, account, user_id, kwargs))

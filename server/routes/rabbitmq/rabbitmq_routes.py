@@ -29,6 +29,9 @@ logger = logging.getLogger(__name__)
 rabbitmq_bp = Blueprint("rabbitmq", __name__)
 
 _VALIDATION_FAILED = "Failed to validate RabbitMQ connection"
+# Fail a dead broker fast so it does not hold the page while the others answer.
+_STATUS_TIMEOUT = 4
+_NOT_GRANTED = "Your role or team was not granted this RabbitMQ broker. Ask an admin to change it on the Access tab."
 
 
 def _clean_username(raw: Any) -> str:
@@ -107,13 +110,32 @@ def _client_from_payload(payload: Dict[str, Any]) -> RabbitMQClient:
 
 
 
+def _hidden_summary(account: Dict[str, Any]) -> Dict[str, Any]:
+    """A broker this caller was not granted: enough to know it exists, nothing to reach it."""
+    summary = account_summary(account)
+    return {
+        "accountId": summary["accountId"],
+        "name": summary.get("name"),
+        "displayName": summary.get("name") or summary["accountId"],
+        "allowed": False,
+    }
+
+
 def _status_summary(user_id: str, account: Dict[str, Any]) -> Dict[str, Any]:
     """Live check of one broker. A failure stays on that row so the others remain usable."""
+    # Not granted: never probe it with the stored credentials, and never show where it is.
+    if not account_allowed(user_id, account["account_id"]):
+        return _hidden_summary(account)
     summary = account_summary(account)
-    summary["allowed"] = account_allowed(user_id, account["account_id"])
+    summary["allowed"] = True
     vhost = account.get("vhost") or "/"
     try:
-        client = RabbitMQClient(url=account["url"], username=account["username"], password=account["password"])
+        client = RabbitMQClient(
+            url=account["url"],
+            username=account["username"],
+            password=account["password"],
+            timeout=_STATUS_TIMEOUT,
+        )
     except ValueError:
         logger.warning("[RABBITMQ] Stored management URL is not usable")
         summary["valid"] = False
@@ -147,7 +169,8 @@ def _payload(summaries: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Every broker, plus the first one's fields at the top level for older readers."""
     if not summaries:
         return {"connected": False, "accounts": []}
-    primary = summaries[0]
+    # The top-level fields describe a broker this caller may see, never a hidden one.
+    primary = next((s for s in summaries if s.get("allowed") is not False), {})
     return {
         "connected": True,
         "url": primary.get("url"),
@@ -165,8 +188,11 @@ def _stored_payload(user_id: str, accounts: list, validated_id: Optional[str] = 
     """Response from stored rows. Skips the live check so connect stays within one validation."""
     summaries = []
     for account in accounts:
+        if not account_allowed(user_id, account["account_id"]):
+            summaries.append(_hidden_summary(account))
+            continue
         summary = account_summary(account)
-        summary["allowed"] = account_allowed(user_id, account["account_id"])
+        summary["allowed"] = True
         # Other brokers were not rechecked, so leave their validity unknown.
         if validated_id is not None and account["account_id"] == validated_id:
             summary["valid"] = True
@@ -227,6 +253,12 @@ def connect(user_id):
         logger.exception("[RABBITMQ] Failed to load existing brokers for user %s", hash_for_log(user_id))
         return jsonify({"error": "Failed to load existing RabbitMQ connections"}), 500
 
+    # Replacing a broker rewrites its credentials for the whole org. Only a caller
+    # granted that broker may do it. A new broker has no grant yet, so anyone with
+    # connector write access may add one.
+    if any(a["account_id"] == account_id for a in existing) and not account_allowed(user_id, account_id):
+        return jsonify({"error": _NOT_GRANTED, "code": "CONNECTOR_DENIED"}), 403
+
     if name_conflict(existing, name, account_id):
         return jsonify({"error": "Another RabbitMQ connection already uses that name"}), 409
 
@@ -276,12 +308,13 @@ def status(user_id):
         summaries = list(pool.map(lambda account: _status_summary(user_id, account), accounts))
 
     body = _payload(summaries)
-    if not any(item.get("valid") for item in summaries):
+    visible = [item for item in summaries if item.get("allowed") is not False]
+    if visible and not any(item.get("valid") for item in visible):
         # Every stored password failed — still list them so they can be removed.
         body["error"] = _VALIDATION_FAILED
-    elif len(summaries) == 1 and summaries[0].get("error"):
+    elif len(visible) == 1 and visible[0].get("error"):
         # One broker keeps the top-level permission hint the page already shows.
-        body["error"] = summaries[0]["error"]
+        body["error"] = visible[0]["error"]
     return jsonify(body)
 
 
@@ -330,26 +363,38 @@ def _disconnect(user_id, selector: Optional[str]):
     try:
         # A failed read is not "no brokers" — that path deletes every broker.
         accounts = list_rabbitmq_accounts(user_id, raise_on_error=True)
+        granted = [a for a in accounts if account_allowed(user_id, a["account_id"])]
         if selector and str(selector).strip():
             match = find_account(accounts, str(selector))
             if match is None:
-                known = ", ".join(a["account_id"] for a in accounts) or "none"
+                # Name only the brokers this caller can see.
+                known = ", ".join(a["account_id"] for a in granted) or "none"
                 return jsonify({"error": f"Unknown RabbitMQ broker. Connected: {known}"}), 404
-            remaining = [a for a in accounts if a["account_id"] != match["account_id"]]
-            # Other brokers stay stored. Only this one's connection row is retired.
-            if remaining:
-                # Removing a broker is not a new connection: never schedule prediscovery.
-                store_rabbitmq_accounts(user_id, remaining, schedule_prediscovery=False)
-                clear_credentials_cache(user_id)
-                logger.info(
-                    "[RABBITMQ] Removed one broker for user %s (%d remaining)",
-                    hash_for_log(user_id),
-                    len(remaining),
-                )
-                body = _stored_payload(user_id, remaining)
-                body["success"] = True
-                body["message"] = "RabbitMQ connection removed"
-                return jsonify(body)
+            # Removing a broker removes it for the whole org.
+            if not any(a["account_id"] == match["account_id"] for a in granted):
+                return jsonify({"error": _NOT_GRANTED, "code": "CONNECTOR_DENIED"}), 403
+            removed = {match["account_id"]}
+        else:
+            # "Disconnect all" removes only what this caller was granted.
+            if accounts and not granted:
+                return jsonify({"error": _NOT_GRANTED, "code": "CONNECTOR_DENIED"}), 403
+            removed = {a["account_id"] for a in granted}
+        remaining = [a for a in accounts if a["account_id"] not in removed]
+        # Other brokers stay stored. Only the removed brokers' connection rows are retired.
+        if remaining:
+            # Removing a broker is not a new connection: never schedule prediscovery.
+            store_rabbitmq_accounts(user_id, remaining, schedule_prediscovery=False)
+            clear_credentials_cache(user_id)
+            logger.info(
+                "[RABBITMQ] Removed %d broker(s) for user %s (%d remaining)",
+                len(removed),
+                hash_for_log(user_id),
+                len(remaining),
+            )
+            body = _stored_payload(user_id, remaining)
+            body["success"] = True
+            body["message"] = "RabbitMQ connection removed"
+            return jsonify(body)
 
         retire_rabbitmq_connections(user_id)
         vault_ok, rows = delete_user_secret(user_id, "rabbitmq")

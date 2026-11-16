@@ -52,7 +52,7 @@ More than one broker can be connected. Each is its own account, identified by it
 
 ## How to read the numbers
 
-- `depth_rate.messages_ready` above 0: the backlog is growing right now. Near 0 with a large depth: it is stuck, not growing. Compare with `rates.publish` and `rates.deliver_get`.
+- `depth_rate.messages_ready` above 0: the backlog is growing right now. Near 0 with a large depth: the depth is stable, which is not the same as stuck. Messages may be arriving and leaving at the same rate. Call the queue stuck only with evidence that nothing is consumed: `rates.deliver_get` and `rates.ack` near 0, or no consumers. Compare with `rates.publish`.
 - `messages_ready` growing, `consumers` is 0: workers are down or subscribed to the wrong queue.
 - `messages_unacknowledged` growing, consumers exist: the consumer is slow, blocked, or not acking.
 - `consumer_utilisation` near 0 with consumers present: the consumer is idle or prefetch is exhausted.

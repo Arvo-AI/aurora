@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { rabbitmqAccounts, rabbitmqService, RabbitMQStatus } from "@/lib/services/rabbitmq";
 import { RabbitMQConnectionStep } from "@/components/rabbitmq/RabbitMQConnectionStep";
@@ -20,6 +20,11 @@ export default function RabbitMQAuthPage() {
   const [status, setStatus] = useState<RabbitMQStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [isInitialLoad, setIsInitialLoad] = useState(true);
+  // Latest status, read after an await so a refresh that landed meanwhile is not lost.
+  const statusRef = useRef<RabbitMQStatus | null>(null);
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
 
   const updateLocalStorageConnection = (connected: boolean) => {
     if (typeof window === "undefined") return;
@@ -137,8 +142,9 @@ export default function RabbitMQAuthPage() {
       toast({ title: accountId ? "RabbitMQ broker removed" : "RabbitMQ disconnected" });
       if (accountId) {
         // Drop the broker locally first, so a failed refresh can't leave it listed.
-        const remaining = rabbitmqAccounts(status).filter((a) => a.accountId !== accountId);
-        const next: RabbitMQStatus = { ...(status ?? { connected: false }), connected: remaining.length > 0, accounts: remaining };
+        const latest = statusRef.current;
+        const remaining = rabbitmqAccounts(latest).filter((a) => a.accountId !== accountId);
+        const next: RabbitMQStatus = { ...(latest ?? { connected: false }), connected: remaining.length > 0, accounts: remaining };
         setStatus(next);
         if (typeof window !== "undefined") {
           localStorage.setItem(CACHE_KEY, JSON.stringify(next));

@@ -60,6 +60,7 @@ function BrokerCard({
           {account.error}
         </div>
       )}
+      {account.allowed !== false && (
       <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-3">
         <Field label="Management URL" value={account.url || "Unknown"} />
         <Field label="User" value={account.username || "Unknown"} />
@@ -68,6 +69,7 @@ function BrokerCard({
         <Field label="Default vhost" value={account.vhost || "/"} />
         <Field label="Tags" value={tags} />
       </div>
+      )}
     </div>
   );
 }
@@ -78,7 +80,10 @@ export function RabbitMQConnectedStatus({
   loading,
 }: Readonly<RabbitMQConnectedStatusProps>) {
   const several = accounts.length > 1;
-  const disconnectLabel = several ? "Disconnect all brokers" : "Disconnect RabbitMQ";
+  // Disconnect all removes only the brokers your team was granted.
+  const someHidden = accounts.some((account) => account.allowed === false);
+  let disconnectLabel = several ? "Disconnect all brokers" : "Disconnect RabbitMQ";
+  if (someHidden) disconnectLabel = "Disconnect your brokers";
   return (
     <Card>
       <CardHeader>
@@ -94,7 +99,8 @@ export function RabbitMQConnectedStatus({
             key={account.accountId}
             account={account}
             loading={loading}
-            removable={several}
+            // A broker your team was not granted cannot be removed by you.
+            removable={several && account.allowed !== false}
             onRemove={() => onDisconnect(account.accountId)}
           />
         ))}

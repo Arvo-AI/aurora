@@ -7,7 +7,7 @@ Message bodies are never fetched: the ``/get`` endpoint dequeues.
 import ipaddress
 import logging
 import socket
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import quote, urlparse
 
 import requests
@@ -230,9 +230,20 @@ def _policy(queue: Dict[str, Any]) -> Dict[str, Any]:
     return {key: _short(effective.get(key)) for key in _POLICY_KEYS if key in effective}
 
 
+# An empty list here is information: no quorum member online, not "not reported".
+_KEEP_EMPTY_LIST = frozenset({"members", "online"})
+
+
 def _optional(queue: Dict[str, Any], keys: tuple) -> Dict[str, Any]:
     """Fields only some queue types report, such as a quorum queue's leader and members."""
-    return {key: queue[key] for key in keys if queue.get(key) not in (None, "", [])}
+    kept = {}
+    for key in keys:
+        value = queue.get(key)
+        if key in _KEEP_EMPTY_LIST and isinstance(value, list):
+            kept[key] = value
+        elif value not in (None, "", []):
+            kept[key] = value
+    return kept
 
 
 def summarize_queue(queue: Dict[str, Any]) -> Dict[str, Any]:
@@ -438,7 +449,8 @@ class RabbitMQClient:
         url: str,
         username: str,
         password: str,
-        timeout: int = TIMEOUT_SECONDS,
+        # Seconds, or (connect, read) as requests accepts.
+        timeout: Union[float, Tuple[float, float]] = TIMEOUT_SECONDS,
         default_vhost: str = "/",
         session: Optional[requests.Session] = None,
     ):
