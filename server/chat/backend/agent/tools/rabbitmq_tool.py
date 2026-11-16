@@ -122,6 +122,24 @@ def _clamp_page(page: int, page_size: int) -> tuple:
     return max(1, min(page_num, 100)), max(1, min(size, MAX_PAGE_SIZE))
 
 
+_REGEX_CHARS = set("*+?^$[](){}|\\")
+_REGEX_NOTE = "The name filter is a plain substring match, not a regex. Retry with a literal part of the queue name."
+
+
+def _page_fields(page_body: Dict[str, Any], requested_size: Any, used_size: int) -> Dict[str, Any]:
+    """Say when page_size was capped, so a short page is not read as the whole set."""
+    try:
+        requested = int(requested_size)
+    except (TypeError, ValueError):
+        return page_body
+    if requested == used_size:
+        return page_body
+    noted = dict(page_body)
+    noted["page_size"] = used_size
+    noted["page_size_note"] = f"page_size {requested} is outside 1-{MAX_PAGE_SIZE}; used {used_size}."
+    return noted
+
+
 def _note_if_invisible(payload: Dict[str, Any], *, filtered: bool) -> Dict[str, Any]:
     # A user with no set_permissions gets an empty 200, not an error.
     if filtered or payload.get("total_count") != 0:
@@ -308,10 +326,14 @@ def rabbitmq_list_queues(
     **kwargs: Any,
 ) -> Dict[str, Any]:
     """Queues this user can read, deepest first. Zero consumers means nothing is subscribed."""
+    requested_size = page_size
     page, page_size = _clamp_page(page, page_size)
     name_filter = name.strip() if isinstance(name, str) and name.strip() else None
     vhost_filter = vhost.strip() if isinstance(vhost, str) and vhost.strip() else None
     page_body = client.queues(vhost=vhost_filter, name=name_filter, page=page, page_size=page_size)
+    page_body = _page_fields(page_body, requested_size, page_size)
+    if name_filter and not page_body.get("items") and _REGEX_CHARS & set(name_filter):
+        page_body = {**page_body, "note": _REGEX_NOTE}
     return _note_if_invisible(page_body, filtered=name_filter is not None)
 
 
@@ -338,10 +360,11 @@ def rabbitmq_list_exchanges(
     **kwargs: Any,
 ) -> Dict[str, Any]:
     """Exchanges this user can read, and their publish rates. The default exchange name is empty."""
+    requested_size = page_size
     page, page_size = _clamp_page(page, page_size)
     vhost_filter = vhost.strip() if isinstance(vhost, str) and vhost.strip() else None
     page_body = client.exchanges(vhost=vhost_filter, page=page, page_size=page_size)
-    return _note_if_invisible(page_body, filtered=False)
+    return _note_if_invisible(_page_fields(page_body, requested_size, page_size), filtered=False)
 
 
 @_rabbitmq_tool
@@ -354,6 +377,18 @@ def rabbitmq_list_bindings(
 ) -> Dict[str, Any]:
     """Bindings into a queue. An empty list still allows the default exchange to route by queue name."""
     chosen = vhost.strip() if isinstance(vhost, str) and vhost.strip() else client.default_vhost
+    # RabbitMQ answers with the implicit default-exchange binding for any name,
+    # even a queue that does not exist. Confirm the queue first.
+    try:
+        client.queue(chosen, queue)
+    except RabbitMQAPIError as exc:
+        if exc.kind != "not_found":
+            raise
+        return {
+            "vhost": chosen,
+            "queue": queue,
+            "error": f"Queue {queue!r} does not exist in vhost {chosen!r} on this broker, or this user cannot read it.",
+        }
     return {"vhost": chosen, "queue": queue, "bindings": client.bindings(chosen, queue)}
 
 
@@ -367,9 +402,11 @@ def rabbitmq_list_connections(
     **kwargs: Any,
 ) -> Dict[str, Any]:
     """Open AMQP connections: user, peer, channel count, and client library."""
+    requested_size = page_size
     page, page_size = _clamp_page(page, page_size)
     vhost_filter = vhost.strip() if isinstance(vhost, str) and vhost.strip() else None
-    return client.connections(vhost=vhost_filter, page=page, page_size=page_size)
+    page_body = client.connections(vhost=vhost_filter, page=page, page_size=page_size)
+    return _page_fields(page_body, requested_size, page_size)
 
 
 @_rabbitmq_tool

@@ -3178,7 +3178,8 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                  ("List RabbitMQ queues sorted by depth. Shows ready, unacked, consumers, and rates. "
                   "Zero consumers with a growing ready count means nothing is subscribed to that queue. Check the worker connection and which queue it consumes.")),
                 (rabbitmq_get_queue, "rabbitmq_get_queue", RabbitMQGetQueueArgs,
-                 "Get one RabbitMQ queue, including dead-letter arguments and publish/deliver rates."),
+                 ("Get one RabbitMQ queue: depth and whether it is growing (depth_rate), dead-letter and limit settings from both "
+                  "queue arguments and policy (effective_policy), its consumers with the connection that holds each, and rates.")),
                 (rabbitmq_list_exchanges, "rabbitmq_list_exchanges", RabbitMQListExchangesArgs,
                  "List RabbitMQ exchanges and their publish rates."),
                 (rabbitmq_list_bindings, "rabbitmq_list_bindings", RabbitMQListBindingsArgs,

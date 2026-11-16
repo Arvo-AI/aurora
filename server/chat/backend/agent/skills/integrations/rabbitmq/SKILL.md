@@ -46,17 +46,23 @@ More than one broker can be connected. Each is its own account, identified by it
 1. `rabbitmq_health_checks()` and `rabbitmq_list_nodes()` — memory or disk alarms block publishers cluster-wide.
 2. `rabbitmq_get_overview()` — version, listeners, and whether ready or unacked messages are growing.
 3. `rabbitmq_list_queues()` — deepest queues this user can read. Omitting `vhost` does not show queues the user has no permission on. A queue with `consumers: 0` and a rising `messages_ready` has no subscriber on that queue. Confirm the worker connection before calling it down. A high `messages_unacknowledged` means consumers are stuck or prefetch is too high.
-4. `rabbitmq_get_queue(name='QUEUE')` — dead-letter arguments (`x-dead-letter-exchange`) and rates. Then inspect that dead-letter queue the same way.
+4. `rabbitmq_get_queue(name='QUEUE')` — dead-letter and limit settings, its consumers, and rates. Dead-lettering is usually set by policy: read `effective_policy` (`dead-letter-exchange`, `message-ttl`, `max-length`, `overflow`) as well as `arguments`. Only say a queue has no dead-letter exchange when both are empty. `consumer_details` names the connection behind each consumer, which maps a consumer to a service. Then inspect that dead-letter queue the same way.
 5. `rabbitmq_list_consumers(vhost='VHOST')` and `rabbitmq_list_connections()` — confirm the worker process is still connected.
-6. `rabbitmq_list_bindings(queue='QUEUE')` — custom bindings. An empty list is not proof of dropped publishes: the default exchange routes to a queue by its name and does not create a binding row.
+6. `rabbitmq_list_bindings(queue='QUEUE')` — custom bindings. It returns an error when the queue does not exist. An empty list is not proof of dropped publishes: the default exchange routes to a queue by its name and does not create a binding row.
 
 ## How to read the numbers
 
+- `depth_rate.messages_ready` above 0: the backlog is growing right now. Near 0 with a large depth: it is stuck, not growing. Compare with `rates.publish` and `rates.deliver_get`.
 - `messages_ready` growing, `consumers` is 0: workers are down or subscribed to the wrong queue.
 - `messages_unacknowledged` growing, consumers exist: the consumer is slow, blocked, or not acking.
 - `consumer_utilisation` near 0 with consumers present: the consumer is idle or prefetch is exhausted.
 - `mem_alarm` or `disk_free_alarm` true: the node is blocking publishers. This looks like a producer outage, not a consumer bug.
 - `state` other than `running`: the queue is down or synchronising.
+- A node with a non-empty `partitions` list: the cluster is split (network partition). Queues on the other side can be unavailable or diverge. Report this first.
+- Quorum queues report `leader`, `members`, and `online`. A member missing from `online` is down; no `leader` means the queue cannot accept writes.
+- `head_message_timestamp` is the publish time of the oldest message, when publishers set it. It says how long the backlog has been waiting.
+- `page_size` is capped at 100. A `page_size_note` means a smaller page than requested was returned; page through for more.
+- The `name` filter is a substring match, not a regex.
 - A failed `amqp_listener` check is expected when the broker listens only on 5671, and the reverse.
 - `list_queues` or `list_exchanges` is empty while `object_totals` is not: this user has no read permission on those vhosts. The monitoring tag does not grant it. A 401 that says the user cannot read that vhost is the same gap, not a bad password.
 

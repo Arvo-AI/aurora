@@ -481,6 +481,7 @@ def test_queue_name_survives_the_broker_fields(monkeypatch, tool):
 def test_each_broker_uses_its_own_default_vhost(monkeypatch, tool):
     _targets(monkeypatch, tool, [_broker("10.0.0.1:15672", vhost="a"), _broker("10.0.0.2:15672", vhost="b")])
     monkeypatch.setattr(tool.RabbitMQClient, "bindings", lambda self, vhost, queue: [{"vhost": vhost}])
+    monkeypatch.setattr(tool.RabbitMQClient, "queue", lambda self, vhost, name: {"name": name})
 
     out = json.loads(tool.rabbitmq_list_bindings(user_id=USER, queue="q"))
 
@@ -689,3 +690,110 @@ def test_one_large_broker_does_not_crowd_out_the_others(monkeypatch, tool):
     assert big["truncated"] is True
     assert big["account_id"] == "10.0.0.1:15672"
     assert out["results_by_account"]["10.0.0.2:15672"]["cluster_name"] == "small"
+
+
+# --- incident detail ---------------------------------------------------------
+
+
+def test_bindings_for_a_missing_queue_is_an_error_not_a_default_binding(monkeypatch, tool):
+    _targets(monkeypatch, tool, [_broker("10.0.0.1:15672")])
+    calls = []
+
+    def missing(self, vhost, name):
+        raise tool.RabbitMQAPIError("RabbitMQ resource was not found", 404, kind="not_found")
+
+    monkeypatch.setattr(tool.RabbitMQClient, "queue", missing)
+    monkeypatch.setattr(tool.RabbitMQClient, "bindings", lambda self, vhost, queue: calls.append(queue) or [
+        {"source": "", "destination": queue, "destination_type": "queue", "routing_key": queue},
+    ])
+
+    out = json.loads(tool.rabbitmq_list_bindings(user_id=USER, queue="ghost"))
+
+    assert "does not exist" in out["error"]
+    assert "bindings" not in out
+    assert calls == []
+
+
+def test_regex_looking_filter_with_no_match_explains_itself(monkeypatch, tool):
+    _targets(monkeypatch, tool, [_broker("10.0.0.1:15672")])
+    monkeypatch.setattr(tool.RabbitMQClient, "queues", lambda self, **kw: {"items": [], "total_count": 2, "filtered_count": 0})
+
+    regex = json.loads(tool.rabbitmq_list_queues(user_id=USER, name=".*jobs"))
+    plain = json.loads(tool.rabbitmq_list_queues(user_id=USER, name="orders.v2"))
+
+    assert "substring" in regex["note"]
+    assert "note" not in plain
+
+
+def test_capped_page_size_is_reported(monkeypatch, tool):
+    _targets(monkeypatch, tool, [_broker("10.0.0.1:15672")])
+    seen = []
+    monkeypatch.setattr(
+        tool.RabbitMQClient, "exchanges",
+        lambda self, **kw: seen.append(kw["page_size"]) or {"items": [{"name": "x"}], "total_count": 1},
+    )
+
+    capped = json.loads(tool.rabbitmq_list_exchanges(user_id=USER, page_size=500))
+    normal = json.loads(tool.rabbitmq_list_exchanges(user_id=USER, page_size=20))
+
+    assert seen == [100, 20]
+    assert capped["page_size"] == 100
+    assert "500" in capped["page_size_note"]
+    assert "page_size_note" not in normal
+
+
+def test_queue_summary_reads_policy_growth_and_quorum_fields():
+    from connectors.rabbitmq_connector.client import summarize_queue
+
+    summary = summarize_queue({
+        "name": "orders",
+        "arguments": {},
+        "policy": "dlx",
+        "effective_policy_definition": {"dead-letter-exchange": "dlx", "message-ttl": 60000, "unrelated": "x"},
+        "messages_ready_details": {"rate": 4.5},
+        "type": "quorum",
+        "leader": "rabbit@a",
+        "members": ["rabbit@a", "rabbit@b", "rabbit@c"],
+        "online": ["rabbit@a", "rabbit@b"],
+    })
+
+    assert summary["policy"] == "dlx"
+    assert summary["effective_policy"] == {"dead-letter-exchange": "dlx", "message-ttl": 60000}
+    assert summary["depth_rate"]["messages_ready"] == 4.5
+    assert summary["leader"] == "rabbit@a"
+    assert summary["online"] == ["rabbit@a", "rabbit@b"]
+    assert "head_message_timestamp" not in summary
+
+
+def test_one_queue_names_the_connection_behind_each_consumer():
+    from unittest.mock import MagicMock
+
+    from connectors.rabbitmq_connector import client as rmq
+
+    body = {
+        "name": "orders",
+        "consumer_details": [
+            {
+                "consumer_tag": f"ctag-{i}",
+                "active": True,
+                "prefetch_count": 10,
+                "channel_details": {"connection_name": f"orders-worker-{i}", "peer_host": "10.2.0.9"},
+            }
+            for i in range(rmq.MAX_QUEUE_CONSUMERS + 3)
+        ],
+    }
+    client = rmq.RabbitMQClient(url="http://10.1.2.3:15672", username="u", password="p", session=MagicMock())
+    client._get_json = lambda path, params=None: body
+
+    summary = client.queue("/", "orders")
+
+    assert len(summary["consumer_details"]) == rmq.MAX_QUEUE_CONSUMERS
+    assert summary["consumer_details"][0]["connection_name"] == "orders-worker-0"
+    assert summary["consumer_details_truncated"] == rmq.MAX_QUEUE_CONSUMERS + 3
+
+
+def test_node_summary_reports_partitions():
+    from connectors.rabbitmq_connector.client import summarize_node
+
+    assert summarize_node({"name": "a", "partitions": ["rabbit@b"]})["partitions"] == ["rabbit@b"]
+    assert summarize_node({"name": "a"})["partitions"] == []
