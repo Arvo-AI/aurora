@@ -18,7 +18,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import utils.notifications.slack_notification_service as slack_service
+from utils.notifications import slack_notification_service as slack_service
 from chat.background import continuation
 from chat.background.continuation import (
     CONTINUE_SOURCE,
@@ -430,11 +430,16 @@ def test_the_button_gives_way_to_a_continuing_note():
 
 
 class _FakeRedis:
+    """Redis without scripting: compare-and-delete takes its get/delete path."""
+
     def __init__(self):
         self.store = {}
 
-    def set(self, key, value, ex=None):
+    def set(self, key, value, ex=None, nx=False):
+        if nx and key in self.store:
+            return None
         self.store[key] = value
+        return True
 
     def get(self, key):
         return self.store.get(key)
@@ -491,6 +496,7 @@ def test_a_slack_click_marks_the_card_and_remembers_the_notice(monkeypatch):
     monkeypatch.setattr(auth, "get_org_id_for_user", lambda _u: "org-1")
     monkeypatch.setattr(enforcer, "enforce_with_reload", lambda *_a: True)
     monkeypatch.setattr(continuation, "continue_investigation", lambda *_a: {"continuationsLeft": 2})
+    monkeypatch.setattr(slack, "reserve_continue_notice", lambda *_a: True)
     monkeypatch.setattr(slack, "remember_continue_notice", lambda *a, **k: remembered.append(a))
 
     card = slack.build_continue_blocks({"incident_id": INCIDENT, "unfinished_reason": "stalled", "continuations": 0})
@@ -539,6 +545,7 @@ def test_a_refused_slack_click_puts_the_card_back(monkeypatch):
     monkeypatch.setattr(events, "_send_ephemeral", lambda *_a: None)
     monkeypatch.setattr(auth, "get_org_id_for_user", lambda _u: "org-1")
     monkeypatch.setattr(enforcer, "enforce_with_reload", lambda *_a: True)
+    monkeypatch.setattr(slack_service, "reserve_continue_notice", lambda *_a: True)
     monkeypatch.setattr(slack_service, "remember_continue_notice", lambda *a, **k: None)
     monkeypatch.setattr(slack_service, "forget_continue_notice", lambda *a: forgotten.append(a))
 
@@ -555,4 +562,128 @@ def test_a_refused_slack_click_puts_the_card_back(monkeypatch):
     )
     feedback.delete_message.assert_called_once_with("C1", "999.000")
     assert feedback.update_message.call_args.kwargs["blocks"] == card  # button back
-    assert forgotten == [(INCIDENT, "999.000")]
+    # The click's own reservation is released, by its token.
+    assert [f[0] for f in forgotten] == [INCIDENT] and isinstance(forgotten[0][1], str)
+
+
+# --- two clicks on one card -----------------------------------------------------------
+
+@pytest.fixture
+def clicks(monkeypatch):
+    """The Slack click handler over one shared notice store, with real reservation."""
+    import routes.slack.slack_events as events
+    import utils.auth.enforcer as enforcer
+    import utils.auth.stateless_auth as auth
+    import utils.cache.redis_client as redis_mod
+
+    fake = _FakeRedis()
+    feedback = MagicMock()
+    feedback.send_message.side_effect = [{"ts": "999.001"}, {"ts": "999.002"}]
+    finisher = MagicMock()
+    state = SimpleNamespace(fake=fake, feedback=feedback, finisher=finisher, accept=[True])
+    monkeypatch.setattr(redis_mod, "get_redis_client", lambda: fake)
+    monkeypatch.setattr(slack_service, "get_slack_client_for_user", lambda _u: finisher)
+    monkeypatch.setattr(events, "aurora_user_for_slack_sender", lambda *_a: CLICKER)
+    monkeypatch.setattr(events, "_slack_client_for_feedback", lambda *_a: feedback)
+    monkeypatch.setattr(events, "_send_ephemeral", lambda *_a: None)
+    monkeypatch.setattr(auth, "get_org_id_for_user", lambda _u: "org-1")
+    monkeypatch.setattr(enforcer, "enforce_with_reload", lambda *_a: True)
+
+    def _continue(*_a):
+        if not state.accept.pop(0):
+            raise ContinueRefused("The investigation is already running")
+        return {"continuationsLeft": 2}
+
+    monkeypatch.setattr(continuation, "continue_investigation", _continue)
+    card = slack_service.build_continue_blocks(
+        {"incident_id": INCIDENT, "unfinished_reason": "stalled", "continuations": 0},
+    )
+
+    def _click(name="olivier"):
+        events._handle_continue_investigation(
+            payload={"user": {"name": name}, "message": {"ts": "111.222", "text": "card", "blocks": card}},
+            action={"value": INCIDENT}, slack_user_id="U1", team_id="T1", channel_id="C1",
+        )
+
+    state.click = _click
+    state.card = card
+    return state
+
+
+def test_a_duplicate_click_leaves_the_active_continuation_alone(clicks):
+    """Regression: the refused second click used to replace and then drop the first run's notice."""
+    clicks.accept = [True, False]
+    clicks.click("olivier")
+    clicks.click("noah")
+
+    # Only the accepted click touched the card and the thread.
+    assert clicks.feedback.send_message.call_count == 1
+    assert clicks.feedback.update_message.call_count == 1
+    clicks.feedback.delete_message.assert_not_called()
+
+    # When the run ends, its own notice gets the outcome.
+    assert slack_service.finish_continue_notice(OWNER, {"incident_id": INCIDENT}) is True
+    channel, ts, text = clicks.finisher.update_message.call_args[0][:3]
+    assert (channel, ts) == ("C1", "999.001") and "requested by olivier" in text
+    assert clicks.fake.store == {}
+
+
+def test_a_refused_click_releases_its_reservation(clicks):
+    clicks.accept = [False, True]
+    clicks.click("olivier")
+    assert clicks.fake.store == {}  # the next click can mark the card
+    clicks.click("noah")
+    assert slack_service.finish_continue_notice(OWNER, {"incident_id": INCIDENT}) is True
+    assert clicks.finisher.update_message.call_args[0][1] == "999.002"
+
+
+def test_an_accepted_click_takes_over_a_stale_record(clicks):
+    """A record left by a run that already ended must not keep a new run untracked."""
+    import json as _json
+
+    key = "aurora:continue_notice:" + INCIDENT
+    clicks.fake.store[key] = _json.dumps({"channel": "C1", "ts": "555.000", "requested_by": "x", "token": "old"})
+    clicks.click("olivier")
+    assert _json.loads(clicks.fake.store[key])["ts"] == "999.001"
+
+
+def test_the_card_is_restored_even_if_the_notice_cannot_be_deleted(clicks):
+    clicks.accept = [False]
+    clicks.feedback.delete_message.side_effect = RuntimeError("slack down")
+    clicks.click("olivier")
+    assert clicks.feedback.update_message.call_args.kwargs["blocks"] == clicks.card
+    assert clicks.fake.store == {}
+
+
+def test_finishing_keeps_a_record_written_meanwhile(notice):
+    """Only the record this call completed is deleted: a continuation started since keeps its own."""
+    slack, client, fake = notice
+    key = "aurora:continue_notice:" + INCIDENT
+
+    def _new_continuation_starts(*_a, **_k):
+        fake.store[key] = '{"channel": "C1", "ts": "222.333", "requested_by": "noah"}'
+
+    client.update_message.side_effect = _new_continuation_starts
+    assert slack.finish_continue_notice(OWNER, {"incident_id": INCIDENT}) is True
+    assert "222.333" in fake.store[key]
+
+
+def test_a_reservation_alone_is_not_a_notice_to_finish(notice):
+    slack, client, fake = notice
+    fake.store.clear()
+    assert slack.reserve_continue_notice(INCIDENT, "tok") is True
+    assert slack.reserve_continue_notice(INCIDENT, "other") is False  # held
+    assert slack.finish_continue_notice(OWNER, {"incident_id": INCIDENT}) is False
+    client.update_message.assert_not_called()
+    slack.forget_continue_notice(INCIDENT, "other")  # not its reservation
+    assert fake.store
+    slack.forget_continue_notice(INCIDENT, "tok")
+    assert fake.store == {}
+
+
+def test_redis_scripting_is_used_for_compare_and_delete():
+    client = MagicMock()
+    client.eval.return_value = 1
+    assert slack_service._delete_if_unchanged(client, "k", "v") is True
+    script, numkeys, key, value = client.eval.call_args[0]
+    assert numkeys == 1 and (key, value) == ("k", "v") and "redis.call('del'" in script

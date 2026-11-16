@@ -618,14 +618,51 @@ def continuing_blocks(blocks: list, requested_by: str) -> list:
     return out
 
 
+# Deletes the key only while it still holds the value the caller read.
+_COMPARE_AND_DELETE = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) end return 0"
+
+
+def _delete_if_unchanged(client, key: str, raw) -> bool:
+    """Delete *key* only if it still holds *raw*, so a newer continuation's record survives."""
+    if hasattr(client, "eval"):
+        return bool(client.eval(_COMPARE_AND_DELETE, 1, key, raw))
+    if client.get(key) == raw:  # clients without scripting
+        client.delete(key)
+        return True
+    return False
+
+
+def reserve_continue_notice(incident_id: str, token: str) -> bool:
+    """Claim the incident's notice record for one Slack click, before it touches the card.
+
+    False while another click holds it (its continuation is active or being
+    started): this click must then leave the card and the notice alone. True
+    without Redis, where there is no record to protect.
+    """
+    from utils.cache.redis_client import get_redis_client
+
+    client = get_redis_client()
+    if not client:
+        return True
+    try:
+        return bool(client.set(
+            _CONTINUE_NOTICE_KEY.format(incident_id), json.dumps({"token": token}),
+            nx=True, ex=_CONTINUE_NOTICE_TTL_SECONDS,
+        ))
+    except Exception:
+        logger.warning("[SlackNotification] Could not reserve the continuation notice for %s", incident_id)
+        return True
+
+
 def remember_continue_notice(
     incident_id: str, channel: str, ts: str, requested_by: str,
-    card_ts: Optional[str] = None, card_blocks: Optional[list] = None,
+    card_ts: Optional[str] = None, card_blocks: Optional[list] = None, token: Optional[str] = None,
 ) -> None:
     """Keep where the "Continuing the investigation" thread notice is, to update it at the end.
 
-    The card's original blocks are kept too, to put its button back if the
-    continuation never runs.
+    Written by the click that reserved the record (*token*), or one whose
+    continuation was accepted. The card's original blocks are kept too, to put
+    its button back if the continuation never runs.
     """
     from utils.cache.redis_client import get_redis_client
 
@@ -636,15 +673,15 @@ def remember_continue_notice(
         client.set(
             _CONTINUE_NOTICE_KEY.format(incident_id),
             json.dumps({"channel": channel, "ts": ts, "requested_by": requested_by,
-                        "card_ts": card_ts, "card_blocks": card_blocks}),
+                        "card_ts": card_ts, "card_blocks": card_blocks, "token": token}),
             ex=_CONTINUE_NOTICE_TTL_SECONDS,
         )
     except Exception:
         logger.warning("[SlackNotification] Could not remember the continuation notice for %s", incident_id)
 
 
-def forget_continue_notice(incident_id: str, notice_ts: str) -> None:
-    """Drop the record of the notice *notice_ts*, whose continuation never started.
+def forget_continue_notice(incident_id: str, token: str) -> None:
+    """Drop the record a click reserved (*token*) whose continuation never started.
 
     Another click's record is left alone.
     """
@@ -655,8 +692,8 @@ def forget_continue_notice(incident_id: str, notice_ts: str) -> None:
         try:
             key = _CONTINUE_NOTICE_KEY.format(incident_id)
             raw = client.get(key)
-            if raw and json.loads(raw).get("ts") == notice_ts:
-                client.delete(key)
+            if raw and json.loads(raw).get("token") == token:
+                _delete_if_unchanged(client, key, raw)
         except Exception:
             logger.debug("[SlackNotification] Could not drop the continuation notice for %s", incident_id)
 
@@ -693,6 +730,8 @@ def finish_continue_notice(
         if not raw:
             return False
         notice = json.loads(raw)
+        if not notice.get("ts"):
+            return False  # a click's reservation: no notice was posted yet
     except Exception:
         logger.warning("[SlackNotification] Could not read the continuation notice for %s", incident_id)
         return False
@@ -715,7 +754,8 @@ def finish_continue_notice(
         logger.warning("[SlackNotification] Could not update the continuation notice for %s", incident_id)
         return False
     try:
-        redis_client.delete(key)
+        # Only the record this call completed: a continuation started meanwhile keeps its own.
+        _delete_if_unchanged(redis_client, key, raw)
     except Exception:
         logger.debug("[SlackNotification] Could not clear the continuation notice for %s", incident_id)
     return True

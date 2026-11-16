@@ -727,34 +727,58 @@ def _handle_continue_investigation(payload: dict, action: dict, slack_user_id: s
                         "Something went wrong continuing the investigation. Please try again.")
         return {"text": ""}
 
+    import uuid
+
+    from utils.notifications.slack_notification_service import reserve_continue_notice
+
     # The card and its thread show the continuation before it is queued, so
-    # nothing the run does when it ends can be overwritten by them.
+    # nothing the run does when it ends can be overwritten by them. A click
+    # first reserves the incident's notice record: a second click on the same
+    # card (a double click, another user, a redelivery) finds it held and
+    # leaves the active continuation's card and notice alone.
     message = payload.get('message') or {}
     clicker_name = (payload.get('user') or {}).get('name', 'someone')
-    marked = _mark_continuing(feedback, channel_id, message, incident_id, clicker_name)
+    token = uuid.uuid4().hex
+    reserved = reserve_continue_notice(incident_id, token)
+    marked = _mark_continuing(feedback, channel_id, message, incident_id, clicker_name, token) if reserved else {}
     try:
         continue_investigation(incident_id, clicker_user_id, org_id)
     except ContinueRefused as refused:
-        _unmark_continuing(feedback, channel_id, message, incident_id, marked)
+        if reserved:
+            _unmark_continuing(feedback, channel_id, message, incident_id, marked, token)
         _send_ephemeral(feedback, channel_id, slack_user_id, f"Can't continue: {refused}.")
+        return {"text": ""}
     except Exception:
         logger.exception("Failed to continue investigation %s from Slack", sanitize(incident_id))
-        _unmark_continuing(feedback, channel_id, message, incident_id, marked)
+        if reserved:
+            _unmark_continuing(feedback, channel_id, message, incident_id, marked, token)
         _send_ephemeral(feedback, channel_id, slack_user_id,
                         "Something went wrong continuing the investigation. Please try again.")
+        return {"text": ""}
+    if not reserved:
+        # The record was held, yet this click's continuation was accepted: the
+        # record belonged to a run that already ended. This run takes it over.
+        _mark_continuing(feedback, channel_id, message, incident_id, clicker_name, token)
     return {"text": ""}
 
 
-def _mark_continuing(feedback, channel_id: str, message: dict, incident_id: str, clicker_name: str) -> dict:
+def _mark_continuing(
+    feedback, channel_id: str, message: dict, incident_id: str, clicker_name: str, token: str,
+) -> dict:
     """Swap the card's button for a "continuing" note and post the thread notice.
 
-    Returns what was changed, for _unmark_continuing to undo.
+    Returns what was changed, for _unmark_continuing to undo. With no notice
+    posted, the click's reservation (*token*) is released: there is nothing
+    for the run to update when it ends.
     """
-    from utils.notifications.slack_notification_service import continuing_blocks, remember_continue_notice
+    from utils.notifications.slack_notification_service import (
+        continuing_blocks, forget_continue_notice, remember_continue_notice,
+    )
 
     marked: dict = {}
     message_ts = message.get('ts')
     if not (feedback and message_ts):
+        forget_continue_notice(incident_id, token)
         return marked
     if message.get('blocks'):
         try:
@@ -777,25 +801,38 @@ def _mark_continuing(feedback, channel_id: str, message: dict, incident_id: str,
             marked['notice_ts'] = notice_ts
             # Updated with the outcome when the continuation ends.
             remember_continue_notice(incident_id, channel_id, notice_ts, clicker_name,
-                                     card_ts=message_ts, card_blocks=message.get('blocks'))
+                                     card_ts=message_ts, card_blocks=message.get('blocks'), token=token)
     except Exception:
         logger.warning("Could not post the continuation notice for incident %s", sanitize(incident_id))
+    if 'notice_ts' not in marked:
+        forget_continue_notice(incident_id, token)
     return marked
 
 
-def _unmark_continuing(feedback, channel_id: str, message: dict, incident_id: str, marked: dict) -> None:
-    """Put the card and thread back as they were: the continuation never started."""
+def _unmark_continuing(
+    feedback, channel_id: str, message: dict, incident_id: str, marked: dict, token: str,
+) -> None:
+    """Put the card and thread back as they were: this click's continuation never started.
+
+    Each step stands alone, so a notice Slack would not delete still leaves
+    the card its button. The click's reservation is released either way:
+    nothing else would ever clean it up, and kept it would hold off the next
+    click for hours.
+    """
     from utils.notifications.slack_notification_service import forget_continue_notice
 
-    try:
-        if marked.get('notice_ts'):
-            forget_continue_notice(incident_id, marked['notice_ts'])
+    if marked.get('notice_ts'):
+        try:
             feedback.delete_message(channel_id, marked['notice_ts'])
-        if marked.get('card'):
+        except Exception:
+            logger.warning("Could not delete the continuation notice of incident %s", sanitize(incident_id))
+    if marked.get('card'):
+        try:
             feedback.update_message(channel_id, message['ts'], message.get('text') or "Investigation",
                                     blocks=message['blocks'])
-    except Exception:
-        logger.warning("Could not restore the card of incident %s", sanitize(incident_id))
+        except Exception:
+            logger.warning("Could not restore the card of incident %s", sanitize(incident_id))
+    forget_continue_notice(incident_id, token)
 
 
 def _handle_suggestion_details(payload: dict, action: dict, slack_user_id: str, team_id: str, channel_id: str) -> dict:
