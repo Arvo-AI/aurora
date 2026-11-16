@@ -109,12 +109,14 @@ The incomplete fixture is derived, not captured:
 
 ## The repeat fixtures
 
-C2 needs the same fix twice from a reset. The capture of 2026-11-16 also ran a second baseline and a second full fix, in one cycle with P1, so both repeats are a different cycle and not a copy of the documents in `fixtures/snapshots`.
+C2 needs the same fix three times from a reset, because the brief asks for N at least 3 on the baseline and on the full fix. The capture of 2026-11-16 ran the second cycle with P1, and a third cycle ran on its own later that day, so every repeat is a different cycle and not a copy of the documents in `fixtures/snapshots`.
 
 | Fixture | Variant | Captured at | Verdict it supports |
 |---|---|---|---|
 | `fixtures/repeats/baseline-r2.json` | baseline | `2026-11-16T01:37:26Z` | CONFIRMED, six FAIL, identical per-check statuses |
 | `fixtures/repeats/full-r2.json` | full | `2026-11-16T01:42:04Z` | VERIFIED_WITHIN_CONTRACT, identical per-check statuses |
+| `fixtures/repeats/baseline-r3.json` | baseline | `2026-11-16T02:51:21Z` | CONFIRMED, six FAIL, identical per-check statuses |
+| `fixtures/repeats/full-r3.json` | full | `2026-11-16T02:53:39Z` | VERIFIED_WITHIN_CONTRACT, identical per-check statuses |
 
 ## Aurora's claim
 

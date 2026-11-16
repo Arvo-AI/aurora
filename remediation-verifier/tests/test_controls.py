@@ -9,7 +9,7 @@ The four controls are an experimental design, not a demo:
 - C1 mutates the baseline observation until one check would pass. If the
   verdict stays CONFIRMED, that check is not fault-enforcing. The score is
   the checks with a killing mutation over the six declared checks.
-- C2 runs the same fix twice from a reset and requires the same verdict.
+- C2 runs the same fix three times from a reset and requires the same verdict.
 
 The mutations touch the observation, not the code: the object under test here
 is the oracle, so a mutant is a baseline document with one fault removed.
@@ -200,26 +200,28 @@ def repeat_document(name: str) -> Document:
 
 def test_the_same_fix_from_a_reset_repeats() -> None:
     baseline, baseline_results = decide(baseline_document())
-    repeated_baseline, repeated_results = decide(repeat_document("baseline-r2.json"))
-    assert repeated_baseline.reproduction_status == CONFIRMED
-    assert {result.id: result.status for result in baseline_results} == {
-        result.id: result.status for result in repeated_results
-    }
+    reference = {result.id: result.status for result in baseline_results}
+    for name in ("baseline-r2.json", "baseline-r3.json"):
+        repeated, results = decide(repeat_document(name))
+        assert repeated.reproduction_status == CONFIRMED, name
+        assert {result.id: result.status for result in results} == reference, name
 
     variant = CONTRACT.oracle.variants["full"]
     statuses: list[dict[str, str]] = []
-    for path in (FIXTURES / "full.json", REPEATS / "full-r2.json"):
+    captured: list[str] = []
+    for path in (
+        FIXTURES / "full.json",
+        REPEATS / "full-r2.json",
+        REPEATS / "full-r3.json",
+    ):
         observations = from_snapshot(path)
         results = run_checks(CONTRACT, observations, observations)
         verdict = decide_remediation(CONTRACT, variant, results, baseline=baseline)
         assert verdict.status == VERIFIED_WITHIN_CONTRACT, path.name
         statuses.append({result.id: result.status for result in verdict.results})
-    assert statuses[0] == statuses[1]
-    captured = [
-        from_snapshot(FIXTURES / "full.json").meta.captured_at,
-        from_snapshot(REPEATS / "full-r2.json").meta.captured_at,
-    ]
-    assert captured[0] != captured[1]
+        captured.append(observations.meta.captured_at)
+    assert statuses[0] == statuses[1] == statuses[2]
+    assert len(set(captured)) == 3
 
 
 def test_the_control_metrics_carry_their_denominators() -> None:
@@ -244,7 +246,7 @@ def test_the_control_metrics_carry_their_denominators() -> None:
         "mutations_killed": (len(MUTATIONS), len(CHECKS)),
         "false_acceptance": (false_acceptance, len(NEGATIVE_CONTROLS)),
         "false_rejection": (false_rejection, 1),
-        "repeatability": (2, 2),
+        "repeatability": (3, 3),
     }
     assert metrics == {
         "fault_detection": (6, 6),
@@ -252,5 +254,5 @@ def test_the_control_metrics_carry_their_denominators() -> None:
         "mutations_killed": (6, 6),
         "false_acceptance": (0, 3),
         "false_rejection": (0, 1),
-        "repeatability": (2, 2),
+        "repeatability": (3, 3),
     }

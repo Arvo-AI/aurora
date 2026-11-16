@@ -68,7 +68,7 @@ Every fixture is a LIVE capture from `aurora-lab` commit `4edcd9dfbc48cbd9ca8ea0
 
 ## Controls
 
-`tests/test_controls.py` runs the four: N1 to N3 are rejected, so false acceptance is 0 of 3; P1 is accepted, so false rejection is 0 of 1; C1 mutates the baseline observation once per check and flips 6 of 6, leaving 0 of 6 weak checks; C2 repeats the baseline and the full fix from a reset, 2 of 2, and the same per-check statuses come back.
+`tests/test_controls.py` runs the four: N1 to N3 are rejected, so false acceptance is 0 of 3; P1 is accepted, so false rejection is 0 of 1; C1 mutates the baseline observation once per check and flips 6 of 6, leaving 0 of 6 weak checks; C2 repeats the baseline and the full fix from a reset, 3 of 3, and the same per-check statuses come back.
 
 ## What it does not do
 
@@ -82,7 +82,7 @@ Every fixture is a LIVE capture from `aurora-lab` commit `4edcd9dfbc48cbd9ca8ea0
 
 - One scenario, one contract. `REMEDIATION_VERIFIER_CONTRACT` points the same code at another contract, and `contracts/scenario_12.yaml` is the only one frozen here.
 - LIVE ran on kind v1.37.0 with Docker 29.9.3 on 2026-11-16. Another cluster may pace rollouts and restarts differently.
-- The repeatability control uses N=2. That is a repeat, not a statistical sample.
+- The repeatability control uses N=3 on the baseline and on the full fix. That is a repeat, not a statistical sample.
 - The HTTP check runs inside the cluster through `kubectl exec deployment/loadgen`, so it needs that pod.
 
 ## Next step
