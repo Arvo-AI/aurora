@@ -225,6 +225,11 @@ export default function IncidentsPage() {
           {incidents.length === 0 && (
             <Card>
               <CardContent className="py-12 text-center">
+                <div className="mx-auto mb-8 max-w-md rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-5">
+                  <p className="font-medium">Get a first result from a failed build</p>
+                  <p className="mt-2 text-sm text-muted-foreground">Paste a CI log for a diagnosis with evidence. No connectors required.</p>
+                  <Button asChild className="mt-4"><Link href="/onboarding/diagnose">Diagnose a build</Link></Button>
+                </div>
                 {!isConnectedToIncidentPlatform && !isLoadingAccounts ? (
                   <ConnectPlatformCTA />
                 ) : (

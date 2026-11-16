@@ -759,6 +759,9 @@ app.register_blueprint(debug_bp)
 from routes.onboarding_routes import onboarding_bp
 app.register_blueprint(onboarding_bp, url_prefix="/api/onboarding")
 
+from routes.ci_diagnosis_routes import ci_diagnosis_bp
+app.register_blueprint(ci_diagnosis_bp)
+
 # ============================================================================
 # Global Error Handlers
 # ============================================================================
