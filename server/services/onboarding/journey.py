@@ -229,7 +229,9 @@ def _stored_providers(cur, org_id: str) -> frozenset[str]:
     check out right now."""
     cur.execute(
         """SELECT provider FROM user_tokens
-            WHERE org_id = %s AND is_active AND secret_ref IS NOT NULL AND provider = ANY(%s)
+            WHERE org_id = %s AND is_active AND provider = ANY(%s)
+              -- Grafana is webhook-only and saves no secret.
+              AND (secret_ref IS NOT NULL OR provider = 'grafana')
            UNION SELECT provider FROM user_connections
             WHERE org_id = %s AND status = 'active' AND provider = ANY(%s)
            UNION SELECT 'github' FROM user_github_installations WHERE org_id = %s AND disconnected_at IS NULL

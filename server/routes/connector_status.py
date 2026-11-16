@@ -59,7 +59,7 @@ def _check_grafana(user_id: str, org_id: str) -> Dict[str, Any]:
                 return {"connected": cursor.fetchone() is not None}
     except Exception as exc:
         logger.warning("[STATUS] grafana check failed: %s", exc)
-        return {"connected": False}
+        return {"connected": False, "check_failed": True}
 
 
 def _check_datadog(creds: Dict[str, Any]) -> Dict[str, Any]:
