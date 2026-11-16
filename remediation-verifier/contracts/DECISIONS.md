@@ -59,10 +59,13 @@ This file records the choices a reader could disagree with. A value that comes f
 | D53 | The HTTP check runs inside the cluster | `probe_in_cluster` runs `kubectl exec deployment/loadgen -- sh -c 'wget -q -S -O - -T <timeout> <route>; echo RV_EXIT:$?'` and reads the last `HTTP/x NNN` line and the JSON body; the host `urllib` probe is gone | The first LIVE baseline failed the HTTP check with `Name or service not known`: the verifier runs on the host, which cannot resolve a cluster-internal Service name, and the same failure would reject a correct fix. The load generator is the client the runbook reads (`app/shop.yaml#L256-L257`), it already has wget, and it sits on the user path. The shell always exits 0, so a 503 is evidence about the Service and not a command failure. |
 | D54 | The lab settle is zero | `LiveSession` passes `SETTLE=0` to `lab.sh break`; the value is a constructor parameter and defaults to zero | `lab.sh` sleeps 45s after `check.sh` proves both faults so backoff counts accumulate. The baseline gate needs a pod that has already OOMKilled and an empty slice, which `check.sh` guarantees, and the verifier opens its own 60s window after the fix. Measured on 2026-11-16 against the Kind cluster: break 100.7s before, 56.4s after, with the same six FAIL results at baseline. |
 | D55 | The capture overlaps its reads with the probe, and the endpoint wait is pacing | `from_live` runs the three HTTP probes in a thread while it reads the deployment, pods, service and endpoint slice, then joins both log reads in a second pool; `Plan` waits 5s for an endpoint with a 1s poll | The probes are spaced by the contract's two-second interval, so they cost at least four seconds; the kubectl reads fit inside that wait. The endpoint wait decides nothing: if the slice is still empty the window runs and the two endpoint checks read the end capture, so a shorter wait loses no evidence and saves up to 55s on a variant that leaves the selector broken. Five seconds is still several times what the EndpointSlice controller needs on this cluster. |
+| D56 | Exit codes carry no verdict | `0` when the report was written, whatever the verdicts; `2` when nothing ran (usage, contract, missing fixture, lab not at the pin); `3` when the verifier crashed | R2: a non-zero exit on REJECTED would let a pipeline block a merge on the verifier's opinion. `2` separates "the operator can fix this" from `3` "this is a bug", so CI can tell a broken fixture from a rejected fix. |
+| D57 | The baseline fixture is the pre-fix state of a SNAPSHOT remediation | `snapshots.verify` decides the baseline first, then passes that verdict as the gate of every remediation; each remediation document stands for both ends of its window | LIVE breaks the cluster once per variant and captures its own pre-fix state (D48). SNAPSHOT has no cluster: after reset and break the state is the baseline's, and the baseline fixture is the capture that proves it. A second document per remediation would add a file without adding evidence, and a remediation without a confirmed baseline still cannot be positive. |
+| D58 | A capture proves the lab commit | `--mode capture` reads `git -C <lab> rev-parse HEAD` and refuses to run when it differs from `contract.source.commit` or cannot be read; `from_live` records that commit in `meta.lab_commit` | A fixture claims a lab commit. Without the guard the claim comes from the contract while the cluster may have run another revision, which breaks R4 and R7. Refusing costs nothing; a fixture with the wrong provenance costs the whole evidence set. |
 
 ## Recorded environment
 
-Measured on 2026-11-15 with `make doctor`, so the numbers below are observed rather than planned.
+Measured with `make doctor` on 2026-11-15, then re-checked on 2026-11-16 when the Docker daemon came up.
 
 | Item | Value |
 |---|---|
@@ -73,12 +76,12 @@ Measured on 2026-11-15 with `make doctor`, so the numbers below are observed rat
 | mypy | 2.4.1 |
 | kubectl | v1.35.3 |
 | kind | v0.33.0 |
-| docker daemon | not reachable, so LIVE is unavailable on this machine (D9) |
+| docker daemon | 29.9.3 with cgroup v2, reachable; the 2026-11-15 profile recorded it unreachable (D9) |
 | `aurora-lab` checkout | `4edcd9dfbc48`, equal to the pin in `scenario_12.yaml` |
-| available mode | SNAPSHOT |
+| available modes | SNAPSHOT and LIVE |
 
 ## Open items
 
-- LIVE has not run. Until it does, no result in this project is labelled LIVE (R1, D9).
-- The runner is implemented and its LIVE path is exercised through a real subprocess with a fake kubectl, not against a cluster. `make verify` is the first thing to run on a machine with Docker.
+- LIVE has run against the Kind cluster: the first baseline at `2026-11-16T00:38:47Z` produced six FAIL and CONFIRMED, and the five-variant capture from `2026-11-16T01:03:39Z` to `01:12:58Z` produced the fixture set in `fixtures/snapshots`.
+- `make verify` and `make capture` arrive in case 10. Until then the modes are reached through `python -m verifier` or the console script.
 - The contract is frozen at the pin above. A later `aurora-lab` commit is a new contract revision, reviewed on its own.
