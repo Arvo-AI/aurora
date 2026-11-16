@@ -1,6 +1,6 @@
 # Remediation verifier, aurora-lab scenario 12
 
-This repository decides one question about a proposed fix: does the fix close the incident that `aurora-lab` scenario `12-two-faults-oom-and-selector` injects, or does it only silence the alert? The answer is evidence for a human reviewer. It never blocks a merge and it is not a required check anywhere.
+This repository decides one question about a proposed fix: does the fix close the incident that `aurora-lab` scenario `12-two-faults-oom-and-selector` injects, or does it only silence the alert? The answer is advisory evidence for a human reviewer. It never blocks a merge and it is not a required check anywhere.
 
 > Este verificador comprueba las condiciones declaradas en el contrato del incidente. No demuestra que no exista ningún otro defecto, y no reemplaza el juicio humano ni la revisión asesora de Aurora.
 
