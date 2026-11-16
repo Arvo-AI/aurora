@@ -12,7 +12,6 @@
 <a href="#run-it">Run it</a> &nbsp;·&nbsp;
 <a href="https://aurora-ai.net">Hosted version</a> &nbsp;·&nbsp;
 <a href="https://arvo-ai.github.io/aurora/">Docs</a> &nbsp;·&nbsp;
-<a href="https://www.aurorasre.ai/benchmark">Benchmark</a> &nbsp;·&nbsp;
 <a href="CHANGELOG.md">Changelog</a>
 
 </div>
@@ -49,18 +48,6 @@ Then it proposed the fix and how to confirm it worked:
 Aurora runs read-only by default, so the patch waits for someone to press Run.
 
 That run took 8 minutes 25 seconds, 34 tool calls and $0.98 of Claude Sonnet 5 on Bedrock, on a laptop that was also running the whole stack. The scenario, the break script and the expected answer are in [`aurora-lab/scenarios/13-networkpolicy-blocks-redis`](https://github.com/Arvo-AI/aurora-lab/tree/main/scenarios/13-networkpolicy-blocks-redis).
-
-## How often it gets it right
-
-One good run proves little, so we run every lab scenario more than once and publish all of it, misses included. A judge model grades each answer against the injected fault, a person checks Aurora's verdicts, and a second blind pass grades again with the agent's name removed.
-
-| | Correct | Partial | Wrong | Median time | Median cost |
-|:--|--:|--:|--:|--:|--:|
-| **Aurora** | **34 / 38** | 4 | 0 | 2.5 min | $0.35 |
-| HolmesGPT | 31 / 38 | 6 | 1 | 45 s | |
-| K8sGPT | 0 / 38 | 21 | 17 | 13 s | |
-
-All three got the same cluster and the same alert text. Full methodology, per-scenario results and raw transcripts are on [aurorasre.ai/benchmark](https://www.aurorasre.ai/benchmark). To add your agent, open an issue on [aurora-lab](https://github.com/Arvo-AI/aurora-lab).
 
 ## What else it does
 
