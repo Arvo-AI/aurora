@@ -161,6 +161,90 @@ CREDENTIAL_READS = (
     ('cognito', 'idp', 'initiate', 'auth'),
 )
 
+# Reads that return a credential only through an option, or through an operand
+# that sits past the verb. Anchored to the leading positionals, like the
+# kubeconfig exemption, so the words cannot be smuggled in from elsewhere.
+# `kubectl config view` prints the kubeconfig with its keys and tokens redacted
+# unless `--raw` or `--flatten` is passed. `gcloud config config-helper` prints
+# an access token. `aws configure get` reads one stored credential by name.
+_CREDENTIAL_OPERATION_FLAGS = {
+    ('kubectl', 'config', 'view'): frozenset({'--raw', '--flatten'}),
+    ('config', 'view'): frozenset({'--raw', '--flatten'}),
+}
+_CREDENTIAL_OPERATIONS = (
+    ('gcloud', 'config', 'config-helper'),
+    ('config', 'config-helper'),
+)
+_CREDENTIAL_LOOKUPS = (
+    ('aws', 'configure', 'get'),
+    ('configure', 'get'),
+)
+# Output formats that read the template from a file the gate cannot see.
+_TEMPLATE_FILE_OUTPUTS = ('go-template-file', 'template-file', 'jsonpath-file')
+_TEMPLATE_FILE_REASON = 'it reads an output template from a file'
+# Fixed strings: the credential one reaches a log line and must not echo the
+# matched word (see `_credential_rejection`); the ssh one is shared by every
+# path that decides the far side of ssh is not a read.
+_CREDENTIAL_REASON = 'it returns a credential, key, secret or token'
+_NOT_A_REMOTE_READ = 'it does not run a read-only remote command'
+
+
+def _operation_returns_credential(operation: tuple, flag_names: set) -> bool:
+    """Whether the operation hands back a credential through an option or operand."""
+    for combo, flags in _CREDENTIAL_OPERATION_FLAGS.items():
+        if operation[:len(combo)] == combo and flag_names & flags:
+            return True
+    if any(operation[:len(combo)] == combo for combo in _CREDENTIAL_OPERATIONS):
+        return True
+    for combo in _CREDENTIAL_LOOKUPS:
+        if operation[:len(combo)] == combo:
+            names = operation[len(combo):]
+            return any(
+                w in CREDENTIAL_WORDS
+                for name in names for w in re.split(r'[-_.]+', name)
+            )
+    return False
+
+
+def _option_values(tokens: list[str]):
+    """Yield `(option, value)` for each option in one segment, lowercased name.
+
+    `--flag=value`, `--flag value`, `-o value`, `-o=value` and the glued
+    `-ovalue` all pair the same way. A boolean switch yields the token after
+    it, which the callers only compare against fixed prefixes, so a wrong
+    pairing can refuse but never clear.
+    """
+    for i, tok in enumerate(tokens):
+        if not tok.startswith('-') or tok == '--':
+            continue
+        if not tok.startswith('--') and len(tok) > 2 and tok[2] != '=':
+            name, value = tok[:2], tok[2:]
+        else:
+            name, has_value, value = tok.partition('=')
+            if not has_value:
+                value = tokens[i + 1] if i + 1 < len(tokens) else ''
+        yield name.lower(), value
+
+
+def _option_value_rejection(segments: list) -> str:
+    """Why an option value makes the command a credential or file read, or ''.
+
+    Option values never supply the verb, which is why `_operation_of` drops
+    them. But `kubectl get --raw /api/v1/namespaces/x/secrets` names the same
+    Secret that `kubectl get secret` refuses, so the credential words are
+    matched against what `--raw` fetches, and `-o go-template-file=PATH`
+    reads an arbitrary file as the template.
+    """
+    for tokens in segments:
+        for name, value in _option_values(tokens):
+            if name == '--raw':
+                if set(_split_words(value.lower())) & CREDENTIAL_WORDS:
+                    return _CREDENTIAL_REASON
+            elif name in ('-o', '--output'):
+                if value.lower().startswith(_TEMPLATE_FILE_OUTPUTS):
+                    return _TEMPLATE_FILE_REASON
+    return ''
+
 # Shell control characters that start a new command.
 _CONTROL_CHARS = '();<>|&`'
 
@@ -377,21 +461,7 @@ def _is_kubeconfig_fetch(operation: tuple) -> bool:
 
 def _is_credential_read(facts: list, flag_names: set) -> bool:
     """Whether the command hands back credentials, keys, secrets or tokens."""
-    # Options that dump secrets gate the whole command.
-    if flag_names & CREDENTIAL_FLAGS:
-        return True
-
-    # A credential word in any segment blocks, unless *that* segment is exactly a
-    # kubeconfig fetch. Checked per segment so one exempt segment can't clear a
-    # credential read sitting in another.
-    for f in facts:
-        if f.credential_words & CREDENTIAL_WORDS and not _is_kubeconfig_fetch(f.operation):
-            return True
-
-    all_words = set().union(*(f.words for f in facts))
-    return any(
-        all(part in all_words for part in combo) for combo in CREDENTIAL_READS
-    )
+    return bool(_credential_rejection(facts, flag_names))
 
 
 # `--dry-run` only makes an unknown operation safe when it actually skips
@@ -422,14 +492,21 @@ def _credential_rejection(facts: list, flag_names: set) -> str:
     feeding the credential vocabulary into one trips CodeQL's clear-text-logging
     rule for no gain, since the agent can already see its own command.
     """
+    # Options that dump secrets gate the whole command.
     if flag_names & CREDENTIAL_FLAGS:
         return 'it passes an option that returns decrypted secrets'
 
+    # A credential word in any segment blocks, unless *that* segment is exactly a
+    # kubeconfig fetch. Checked per segment so one exempt segment can't clear a
+    # credential read sitting in another.
     for f in facts:
         if f.credential_words & CREDENTIAL_WORDS and not _is_kubeconfig_fetch(f.operation):
-            return 'it returns a credential, key, secret or token'
+            return _CREDENTIAL_REASON
+        if _operation_returns_credential(f.operation, flag_names):
+            return _CREDENTIAL_REASON
 
-    if _is_credential_read(facts, flag_names):
+    all_words = set().union(*(f.words for f in facts))
+    if any(all(part in all_words for part in combo) for combo in CREDENTIAL_READS):
         return 'it returns usable credentials'
     return ''
 
@@ -499,6 +576,13 @@ _SHELL_MUTATING_EXACT = {
     # `-K` is the short form the man page documents. `-k` stays for the old spelling.
     'ss': frozenset({'-k', '-K', '--kill'}),
     'less': frozenset({'-o', '--log-file'}),
+    # Text filters that edit in place, or run a script the gate cannot read.
+    'sed': frozenset({'-i', '--in-place', '-f', '--file'}),
+    'awk': frozenset({'-i', '--include', '-f', '--file', '-l', '--load',
+                      '-E', '--exec', '-W'}),
+    'gawk': frozenset({'-i', '--include', '-f', '--file', '-l', '--load',
+                       '-E', '--exec', '-W'}),
+    'yq': frozenset({'-i', '--inplace', '-f', '--from-file'}),
 }
 # `--vacuum` also covers `--vacuum-time` / `--vacuum-size` / `--vacuum-files`.
 _SHELL_MUTATING_PREFIX = {
@@ -508,7 +592,32 @@ _SHELL_MUTATING_PREFIX = {
 # `date -Iseconds` prints a timestamp. The `s` is not `date -s`.
 _SHELL_ATTACHED_VALUE = {
     'date': frozenset({'-I'}),
+    # `awk -F: '{print $1}'` and `awk -vi=1` are a separator and a variable.
+    'awk': frozenset({'-F', '-v'}),
+    'gawk': frozenset({'-F', '-v'}),
+    'sed': frozenset({'-l'}),
 }
+
+# What a filter's script may not do: run a program, pipe to one, read a file
+# or write one. The script is a quoted token, so an unquoted `|` or `>` would
+# already have split the segment; these are the ones hiding inside the quotes.
+# `>` is only a redirect after `print`; elsewhere it is a comparison.
+_AWK_PROGRAM_RUNS_OR_WRITES = re.compile(
+    r'system\s*\(|getline|\||@include|@load|@\w+\s*\(|\bprintf?\b[^;{}]*>'
+)
+_AWK_PROGRAM_REASON = 'its awk program runs a command, reads a file or writes one'
+_SED_SCRIPT_REASON = 'its sed script runs a command or writes a file'
+_AWKS = frozenset({'awk', 'gawk'})
+# awk options that consume the next token, so `-F '|'` and `-v sep='|'` are a
+# separator and a variable rather than the program.
+_AWK_VALUE_FLAGS = frozenset({
+    '-F', '--field-separator', '-v', '--assign', '-f', '--file', '-e',
+    '--source', '-i', '--include', '-l', '--load', '-E', '--exec', '-W',
+})
+_AWK_PROGRAM_FLAGS = frozenset({'-e', '--source'})
+# sed options that consume the next token.
+_SED_VALUE_FLAGS = frozenset({'-e', '--expression', '-f', '--file', '-l', '--line-length'})
+_SED_SCRIPT_FLAGS = frozenset({'-e', '--expression'})
 # `del` / `change` / `append` are not write verbs, but they change routes.
 _IP_WRITE_ACTIONS = frozenset({
     'del', 'delete', 'change', 'append', 'replace', 'save',
@@ -603,6 +712,11 @@ def _shell_flag_mutates(executable: str, flag: str) -> bool:
     prefixes = _SHELL_MUTATING_PREFIX.get(executable, ())
     if flag in exact or any(flag == p or flag.startswith(p + '-') for p in prefixes):
         return True
+    # getopt accepts any unambiguous prefix of a long option, so `sort --outp`
+    # is `sort --output`. An ambiguous prefix is refused rather than guessed at.
+    if flag.startswith('--') and len(flag) > 2:
+        if any(p.startswith('--') and p.startswith(flag) for p in exact):
+            return True
     attached = _SHELL_ATTACHED_VALUE.get(executable, ())
     # `date -Iseconds` is one option plus a format, not a bundle that contains `-s`.
     if any(flag == prefix or flag.startswith(prefix) for prefix in attached):
@@ -652,26 +766,225 @@ def jump_target_is_host(spec: str) -> bool:
     return bool(hops) and all(_JUMP_HOP.match(hop) for hop in hops)
 
 
-def _segment_mutates(tokens: list[str]) -> bool:
-    """Whether a host tool writes through a flag or a positional, not a verb."""
-    fact = analyze_segment(tokens)
+def _skip_delimited(script: str, i: int, delim: str) -> int:
+    """Index just past the `delim` that closes the one at *i*, honouring `\\`."""
+    i += 1
+    while i < len(script):
+        if script[i] == '\\':
+            i += 2
+            continue
+        if script[i] == delim:
+            return i + 1
+        i += 1
+    return i
+
+
+def _strip_sed_address(piece: str) -> str:
+    """One sed command with its address (`1,20`, `/re/`, `$!`) removed."""
+    s = piece.lstrip()
+    i = 0
+    while i < len(s):
+        c = s[i]
+        if c.isdigit() or c in '$,~+!' or c.isspace():
+            i += 1
+        elif c == '/':
+            i = _skip_delimited(s, i, '/')
+            i = _skip_regex_modifiers(s, i)
+        # `\cREGEXc` is a regex address with a custom delimiter.
+        elif c == '\\' and i + 1 < len(s):
+            i = _skip_delimited(s, i + 1, s[i + 1])
+            i = _skip_regex_modifiers(s, i)
+        else:
+            break
+    return s[i:]
+
+
+def _skip_regex_modifiers(s: str, i: int) -> int:
+    """Past the `I` / `M` modifiers a regex address may carry (`/re/Ip`)."""
+    while i < len(s) and s[i] in 'IM':
+        i += 1
+    return i
+
+
+def _sed_script_mutates(script: str) -> bool:
+    """Whether a sed script runs a program (`e`) or writes a file (`w`, `W`).
+
+    Both exist as commands and as flags of `s`. Everything else sed can do
+    only changes the text it prints. The script is walked command by
+    command, so a `;` inside `s/a;b/c/` is part of the pattern, not a
+    separator.
+    """
+    return any(
+        cmd in 'ewW' or (cmd == 's' and any(flag in 'ew' for flag in flags))
+        for cmd, flags in _sed_commands(script)
+    )
+
+
+def _sed_segment_end(script: str, i: int, stops: str) -> int:
+    """Index of the first character of *stops* at or after *i*, or the end."""
+    while i < len(script) and script[i] not in stops:
+        i += 1
+    return i
+
+
+def _sed_parts_end(script: str, i: int) -> int:
+    """Index just past the third delimiter of the `s` or `y` command at *i*."""
+    if i + 1 >= len(script):
+        return len(script)
+    delim = script[i + 1]
+    end = i + 1
+    for _ in range(2):
+        end = _skip_delimited(script, end, delim) - 1
+    return end + 1
+
+
+def _sed_commands(script: str):
+    """Yield `(command, flags)` for each command in a sed script, in order.
+
+    Only `s` carries flags. Addresses are stripped, `s`/`y` are skipped by
+    their delimiters so a `;` inside the pattern is not a separator, `a`/`i`/`c`
+    text and `#` comments run to the end of the line, and a block's commands
+    follow its brace.
+    """
+    n = len(script)
+    i = 0
+    while i < n:
+        if script[i] in ';\n{} \t':
+            i += 1
+            continue
+        rest = _strip_sed_address(script[i:])
+        i = n - len(rest)
+        if i >= n:
+            return
+        cmd = script[i]
+        if cmd in '{}':
+            i += 1
+        elif cmd in 'sy':
+            end = _sed_parts_end(script, i)
+            flags_end = _sed_segment_end(script, end, ';\n}')
+            yield cmd, script[end:flags_end]
+            i = flags_end
+        elif cmd in 'aic#':
+            yield cmd, ''
+            i = _sed_segment_end(script, i, '\n')
+        else:
+            yield cmd, ''
+            i = _sed_segment_end(script, i + 1, ';\n{}')
+
+
+def _filter_programs(tokens: list[str], value_flags: frozenset,
+                     program_flags: frozenset, short_program_flag: str) -> list[str]:
+    """The program text a sed or awk segment runs.
+
+    Every program option (`-e` / `--source`) contributes one; with none given
+    the program is the first positional. Options that take a value consume
+    it, so `-F '|'` or `-l 5` is never mistaken for the program, and a glued
+    `-eSCRIPT` or bundled `-ne SCRIPT` keeps its script.
+    """
+    programs: list[str] = []
+    positionals: list[str] = []
+    i = 0
+    while i < len(tokens) and _is_assignment(tokens[i]):
+        i += 1
+    i += 1  # the filter binary itself
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok == '--':
+            positionals.extend(tokens[i + 1:])
+            break
+        if not tok.startswith('-') or tok == '-':
+            positionals.append(tok)
+            i += 1
+            continue
+        program, consumed = _program_in_option(
+            tok, tokens[i + 1:i + 2], value_flags, program_flags, short_program_flag,
+        )
+        if program is not None:
+            programs.append(program)
+        i += 1 + consumed
+    return programs or positionals[:1]
+
+
+def _program_in_option(tok: str, following: list[str], value_flags: frozenset,
+                       program_flags: frozenset, short_program_flag: str,
+                       ) -> tuple[Optional[str], int]:
+    """The program an option token carries, and how many later tokens it took.
+
+    `-e PROG` and `--source=PROG` carry it; any other value option (`-F '|'`,
+    `-l 5`) consumes its token without yielding one. A short option glued to
+    its value (`-F:`, `-vsep=1`, `-l5`, `-eSCRIPT`) carries it only if it is
+    the program option. A bundle ending in the program letter (`-ne`) takes
+    the next token.
+    """
+    next_token = (following[0] if following else None), (1 if following else 0)
+    if tok in value_flags:
+        return next_token if tok in program_flags else (None, next_token[1])
+    if tok.startswith('--'):
+        name, has_value, value = tok.partition('=')
+        return (value if name in program_flags and has_value else None), 0
+    if tok[:2] in value_flags:
+        return (tok[2:] if tok[:2] in program_flags else None), 0
+    return _program_in_bundle(tok[1:], short_program_flag, next_token)
+
+
+def _program_in_bundle(letters: str, short_program_flag: str,
+                       next_token: tuple[Optional[str], int]) -> tuple[Optional[str], int]:
+    """The program a short-option bundle carries: glued after the letter, or next."""
+    if short_program_flag not in letters:
+        return None, 0
+    glued = letters.split(short_program_flag, 1)[1]
+    return (glued, 0) if glued else next_token
+
+
+def _filter_script_rejection(executable: str, tokens: list[str]) -> str:
+    """Why a text filter's script is not a read, or '' when it only filters.
+
+    A filter was cleared by its name alone, so `awk '{system("...")}'` and
+    `sed 'e ...'` ran a program on the far side of ssh as a read.
+    """
+    if executable in _AWKS:
+        programs = _filter_programs(tokens, _AWK_VALUE_FLAGS, _AWK_PROGRAM_FLAGS, 'e')
+        if any(_AWK_PROGRAM_RUNS_OR_WRITES.search(p) for p in programs):
+            return _AWK_PROGRAM_REASON
+    elif executable == 'sed':
+        scripts = _filter_programs(tokens, _SED_VALUE_FLAGS, _SED_SCRIPT_FLAGS, 'e')
+        if any(_sed_script_mutates(s) for s in scripts):
+            return _SED_SCRIPT_REASON
+    return ''
+
+
+def _segment_mutation_reason(tokens: list[str],
+                             fact: Optional[SegmentFacts] = None) -> str:
+    """Why a host tool writes through a flag, a script or a positional, not a verb."""
+    if fact is None:
+        fact = analyze_segment(tokens)
     exe = fact.executable or ''
+    # Short options stay cased: `hostname -F` writes, `hostname -f` only prints.
     flags = [
         (t.split('=', 1)[0].lower() if t.startswith('--') else t.split('=', 1)[0])
         for t in tokens if t.startswith('-')
     ]
-    if any(_shell_flag_mutates(exe, flag) for flag in flags):
-        return True
+    for flag in flags:
+        if _shell_flag_mutates(exe, flag):
+            return "'%s %s' writes a file or runs a program" % (exe, flag)
+    reason = _filter_script_rejection(exe, tokens)
+    if reason:
+        return reason
     # `hostname` with a name renames the host. A bare `hostname` only prints it.
     if exe == 'hostname' and len(fact.operation) > 1:
-        return True
+        return 'it renames the host'
     # `uniq in out` writes the second file. One operand is a read.
     if exe == 'uniq' and len(fact.operation) > 2:
-        return True
+        return "'uniq' with two operands writes the second one"
     # `ip route del` is not a write verb. Any mutating action blocks.
     if exe == 'ip' and any(tok in _IP_WRITE_ACTIONS for tok in fact.operation[1:]):
-        return True
-    return False
+        return "'ip' changes the network configuration"
+    return ''
+
+
+def _segment_mutates(tokens: list[str], fact: Optional[SegmentFacts] = None) -> bool:
+    """Whether a host tool writes through a flag, a script or a positional, not a verb."""
+    return bool(_segment_mutation_reason(tokens, fact))
 
 
 def _shell_c_script(tokens: list[str]) -> Optional[str]:
@@ -720,25 +1033,10 @@ def _is_shell_diagnostic(command: str) -> bool:
     if facts[0].executable in _CONTAINER_CLIS:
         op = facts[0].operation
         return len(op) >= 2 and op[1] in _CONTAINER_READS
-    for seg, fact in zip(segments, facts):
-        exe = fact.executable or ''
-        # Short options stay cased: `hostname -F` writes, `hostname -f` only prints.
-        flags = [
-            (t.split('=', 1)[0].lower() if t.startswith('--') else t.split('=', 1)[0])
-            for t in seg if t.startswith('-')
-        ]
-        # `journalctl --vacuum-time` and `sort -o out` are writes with no write verb.
-        if any(_shell_flag_mutates(exe, flag) for flag in flags):
-            return False
-        # `hostname` with a name renames the host. A bare `hostname` only prints it.
-        if exe == 'hostname' and len(fact.operation) > 1:
-            return False
-        # `uniq in out` writes the second file. One operand is a read.
-        if exe == 'uniq' and len(fact.operation) > 2:
-            return False
-        # `ip route del` is not a write verb. Any mutating action blocks.
-        if exe == 'ip' and any(tok in _IP_WRITE_ACTIONS for tok in fact.operation[1:]):
-            return False
+    # `journalctl --vacuum-time`, `sort -o out` and `sed 'e cmd'` are writes
+    # with no write verb, in the first segment or in a downstream filter.
+    if any(_segment_mutates(seg, fact) for seg, fact in zip(segments, facts)):
+        return False
     return facts[0].executable in SHELL_READ_PROGRAMS
 
 
@@ -748,11 +1046,12 @@ def _one_segment_rejection(tokens: list[str], depth: int) -> str:
     reason = describe_rejection(one, _ssh_depth=depth)
     # A recognised read verb used to clear the rest of the line. `sort -o`
     # is still a write, and it has no write verb for that check to see.
-    if _segment_mutates(tokens):
-        return reason or 'it does not run a read-only remote command'
+    fact = analyze_segment(tokens)
+    mutation = _segment_mutation_reason(tokens, fact)
+    if mutation:
+        return mutation
     if not reason:
         return ''
-    fact = analyze_segment(tokens)
     # Host tools and text filters have no cloud verb. Mutating flags already returned.
     if reason == 'no recognised read verb was found in it' and (
         _is_shell_diagnostic(one) or fact.executable in DOWNSTREAM_FILTERS
@@ -765,7 +1064,7 @@ def _remote_command_rejection(remote: str, depth: int, shell_depth: int = 0) -> 
     """Why a command run on the far side of ssh isn't a read."""
     # A nested `sh -c` can hide another `sh -c`. Stop rather than recurse forever.
     if shell_depth > 4:
-        return 'it does not run a read-only remote command'
+        return _NOT_A_REMOTE_READ
     segments, parse_reason = _split_segments_or_reason(remote)
     if not segments:
         return parse_reason
@@ -774,7 +1073,7 @@ def _remote_command_rejection(remote: str, depth: int, shell_depth: int = 0) -> 
         # The script is what runs. The shell binary itself is not a read verb.
         if script is not None:
             if not script.strip():
-                return 'it does not run a read-only remote command'
+                return _NOT_A_REMOTE_READ
             reason = _remote_command_rejection(script, depth, shell_depth + 1)
             if reason:
                 return reason
@@ -882,7 +1181,7 @@ def _ssh_invocation_rejection(
         return ''
 
     if tunnel:
-        return 'it does not run a read-only remote command'
+        return _NOT_A_REMOTE_READ
     if not saw_destination or not remote_argv:
         return 'it opens an interactive shell'
 
@@ -897,7 +1196,7 @@ def _ssh_invocation_rejection(
     # reading it (`sort -i ~/.ssh/id_rsa`), not Aurora authenticating.
     from utils.security.signature_match import ssh_key_material_exposed
     if ssh_key_material_exposed(remote, allow_identity_option=False):
-        return 'it returns a credential, key, secret or token'
+        return _CREDENTIAL_REASON
 
     # Every program in the remote command has to be a read, including a
     # write that follows a recognised read verb and a script inside `sh -c`.
@@ -945,8 +1244,16 @@ def describe_rejection(command: str, _ssh_depth: int = 0) -> str:
     }
 
     for reason in (_credential_rejection(facts, flag_names),
+                   _option_value_rejection(segments),
                    _write_rejection(facts),
                    _pipeline_rejection(facts)):
+        if reason:
+            return reason
+
+    # A downstream filter is a text filter by name, and `sed -i` or
+    # `awk '{system("...")}'` still writes or runs a program.
+    for seg, fact in zip(segments[1:], facts[1:]):
+        reason = _segment_mutation_reason(seg, fact)
         if reason:
             return reason
 
