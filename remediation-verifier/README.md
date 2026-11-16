@@ -1,8 +1,8 @@
 # Remediation verifier, aurora-lab scenario 12
 
-In this incident the shop stops serving items, and the alert names only one of the two faults behind it. Scenario `12-two-faults-oom-and-selector` puts both in one namespace. The alerted fault: the worker crash-loops because `BATCH_SIZE` went from 500 to 2500 against a 192Mi limit. The silent one: the frontend Service selects `app=frontend,tier=web`, no pod carries `tier=web`, so the Service has no endpoint and every request fails. Both are documented in the scenario (`scenario.yaml#L3`, `#L17-L18`) at [commit 4edcd9df](https://github.com/Arvo-AI/aurora-lab/tree/4edcd9dfbc48cbd9ca8ea031e429832cf72842d0/scenarios/12-two-faults-oom-and-selector).
+In this incident, documented at [scenario 12, commit 4edcd9df](https://github.com/Arvo-AI/aurora-lab/tree/4edcd9dfbc48cbd9ca8ea031e429832cf72842d0/scenarios/12-two-faults-oom-and-selector) in `scenario.yaml#L3` and `#L17-L18`, the shop stops serving items and the alert names only one of the two faults behind it. Both live in one namespace: the worker crash-loops because `BATCH_SIZE` went from 500 to 2500 against a 192Mi limit, and the frontend Service selects `app=frontend,tier=web`, which no pod carries, so the Service has no endpoint and every request fails. The mechanism of each fault is in `break.sh`, and the two conditions the lab checks are in `check.sh#L1-L2`.
 
-Kubernetes tooling such as K8sGPT detects the crash loop. None of it verifies that a remediation closed both faults, and that is the gap this repository fills: it reads the incident contract, runs six checks against a fix, and attaches the result as evidence. A fix for the worker alone leaves the shop down, which is why `partial_worker_only` is rejected on the three frontend checks.
+Kubernetes tooling such as K8sGPT detects the crash loop, and Aurora's [OOMKilled runbook](https://www.aurorasre.ai/runbooks/fix-oomkilled-kubernetes) explains the memory arithmetic that the scenario cites at `README.md#L160`. None of it verifies that a remediation closed both faults, and that is the gap this repository fills: it reads the incident contract, runs six checks against a fix, and attaches the result as evidence. The frontend stays down while the selector is wrong, so `partial_worker_only` is rejected on `service_has_endpoints`, `endpoints_ready` and `http_expected_response`.
 
 > Este verificador comprueba las condiciones declaradas en el contrato del incidente. No demuestra que no exista ningún otro defecto, y no reemplaza el juicio humano ni la revisión asesora de Aurora.
 >
@@ -29,7 +29,7 @@ The LIVE path needs Docker, `kind` and `kubectl`:
 
 ```bash
 make verify    # about 15 minutes, six variants against a kind cluster
-make capture   # the same run, and rewrites fixtures/snapshots
+make capture   # maintenance: rewrites fixtures/snapshots, never part of a review
 ```
 
 `make lab-pin` clones `aurora-lab` at `4edcd9df` into `.cache/aurora-lab` and checks out the commit named in `verifier/config.py`. `make lab-up` creates the cluster when it is missing. Both run first, so `make verify` is enough once those three tools are installed.
