@@ -348,83 +348,76 @@ def _split_compound_command(compound: str) -> List[str]:
 
     commands: List[str] = []
     buf: List[str] = []
-    sq = dq = False
-    i, n = 0, len(compound)
-
-    def _flush() -> None:
-        s = "".join(buf).strip()
-        if s:
-            commands.append(s)
-        buf.clear()
-
-    while i < n:
-        c = compound[i]
-
-        # Backslash escape (not inside single quotes)
-        if c == "\\" and not sq and i + 1 < n:
-            buf += [c, compound[i + 1]]
-            i += 2
-            continue
-
-        # Quote toggling
-        if c == "'" and not dq:
-            sq = not sq
-            buf.append(c)
-            i += 1
-            continue
-        if c == '"' and not sq:
-            dq = not dq
-            buf.append(c)
-            i += 1
-            continue
-
-        # Everything inside quotes is literal
-        if sq or dq:
-            buf.append(c)
-            i += 1
-            continue
-
-        # -- Outside quotes: detect operators and subshells --
-        two = compound[i : i + 2]
-
-        if two in ("&&", "||"):
-            _flush()
-            i += 2
-            continue
-
-        if c in (";", "|"):
-            _flush()
-            i += 1
-            continue
-
-        # $(...) subshell - extract inner commands for separate evaluation
-        if c == "$" and i + 1 < n and compound[i + 1] == "(":
-            j, depth = i + 2, 1
-            while j < n and depth:
-                if compound[j] == "(":
-                    depth += 1
-                elif compound[j] == ")":
-                    depth -= 1
-                j += 1
-            commands.extend(_split_compound_command(compound[i + 2 : j - 1]))
-            buf.append(compound[i:j])
-            i = j
-            continue
-
-        # Backtick subshell
-        if c == "`":
-            j = compound.find("`", i + 1)
-            if j != -1:
-                commands.extend(_split_compound_command(compound[i + 1 : j]))
-                buf.append(compound[i : j + 1])
-                i = j + 1
-                continue
-
-        buf.append(c)
-        i += 1
-
-    _flush()
+    quotes = {"'": False, '"': False}
+    i = 0
+    while i < len(compound):
+        i = _compound_step(compound, i, quotes, buf, commands)
+    _flush_command(buf, commands)
     return commands
+
+
+def _flush_command(buf: List[str], commands: List[str]) -> None:
+    s = "".join(buf).strip()
+    if s:
+        commands.append(s)
+    buf.clear()
+
+
+def _compound_step(
+    compound: str, i: int, quotes: dict, buf: List[str], commands: List[str],
+) -> int:
+    """Consume the character at *i*; returns the next index."""
+    c = compound[i]
+    sq, dq = quotes["'"], quotes['"']
+    # Backslash escape (not inside single quotes)
+    if c == "\\" and not sq and i + 1 < len(compound):
+        buf += [c, compound[i + 1]]
+        return i + 2
+    if (c == "'" and not dq) or (c == '"' and not sq):
+        quotes[c] = not quotes[c]
+        buf.append(c)
+        return i + 1
+    # Everything inside single quotes is literal; double quotes still run subshells
+    if sq or (dq and c != "`" and compound[i : i + 2] != "$("):
+        buf.append(c)
+        return i + 1
+    return _compound_operator(compound, i, buf, commands)
+
+
+def _compound_operator(compound: str, i: int, buf: List[str], commands: List[str]) -> int:
+    """Split at an operator, or extract the subshell at *i*; returns the next index."""
+    if compound[i : i + 2] in ("&&", "||"):
+        _flush_command(buf, commands)
+        return i + 2
+    if compound[i] in (";", "|"):
+        _flush_command(buf, commands)
+        return i + 1
+    end = _subshell_end(compound, i)
+    if end is None:
+        buf.append(compound[i])
+        return i + 1
+    # $(...) subshell or backtick: extract inner commands for separate evaluation
+    start = i + 2 if compound[i] == "$" else i + 1
+    commands.extend(_split_compound_command(compound[start : end - 1]))
+    buf.append(compound[i:end])
+    return end
+
+
+def _subshell_end(compound: str, i: int) -> Optional[int]:
+    """The index just past the $(...) or backtick subshell at *i*, or None."""
+    if compound[i : i + 2] == "$(":
+        j, depth = i + 2, 1
+        while j < len(compound) and depth:
+            if compound[j] == "(":
+                depth += 1
+            elif compound[j] == ")":
+                depth -= 1
+            j += 1
+        return j
+    if compound[i] == "`":
+        j = compound.find("`", i + 1)
+        return j + 1 if j != -1 else None
+    return None
 
 
 def evaluate_compound_command(

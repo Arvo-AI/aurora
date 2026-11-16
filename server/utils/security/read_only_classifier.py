@@ -102,6 +102,20 @@ COMMAND_WRAPPERS = frozenset({
     'watch', 'time', 'nice', 'ionice', 'stdbuf', 'script',
 })
 
+# Programs known to write, delete or run code. Their operands are files,
+# processes, code or URLs, so a read verb among them (`touch /tmp/x logs`) is
+# only a name and they are refused outright. It is a denylist, so a program
+# missing from it can still take a read verb from its operands.
+NOT_A_CLI = frozenset({
+    'sh', 'bash', 'dash', 'ksh', 'zsh', 'ash', 'fish', 'python', 'python2', 'python3',
+    'perl', 'ruby', 'node', 'nodejs', 'php', 'lua', 'tclsh', 'pwsh', 'powershell',
+    'rscript', 'deno', 'bun', 'java', 'touch', 'mv', 'ln', 'chmod', 'chown', 'chgrp',
+    'mkdir', 'rmdir', 'tee', 'dd', 'kill', 'pkill', 'killall', 'shred', 'unlink',
+    'install', 'chattr', 'setfacl', 'crontab', 'at', 'shutdown', 'halt', 'poweroff',
+    'fallocate', 'split', 'tar', 'zip', 'unzip', 'gzip', 'gunzip', 'rsync', 'scp',
+    'sftp', 'curl', 'wget', 'nc', 'ncat', 'socat', 'telnet', 'find',
+})
+
 # CLIs that take their operands as positional arguments after the verb, so the
 # tokens to the right of the verb are resource names rather than operations
 # (`kubectl logs update-cache-cronjob-xxx`). Everything else is assumed to spell
@@ -140,6 +154,8 @@ CREDENTIAL_WORD_EXEMPT = (
     ('gcloud', 'container', 'clusters', 'get-credentials'),
     ('container', 'clusters', 'get-credentials'),
 )
+
+_CREDENTIAL_REASON = 'it returns a credential, key, secret or token'
 
 # Options that turn an ordinary read into a secret dump.
 CREDENTIAL_FLAGS = frozenset({
@@ -189,41 +205,302 @@ class SegmentFacts(NamedTuple):
     credential_words: frozenset  # words the credential rules are matched against
 
 
+_UNPARSEABLE = 'it could not be parsed (check for an unclosed $( or backtick)'
+_MAX_SUBSTITUTION_DEPTH = 32  # each level is a few frames when its body is classified
+_COMMENT_PRECEDERS = ' \t\r\n;&|()<>'
+_ANSI_C = re.compile(r"\$(?:\\\n)*'((?:[^'\\]|\\.)*)'", re.S)
+_ANSI_C_ESCAPES = {
+    'a': '\a', 'b': '\b', 'e': '\x1b', 'E': '\x1b', 'f': '\f', 'n': '\n',
+    'r': '\r', 't': '\t', 'v': '\v', '\\': '\\', "'": "'", '"': '"', '?': '?',
+}
+# One escape in `$'...'`: a named one, octal, \xHH, \uHHHH, \UHHHHHHHH, or another.
+_ANSI_C_ESCAPE = re.compile(
+    r'\\(?:([abeEfnrtv\\\'"?])|([0-7]{1,3})|x([0-9A-Fa-f]{1,2})'
+    r'|u([0-9A-Fa-f]{1,4})|U([0-9A-Fa-f]{1,8})|(.))', re.S)
+_MAX_CODE_POINT = 0x10FFFF
+# bash decodes `$'...'`, but sh (dash) passes it through as text. An escape that
+# decodes to one of these hides what follows from a shell that re-parses it, like
+# the one behind ssh, while sh's raw text leaves it exposed: `$'\047; rm x; \047'`.
+_HIDING_CHARS = frozenset('\'"\\#')
+# Stand-ins for a substitution's output. The `$` keeps either from passing as
+# an ssh host. A value cannot contain shell syntax; a substitution can.
+_MARKER = '$__aurora_'
+_SUBSTITUTED = _MARKER + 'substitution__'
+_VALUE = _MARKER + 'value__'
+# Programs whose output never contains shell syntax, with arguments in this set.
+_PLAIN_VALUE_PROGRAMS = frozenset({'date', 'hostname', 'whoami', 'nproc'})
+# A word bash could expand into a verb: a substitution with only verb characters
+# before it (`"$(ls d)"`, `"del$(ls d)"`, but not `timestamp>="$(date)"`).
+_SUBSTITUTED_WORD = re.compile(r'[a-z0-9_-]*' + re.escape(_MARKER))
+_PLAIN_ARG = re.compile(r'[A-Za-z0-9 %:+_./,=@-]*')
+
+
+def _prints_plain_value(body: str) -> bool:
+    """Whether *body* prints only a value no shell would read as syntax."""
+    try:
+        argv = shlex.split(body)
+    except ValueError:
+        return False
+    # Only a `date +FORMAT` echoes its text. `date -f` echoes a file, `%n` a newline.
+    unsafe = {'-f', '--file', '-r', '--reference'}
+    formats = [arg for arg in argv if arg.startswith('+')]
+    return (
+        bool(argv) and argv[0] in _PLAIN_VALUE_PROGRAMS
+        and all(_PLAIN_ARG.fullmatch(arg) and '%n' not in arg for arg in formats)
+        and not unsafe & {arg.split('=', 1)[0] for arg in argv}
+    )
+
+
+def _ansi_c_char(match: re.Match) -> Optional[str]:
+    """The character one `$'...'` escape decodes to, or None when this can't."""
+    named, octal, hex_byte, short_u, long_u, _other = match.groups()
+    if named:
+        char = _ANSI_C_ESCAPES[named]
+        return None if char in _HIDING_CHARS else char
+    if octal:
+        code = int(octal, 8) & 0xFF  # bash keeps the low byte of `\\777`
+    elif hex_byte or short_u or long_u:
+        code = int(hex_byte or short_u or long_u, 16)
+    else:
+        return None
+    # A NUL cuts the word short in bash.
+    if not 0 < code <= _MAX_CODE_POINT or chr(code) in _HIDING_CHARS:
+        return None
+    return chr(code)
+
+
+def _decode_ansi_c(body: str) -> Optional[str]:
+    """*body* of a `$'...'` word as bash decodes it, or None when this can't.
+
+    `\\c` escapes, unknown ones, a NUL and `_HIDING_CHARS` are refused.
+    """
+    parts, pos = [], 0
+    for match in _ANSI_C_ESCAPE.finditer(body):
+        char = _ansi_c_char(match)
+        if char is None:
+            return None
+        parts += [body[pos:match.start()], char]
+        pos = match.end()
+    return ''.join(parts) + body[pos:]
+
+
+def _past_continuations(text: str, j: int) -> int:
+    """*j*, past any backslash-newlines."""
+    while text.startswith('\\\n', j):
+        j += 2
+    return j
+
+
+class _ShellRewrite:
+    """A command, or a substitution body in it, rewritten as bash reads it.
+
+    shlex keeps a double-quoted `$(...)` or backtick as inert text, but bash
+    runs it. A quoted substitution becomes one word and its body is kept in
+    *bodies* to be classified as a command of its own; an unquoted one is
+    spliced in for shlex to split into segments. *reason* says why the
+    command is refused when bash and shlex could still read it differently.
+    Recursion is bounded by `_MAX_SUBSTITUTION_DEPTH`.
+    """
+
+    def __init__(self, text: str, i: int = 0, depth: int = 0, *, arith: bool = False) -> None:
+        self.text, self.i, self.depth = text, i, depth
+        self.arith = arith  # `$((...))`, where quotes are plain text
+        self.out: list[str] = []
+        self.bodies: list[str] = []
+        self.reason = ''
+        self.quote: Optional[str] = None
+        self.parens = 0
+        self.braces: list[Optional[str]] = []  # quote state at each open `${`
+
+    def run(self, closer: str = '') -> _ShellRewrite:
+        """Rewrite up to the unquoted *closer*, or to the end of the text."""
+        while self.i < len(self.text) and not self.reason:
+            c = self.text[self.i]
+            if c == closer and self.quote is None and self.parens == 0:
+                if self.braces:  # bash reads `${x:-)}` as one word, not the end
+                    self.reason = _UNPARSEABLE
+                return self
+            self.step(c)
+        if closer and not self.reason:
+            self.reason = _UNPARSEABLE
+        return self
+
+    def next_is(self, char: str) -> bool:
+        return self.text.startswith(char, _past_continuations(self.text, self.i + 1))
+
+    def after(self, chars: str) -> bool:
+        """Whether *i* starts the text or follows one of *chars*."""
+        return self.i == 0 or self.text[self.i - 1] in chars
+
+    def step(self, c: str) -> None:
+        """Rewrite the character at *i*."""
+        unquoted = self.quote is None
+        if self.quote == "'":
+            self.literal(c)
+        elif c == '\\':
+            self.escape()
+        elif c == '#' and unquoted and self.after(_COMMENT_PRECEDERS):
+            self.comment()
+        elif c == '$' and self.next_is('['):  # bash runs `$(...)` in `$[...]` even single-quoted
+            self.reason = 'it uses $[...] arithmetic, which this check cannot follow'
+        elif c == '$' and unquoted and self.next_is("'"):
+            self.ansi_c()
+        elif c == '`' or (c == '$' and self.next_is('(')):
+            self.substitution(c)
+        elif c in '\r\n' and unquoted and not self.arith:
+            self.out.append(' ; ')
+            self.i += 1
+        else:
+            self.literal(c)
+
+    def comment(self) -> None:
+        """Skip the comment at *i*, or refuse a `#` bash may not read as one."""
+        prev = self.text[self.i - 1] if self.i else '\n'
+        escaped = self.i >= 2 and self.text[self.i - 2] == '\\'
+        # After `;`, `&` or `|` a new word starts, so `#` begins a comment there too.
+        if self.braces or self.arith or escaped or prev not in ' \t\n;&|':
+            self.reason = 'it contains a shell comment'
+            return
+        end = self.text.find('\n', self.i)
+        self.i = len(self.text) if end == -1 else end
+
+    def ansi_c(self) -> None:
+        """Copy `$'...'` as the quoted word bash decodes it to."""
+        match = _ANSI_C.match(self.text, self.i)
+        decoded = _decode_ansi_c(match[1]) if match else None
+        if decoded is None:
+            self.reason = "it uses $'...' quoting, which shells decode differently"
+            return
+        self.out.append(shlex.quote(decoded))
+        self.i = match.end()
+
+    def escape(self) -> None:
+        """Copy the backslash escape at *i* as bash reads it."""
+        escaped = self.text[self.i + 1:self.i + 2]
+        if escaped != '\n':
+            bare = self.quote == '"' and escaped in '$`'
+            self.out.append(escaped if bare else '\\' + escaped)
+        self.i += 2
+
+    def literal(self, c: str) -> None:
+        """Copy *c*, tracking quotes, parentheses and `${...}`."""
+        if c == '$' and self.quote != "'" and self.next_is('{'):
+            self.braces.append(self.quote)
+        elif c == '}' and self.braces and self.braces[-1] == self.quote:
+            self.braces.pop()
+        elif self.quote is None and c in '\'"' and not self.arith:
+            self.quote = c
+        elif c == self.quote:
+            self.quote = None
+        elif self.quote is None and c in '()':
+            self.parens += 1 if c == '(' else -1
+        self.out.append(c)
+        self.i += 1
+
+    def substitution(self, c: str) -> None:
+        """Rewrite the `$(...)`, `$((...))` or backtick substitution at *i*."""
+        if self.depth >= _MAX_SUBSTITUTION_DEPTH:
+            self.reason = 'its substitutions are nested too deeply to check'
+            return
+        body, source = self.backtick_body() if c == '`' else self.paren_body()
+        self.reason = body.reason
+        if self.reason:
+            return
+        if body.arith:
+            self.out.append(_VALUE)
+            self.bodies += body.bodies
+        elif self.arith or self.quote == '"':
+            # One word. Substitutions inside it are found when *source* is classified.
+            self.bodies.append(source)
+            self.out.append(_VALUE if _prints_plain_value(source) else _SUBSTITUTED)
+        else:
+            # Split into segments; the marker shows where its output lands.
+            self.bodies += body.bodies
+            wrap = '``' if c == '`' else '()'
+            self.out.append(_SUBSTITUTED + wrap[0] + ''.join(body.out) + wrap[1])
+
+    def backtick_body(self) -> tuple[_ShellRewrite, str]:
+        # Bash unescapes the body and parses it again, so `\`` nests.
+        end = self.i + 1
+        while end < len(self.text) and self.text[end] != '`':
+            end += 2 if self.text[end] == '\\' else 1
+        unescape = r'\\([\\`$"])' if self.quote == '"' else r'\\([\\`$])'
+        source = re.sub(unescape, r'\1', self.text[self.i + 1:end])
+        body = _ShellRewrite(source, depth=self.depth + 1)
+        if end < len(self.text):
+            body.run()
+        else:
+            body.reason = _UNPARSEABLE
+        self.i = end + 1
+        return body, source
+
+    def paren_body(self) -> tuple[_ShellRewrite, str]:
+        start = _past_continuations(self.text, self.i + 1) + 1  # past the `(`
+        arith = self.text.startswith('(', start)
+        start += arith
+        body = _ShellRewrite(self.text, start, self.depth + 1, arith=arith).run(')')
+        self.i = body.i + 1
+        if arith and not body.reason and not self.text.startswith(')', self.i):
+            body.reason = _UNPARSEABLE
+        self.i += arith
+        return body, self.text[start:body.i]
+
+
 def split_segments(command: str) -> Optional[list[list[str]]]:
     """Tokenize *command* and split it into shell segments.
 
     Returns ``None`` when the command must be refused outright: unbalanced
     quotes, or a redirection (which writes a file or an fd no matter how
-    read-only the command producing the bytes is).
+    read-only the command producing the bytes is). Segments inside quoted
+    substitutions are included, so an ssh client hidden in one is found.
     """
-    segments, _reason = _split_segments_or_reason(command)
+    segments, bodies, _reason = _lex(command)
+    for body in filter(str.strip, bodies):
+        nested = split_segments(body)
+        if nested is None:
+            return None
+        segments += nested
     return segments
 
 
 def _split_segments_or_reason(
     command: str,
 ) -> tuple[Optional[list[list[str]]], str]:
-    """`split_segments`, plus why it refused, for the Ask-mode error message."""
-    # Newlines separate commands but shlex treats them as plain whitespace, so
-    # they are turned into an explicit separator first.
-    normalized = command.replace('\r', '\n').replace('\n', ' ; ')
+    """`split_segments`, plus why it refused, for the Ask-mode error message.
+
+    A quoted substitution's body runs too, so it has to be a read as well.
+    """
+    segments, bodies, reason = _lex(command)
+    for body in filter(str.strip, bodies):
+        reason = _remote_command_rejection(body, 0)
+        if reason:
+            return None, reason
+    return segments, reason
+
+
+def _lex(command: str) -> tuple[Optional[list[list[str]]], list[str], str]:
+    """*command*'s segments, the bodies of its quoted substitutions, and why it is refused."""
+    rewrite = _ShellRewrite(command).run()
+    if rewrite.reason:
+        return None, [], rewrite.reason
 
     try:
         # punctuation_chars keeps `&&`, `||`, `|`, `;`, `(` and backticks as their
         # own tokens while leaving quoted operators (a KQL query's pipes) inside
         # the string they belong to.
-        lexer = shlex.shlex(normalized, posix=True, punctuation_chars=_CONTROL_CHARS)
+        lexer = shlex.shlex(''.join(rewrite.out), posix=True, punctuation_chars=_CONTROL_CHARS)
         lexer.whitespace_split = True
+        lexer.commenters = ''  # comments were already handled
         raw_tokens = list(lexer)
     except ValueError:
-        return None, 'it could not be parsed (check for an unbalanced quote)'
+        return None, [], 'it could not be parsed (check for an unbalanced quote)'
 
     segments: list[list[str]] = [[]]
     for token in raw_tokens:
         if token and all(c in _CONTROL_CHARS for c in token):
             # A redirection writes a file or an fd, which is a mutation.
             if '>' in token or '<' in token:
-                return None, (
+                return None, [], (
                     "it redirects with '%s', which writes a file regardless of "
                     'what produced the output' % token
                 )
@@ -233,8 +510,11 @@ def _split_segments_or_reason(
 
     trimmed = [seg for seg in segments if seg]
     if not trimmed:
-        return None, 'it is empty'
-    return trimmed, ''
+        return None, [], 'it is empty'
+    programs = (next((t for t in seg if not _is_assignment(t)), '') for seg in trimmed)
+    if any(_MARKER in program for program in programs):
+        return None, [], 'its program name comes from a substitution, so what runs cannot be checked'
+    return trimmed, rewrite.bodies, ''
 
 
 def _operation_of(tokens: list[str]) -> list[str]:
@@ -303,20 +583,24 @@ def _find_write_verb(operation: list[str], executable: Optional[str],
     positional names (`kubectl logs update-cache-xxx`); an absent CLI gets the
     full scan and over-blocks, which is the safe direction.
     """
+    for token in _operation_path(operation, executable, verb_index):
+        if _verb_of(token) in WRITE_VERBS:
+            return token
+    return None
+
+
+def _operation_path(operation: list[str], executable: Optional[str],
+                    verb_index: int) -> list[str]:
+    """The positionals that can spell the operation."""
     if executable in OPERAND_POSITIONAL_CLIS:
         # A subcommand group's operation runs one token longer, so the relaxed
         # scan has to reach it (`kubectl config` vs `config delete-context`).
         end = verb_index + 1
         if verb_index < len(operation) and operation[verb_index] in SUBCOMMAND_GROUPS:
             end += 1
-        scanned = operation[:end]
+        return operation[:end]
     # Unknown CLI: scan everything, which over-blocks rather than under-blocks.
-    else:
-        scanned = operation
-    for token in scanned:
-        if _verb_of(token) in WRITE_VERBS:
-            return token
-    return None
+    return operation
 
 
 def _credential_words_of(operation: list[str], verb_index: int) -> set[str]:
@@ -427,7 +711,7 @@ def _credential_rejection(facts: list, flag_names: set) -> str:
 
     for f in facts:
         if f.credential_words & CREDENTIAL_WORDS and not _is_kubeconfig_fetch(f.operation):
-            return 'it returns a credential, key, secret or token'
+            return _CREDENTIAL_REASON
 
     if _is_credential_read(facts, flag_names):
         return 'it returns usable credentials'
@@ -897,7 +1181,7 @@ def _ssh_invocation_rejection(
     # reading it (`sort -i ~/.ssh/id_rsa`), not Aurora authenticating.
     from utils.security.signature_match import ssh_key_material_exposed
     if ssh_key_material_exposed(remote, allow_identity_option=False):
-        return 'it returns a credential, key, secret or token'
+        return _CREDENTIAL_REASON
 
     # Every program in the remote command has to be a read, including a
     # write that follows a recognised read verb and a script inside `sh -c`.
@@ -921,22 +1205,36 @@ def describe_rejection(command: str, _ssh_depth: int = 0) -> str:
         return parse_reason
 
     facts = [analyze_segment(seg) for seg in segments]
-
-    # ssh has no read verb of its own. The remote command is what runs, and the
-    # destination must not be scanned (`ssh update.example` is a hostname).
     if facts[0].executable == 'ssh':
-        if _ssh_depth >= 2:
-            return 'no recognised read verb was found in it'
-        chain = _pipeline_rejection(facts)
-        if chain:
-            return chain
-        # `sort` is a text filter, and `sort -o` still writes a local file.
-        for seg in segments[1:]:
-            reason = _one_segment_rejection(seg, _ssh_depth)
-            if reason:
-                return reason
-        return _ssh_remote_rejection(segments[0], _ssh_depth)
+        return _ssh_command_rejection(segments, facts, _ssh_depth)
+    return _local_command_rejection(command, segments, facts)
 
+
+def _ssh_command_rejection(segments: list, facts: list, depth: int) -> str:
+    """Why a command run through ssh isn't a read, or ''.
+
+    ssh has no read verb of its own. The remote command is what runs, and the
+    destination must not be scanned (`ssh update.example` is a hostname).
+    """
+    if depth >= 2:
+        return 'no recognised read verb was found in it'
+    # Bash runs a local substitution first and the remote shell runs its output.
+    if any(_SUBSTITUTED in token for token in segments[0]):
+        return ('its remote command contains a local substitution, whose output '
+                'the remote shell would run; single-quote the remote command')
+    chain = _pipeline_rejection(facts)
+    if chain:
+        return chain
+    # `sort` is a text filter, and `sort -o` still writes a local file.
+    for seg in segments[1:]:
+        reason = _one_segment_rejection(seg, depth)
+        if reason:
+            return reason
+    return _ssh_remote_rejection(segments[0], depth)
+
+
+def _local_command_rejection(command: str, segments: list, facts: list) -> str:
+    """Why a command that is not ssh isn't a read, or ''."""
     # Flag names gate the command (`--with-decryption`, `--dry-run`) but must
     # never provide a read-only verb, so they are collected separately.
     flag_names = {
@@ -944,8 +1242,15 @@ def describe_rejection(command: str, _ssh_depth: int = 0) -> str:
         if t.startswith('-') and t != '--'
     }
 
+    # Reading a private key is a credential read, whatever the program.
+    from utils.security.signature_match import ssh_key_material_exposed
+    exe = facts[0].executable
     for reason in (_credential_rejection(facts, flag_names),
+                   _CREDENTIAL_REASON if ssh_key_material_exposed(command) else '',
                    _write_rejection(facts),
+                   _substitution_rejection(facts[0]),
+                   ("'%s' takes files, processes or code, not an operation" % exe
+                    if exe in NOT_A_CLI else ''),
                    _pipeline_rejection(facts)):
         if reason:
             return reason
@@ -957,6 +1262,23 @@ def describe_rejection(command: str, _ssh_depth: int = 0) -> str:
     if facts[0].verb is None:
         return 'no recognised read verb was found in it'
     return "'%s' is not a recognised read-only operation" % facts[0].verb
+
+
+def _substitution_rejection(fact: SegmentFacts) -> str:
+    """Why a substitution's output could be the operation, or ''.
+
+    Its body was checked, but not what it prints: `kubectl "$(ls d)" pods get`
+    runs `kubectl delete pods get` when `d` holds a file named `delete`.
+    """
+    if fact.verb is None:
+        return ''
+    operation = list(fact.operation)
+    _verb, verb_index = _find_verb(operation)
+    path = _operation_path(operation, fact.executable, verb_index)
+    if any(_SUBSTITUTED_WORD.match(token) for token in path):
+        return ('an argument that could be its operation comes from a substitution, '
+                'so what runs cannot be checked')
+    return ''
 
 
 def is_read_only_command(command: str) -> bool:
