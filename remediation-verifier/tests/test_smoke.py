@@ -50,11 +50,12 @@ class TestConsoleScript:
         assert exit_info.value.code == 0
         assert verifier.__version__ in capsys.readouterr().out
 
-    def test_default_invocation_reports_that_it_is_not_implemented(
-        self, capsys: pytest.CaptureFixture[str]
+    def test_default_invocation_verifies_from_snapshots(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        assert cli.main([]) == cli.EXIT_NOT_IMPLEMENTED
-        assert "not implemented" in capsys.readouterr().err
+        argv = ["--fixtures", str(tmp_path), "--out", str(tmp_path / "out")]
+        assert cli.main(argv) == cli.EXIT_NOT_RUN
+        assert "has no snapshot" in capsys.readouterr().err
 
 
 class TestDoctor:
