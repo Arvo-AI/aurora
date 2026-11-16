@@ -341,6 +341,21 @@ _WORKER_LOST_REPLY = (
     "Sorry — this request stopped before I could finish. Please try again."
 )
 
+
+class ChatReplyState:
+    """Whether this run already put its answer in the chat thread.
+
+    Shared by ``run_background_chat`` and ``_execute_background_chat``: a Slack
+    answer goes out before the run is over (a Jira phase can follow it), so a
+    later failure must not replace a delivered answer with an error.
+    """
+
+    __slots__ = ("sent",)
+
+    def __init__(self) -> None:
+        self.sent = False
+
+
 # Initialize Redis client at module load time - fails if Redis is unavailable
 _redis_client = get_redis_client()
 if _redis_client is None:
@@ -570,6 +585,9 @@ def run_background_chat(
     # finally block can guarantee the "Thinking…" placeholder is never orphaned
     # if the happy-path send is skipped (task crash, cancellation, serialization).
     _chat_reply_sent = False
+    # Set by an answer delivered from inside the workflow (the early Slack send),
+    # which the workflow's return value cannot report when a later phase fails.
+    _reply_state = ChatReplyState()
     _access_token = None
 
     try:
@@ -776,6 +794,7 @@ def run_background_chat(
                     mode=mode,
                     rail_text=rail_text,
                     send_notifications=send_notifications,
+                    reply_state=_reply_state,
                 ),
                 session_id,
                 user_id,
@@ -1030,46 +1049,12 @@ def run_background_chat(
         if _access_token is not None:
             from utils.auth.connector_access import pop_connector_access
             pop_connector_access(_access_token)
-        # Guarantee the chat "Thinking…" placeholder is always resolved. If the
-        # happy-path send was skipped (task crash, cancellation, result
-        # serialization failure), post a best-effort reply here so a Slack/
-        # Google Chat mention never hangs on "Thinking…" forever.
-        try:
-            src = (trigger_metadata or {}).get("source")
-            # A failed run (an error, a timeout, a stall) may have saved a partial
-            # draft; that is not the answer, so the error is sent instead. A run
-            # that finished but could not post still sends what it saved.
-            _fallback_kwargs = (
-                {"fallback_text": _CHAT_ERROR_FALLBACK} if completed_successfully
-                else {"force_text": _CHAT_ERROR_FALLBACK}
-            )
-            if src in ("slack", "slack_button") and not _chat_reply_sent:
-                logger.warning("[BackgroundChat] Reply not sent on happy path for session %s; "
-                               "sending fallback so Slack isn't stuck on 'Thinking…'", session_id)
-                _send_response_to_slack(
-                    user_id, session_id, trigger_metadata,
-                    **_fallback_kwargs,
-                )
-            elif src in ("google_chat", "google_chat_button") and not _chat_reply_sent:
-                logger.warning("[BackgroundChat] Reply not sent on happy path for session %s; "
-                               "sending fallback so Google Chat isn't stuck on 'Thinking…'", session_id)
-                _send_response_to_google_chat(
-                    user_id, session_id, trigger_metadata,
-                    **_fallback_kwargs,
-                )
-            elif src == "teams" and not _chat_reply_sent:
-                logger.warning(
-                    "[BackgroundChat] Reply not sent on happy path for session %s; "
-                    "sending fallback so Teams isn't stuck on 'Thinking…'",
-                    session_id,
-                )
-                _send_response_to_teams(
-                    user_id, session_id, trigger_metadata,
-                    **_fallback_kwargs,
-                )
-        except Exception as _final_reply_err:
-            logger.error("[BackgroundChat] Fallback chat reply failed for session %s: %s",
-                         session_id, _final_reply_err, exc_info=True)
+        # Guarantee the chat "Thinking…" placeholder is always resolved.
+        _resolve_chat_placeholder(
+            user_id, session_id, trigger_metadata,
+            completed_successfully=completed_successfully,
+            reply_sent=_chat_reply_sent or _reply_state.sent,
+        )
 
         # Release dedup lock so Celery retries can re-acquire after failure
         if _dedup_acquired and _dedup_redis is not None:
@@ -1475,6 +1460,7 @@ async def _execute_background_chat(
     mode: str = "ask",
     rail_text: Optional[str] = None,
     send_notifications: bool = True,
+    reply_state: Optional[ChatReplyState] = None,
 ) -> Dict[str, Any]:
     """Execute the background chat workflow asynchronously.
 
@@ -1660,12 +1646,9 @@ async def _execute_background_chat(
                 logger.info("[BackgroundChat] Slack progress updates sent: %d", progress_reporter.updates_sent)
 
         # Send Slack response immediately — don't wait for post-processing
-        _slack_early_sent = False
-        if trigger_metadata and trigger_metadata.get('source') in ['slack', 'slack_button']:
-            try:
-                _slack_early_sent = _send_response_to_slack(user_id, session_id, trigger_metadata)
-            except Exception:
-                logger.exception("[BackgroundChat] Failed early Slack send")
+        _slack_early_sent = _send_early_slack_reply(
+            user_id, session_id, trigger_metadata, reply_state,
+        )
 
         # --- Phase 2: Jira action ---
         # Investigation is done. File in Jira only if the org opted in.
@@ -2205,6 +2188,77 @@ def _last_saved_assistant_text(user_id: str, session_id: str, log_prefix: str) -
                     text = msg.get("text") or msg.get("content")
                     return text if isinstance(text, str) and text else None
     return None
+
+
+def _send_early_slack_reply(
+    user_id: str,
+    session_id: str,
+    trigger_metadata: Optional[Dict[str, Any]],
+    reply_state: Optional[ChatReplyState],
+) -> bool:
+    """Post a Slack answer as soon as the investigation ends, before any later phase.
+
+    A delivered answer is recorded in-process (*reply_state*, read by the task's
+    finally block) and on the session (read by the cleanup sweep when the worker
+    dies), so neither replaces it with an error if the run fails afterwards.
+    """
+    if not trigger_metadata or trigger_metadata.get('source') not in ('slack', 'slack_button'):
+        return False
+    try:
+        sent = bool(_send_response_to_slack(user_id, session_id, trigger_metadata))
+    except Exception:
+        logger.exception("[BackgroundChat] Failed early Slack send")
+        return False
+    if sent:
+        if reply_state is not None:
+            reply_state.sent = True
+        # The workflow saves ui_state from this same dict (wf._ui_state), so a
+        # later save (the Jira phase) keeps the flag instead of dropping it.
+        trigger_metadata["replied"] = True
+        _mark_reply_delivered(session_id, user_id, trigger_metadata)
+    return sent
+
+
+def _resolve_chat_placeholder(
+    user_id: str,
+    session_id: str,
+    trigger_metadata: Optional[Dict[str, Any]],
+    *,
+    completed_successfully: bool,
+    reply_sent: bool,
+) -> None:
+    """Make sure a chat "Thinking…" placeholder never hangs.
+
+    If the happy-path send was skipped (task crash, cancellation, result
+    serialization failure), post a best-effort reply so a Slack/Google Chat/
+    Teams mention is always answered. A reply already delivered is left alone.
+    """
+    if reply_sent:
+        return
+    try:
+        src = (trigger_metadata or {}).get("source")
+        # A failed run (an error, a timeout, a stall) may have saved a partial
+        # draft; that is not the answer, so the error is sent instead. A run
+        # that finished but could not post still sends what it saved.
+        fallback_kwargs = (
+            {"fallback_text": _CHAT_ERROR_FALLBACK} if completed_successfully
+            else {"force_text": _CHAT_ERROR_FALLBACK}
+        )
+        if src in ("slack", "slack_button"):
+            logger.warning("[BackgroundChat] Reply not sent on happy path for session %s; "
+                           "sending fallback so Slack isn't stuck on 'Thinking…'", session_id)
+            _send_response_to_slack(user_id, session_id, trigger_metadata, **fallback_kwargs)
+        elif src in ("google_chat", "google_chat_button"):
+            logger.warning("[BackgroundChat] Reply not sent on happy path for session %s; "
+                           "sending fallback so Google Chat isn't stuck on 'Thinking…'", session_id)
+            _send_response_to_google_chat(user_id, session_id, trigger_metadata, **fallback_kwargs)
+        elif src == "teams":
+            logger.warning("[BackgroundChat] Reply not sent on happy path for session %s; "
+                           "sending fallback so Teams isn't stuck on 'Thinking…'", session_id)
+            _send_response_to_teams(user_id, session_id, trigger_metadata, **fallback_kwargs)
+    except Exception as final_reply_err:
+        logger.error("[BackgroundChat] Fallback chat reply failed for session %s: %s",
+                     session_id, final_reply_err, exc_info=True)
 
 
 def _send_response_to_slack(
@@ -2810,23 +2864,56 @@ def _remember_reply_target(session_id: Optional[str], user_id: Optional[str],
         return
     if trigger_metadata.get("source") not in _CHAT_REPLY_SOURCES:
         return
+    # A new run starts unanswered, whatever an earlier run on this session sent.
+    _merge_trigger_metadata(session_id, user_id, {**trigger_metadata, "replied": False},
+                            "the reply target")
+
+
+# Only flags the placeholder this run answered: a newer run on the same session
+# stores its own placeholder id, and its unanswered state must stand.
+_MARK_REPLIED_SQL = _REMEMBER_REPLY_TARGET_SQL.rstrip() + """
+      AND ui_state->'triggerMetadata'->>'thinking_message_ts' IS NOT DISTINCT FROM %s
+"""
+
+
+def _mark_reply_delivered(session_id: Optional[str], user_id: Optional[str],
+                          trigger_metadata: Optional[Dict[str, Any]] = None) -> None:
+    """Record on the session that this run's answer is in the chat thread.
+
+    The sweep reads it when the worker dies before the session finishes, and
+    fails the session without replacing the answer with an error.
+    """
+    if not session_id or not user_id:
+        return
+    placeholder = (trigger_metadata or {}).get("thinking_message_ts")
+    _merge_trigger_metadata(session_id, user_id, {"replied": True}, "the delivered reply",
+                            sql=_MARK_REPLIED_SQL, extra_params=(placeholder,))
+
+
+def _merge_trigger_metadata(session_id: str, user_id: str, values: Dict[str, Any], what: str,
+                            *, sql: str = _REMEMBER_REPLY_TARGET_SQL, extra_params: tuple = ()) -> None:
     try:
-        payload = json.dumps(trigger_metadata, default=str)
+        payload = json.dumps(values, default=str)
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 if not set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:ReplyTarget]"):
                     return
-                cursor.execute(_REMEMBER_REPLY_TARGET_SQL, (payload, session_id))
+                cursor.execute(sql, (payload, session_id, *extra_params))
             conn.commit()
     except Exception:
         # Best effort: the run itself does not depend on it.
-        logger.warning("[BackgroundChat] Could not store the reply target for session %s",
-                       session_id, exc_info=True)
+        logger.warning("[BackgroundChat] Could not store %s for session %s",
+                       what, session_id, exc_info=True)
 
 
 def _notify_orphaned_chat_reply(user_id: str, session_id: str, ui_state) -> None:
     """Replace a Thinking… placeholder the killed worker can no longer update."""
     meta = _trigger_metadata_from_ui_state(ui_state)
+    if meta.get("replied") is True:
+        # The answer reached the thread before the worker died (a later phase
+        # was still running). The session still fails; the answer stays.
+        logger.info("[BackgroundChat:Cleanup] Session %s already answered; leaving the reply", session_id)
+        return
     src = meta.get("source")
     try:
         # Same chats the task finally block covers. SIGKILL skips that block.

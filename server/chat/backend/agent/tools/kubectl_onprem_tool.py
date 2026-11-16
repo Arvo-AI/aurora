@@ -4,6 +4,8 @@ import os
 import requests
 from typing import Optional, Dict, Any
 
+from utils.progress_watch import bounded_call
+
 logger = logging.getLogger(__name__)
 
 
@@ -72,12 +74,15 @@ def on_prem_kubectl(
                 'provider': 'onprem_kubectl'
             })
         
-        response = requests.post(
-            f'{chatbot_url}/internal/kubectl/execute',
-            json={'user_id': user_id, 'cluster_id': cluster_id, 'command': command, 'timeout': timeout},
-            headers={'X-Internal-Secret': os.getenv('INTERNAL_API_SECRET')},
-            timeout=timeout
-        )
+        # The agent picks the timeout; the stall watchdog waits for it instead of
+        # cancelling a long command as a hang. Label: program only, no arguments.
+        with bounded_call(timeout, "command 'kubectl'"):
+            response = requests.post(
+                f'{chatbot_url}/internal/kubectl/execute',
+                json={'user_id': user_id, 'cluster_id': cluster_id, 'command': command, 'timeout': timeout},
+                headers={'X-Internal-Secret': os.getenv('INTERNAL_API_SECRET')},
+                timeout=timeout
+            )
         
         # Check response status before parsing JSON
         if not response.ok:

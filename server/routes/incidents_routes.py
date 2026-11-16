@@ -1384,9 +1384,12 @@ def incident_chat(user_id, incident_id: str):
                             }
                         ), 404
 
-                    # Update session status to in_progress
+                    # Back to in_progress for the follow-up. Clearing the last
+                    # run's heartbeat keeps the queued-task allowance in the
+                    # stale-session sweep, and updated_at starts that clock now.
                     cursor.execute(
-                        "UPDATE chat_sessions SET status = %s WHERE id = %s",
+                        "UPDATE chat_sessions SET status = %s, heartbeat_at = NULL, "
+                        "updated_at = NOW() WHERE id = %s",
                         ("in_progress", existing_session_id),
                     )
                     conn.commit()
@@ -1530,23 +1533,29 @@ KEY: Do NOT automatically start a full investigation unless explicitly asked. De
             "question": question,
         }
 
-        run_background_chat.delay(
-            user_id=user_id,
-            session_id=session_id,
-            initial_message=full_message,
-            trigger_metadata=trigger_metadata,
-            provider_preference=None,  # Use default
-            incident_id=None,  # Don't trigger RCA workflow - this is a Q&A chat
-            send_notifications=False,  # No notifications for Q&A
-            mode=mode,  # Pass mode for execution capability
-            # `full_message` wraps `question` in <context>/<user_message> tags
-            # for the LLM. State.question (used by immediate_save and the
-            # input rail) must be the bare user text so the persistence-layer
-            # dedup matches the pre-seeded user row from
-            # create_background_chat_session — otherwise the question lands
-            # in chat_sessions.messages 2–3 times per turn.
-            rail_text=question,
-        )
+        try:
+            run_background_chat.delay(
+                user_id=user_id,
+                session_id=session_id,
+                initial_message=full_message,
+                trigger_metadata=trigger_metadata,
+                provider_preference=None,  # Use default
+                incident_id=None,  # Don't trigger RCA workflow - this is a Q&A chat
+                send_notifications=False,  # No notifications for Q&A
+                mode=mode,  # Pass mode for execution capability
+                # `full_message` wraps `question` in <context>/<user_message> tags
+                # for the LLM. State.question (used by immediate_save and the
+                # input rail) must be the bare user text so the persistence-layer
+                # dedup matches the pre-seeded user row from
+                # create_background_chat_session — otherwise the question lands
+                # in chat_sessions.messages 2–3 times per turn.
+                rail_text=question,
+            )
+        except Exception:
+            # Broker unreachable: the session is in_progress with no task behind
+            # it. Move it out so it does not sit there until the stale sweep.
+            _fail_undispatched_session(user_id, session_id)
+            raise
 
         logger.info(
             "[INCIDENTS] Background chat task queued for incident %s, session %s (new=%s, mode=%s)",
@@ -1955,3 +1964,20 @@ def trigger_rca_from_chat(user_id):
     if payload.get("error") and not payload.get("incident_id"):
         return jsonify(payload), 400
     return jsonify(payload), 200
+
+
+def _fail_undispatched_session(user_id, session_id):
+    """Mark a session whose background task never got queued as errored."""
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
+                cursor.execute(
+                    "UPDATE chat_sessions SET status = 'error', updated_at = NOW() "
+                    "WHERE id = %s AND status = 'in_progress'",
+                    (session_id,),
+                )
+            conn.commit()
+    except Exception:
+        logger.exception("[INCIDENTS] Failed to mark session %s as error after enqueue failure",
+                         sanitize(session_id))
