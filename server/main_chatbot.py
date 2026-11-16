@@ -1760,6 +1760,10 @@ async def main():
 # Terraform cleanup is now handled by utils/terraform_cleanup.py
 
 if __name__ == "__main__":
+    # Before anything spawns a child: agent commands and MCP servers run as
+    # same-uid children and could otherwise read this process's env from /proc.
+    from utils.security.subprocess_env import deny_same_uid_proc_access
+    deny_same_uid_proc_access()
     try:
         # Start MCP preloader service for faster chat responses
         try:

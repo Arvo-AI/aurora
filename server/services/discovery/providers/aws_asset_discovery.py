@@ -11,6 +11,7 @@ import os
 import subprocess
 
 from services.discovery.resource_mapper import map_aws_resource
+from utils.security.subprocess_env import strip_github_app_secrets
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,7 @@ def _extract_region_from_arn(arn):
 
 def _build_env(credentials):
     """Build environment variables for AWS CLI subprocess calls."""
-    env = os.environ.copy()
+    env = strip_github_app_secrets(os.environ.copy())
     env["AWS_ACCESS_KEY_ID"] = credentials["access_key_id"]
     env["AWS_SECRET_ACCESS_KEY"] = credentials["secret_access_key"]
     if credentials.get("session_token"):
