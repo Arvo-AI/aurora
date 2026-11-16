@@ -107,6 +107,15 @@ The incomplete fixture is derived, not captured:
 |---|---|---|
 | `tests/fixtures/snapshots/missing-pods.json` | `full.json` with the `pods` section removed on 2026-11-16 | one missing section turns all six checks INCONCLUSIVE (R11), so no positive verdict |
 
+## The repeat fixtures
+
+C2 needs the same fix twice from a reset. The capture of 2026-11-16 also ran a second baseline and a second full fix, in one cycle with P1, so both repeats are a different cycle and not a copy of the documents in `fixtures/snapshots`.
+
+| Fixture | Variant | Captured at | Verdict it supports |
+|---|---|---|---|
+| `fixtures/repeats/baseline-r2.json` | baseline | `2026-11-16T01:37:26Z` | CONFIRMED, six FAIL, identical per-check statuses |
+| `fixtures/repeats/full-r2.json` | full | `2026-11-16T01:42:04Z` | VERIFIED_WITHIN_CONTRACT, identical per-check statuses |
+
 ## Aurora's claim
 
 This row is a README citation, not a verifier input. It is here because the evaluator asks for the claim and its source in one place.
