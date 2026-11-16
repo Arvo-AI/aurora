@@ -224,19 +224,33 @@ def _load_locked(cur, user_id: str) -> _Row | None:
                 list(pending or []), pending_since, email, name, bool(verified))
 
 
-def _has_stored(cur, org_id: str) -> bool:
-    """Any connector credentials or links saved for the org, checked or not."""
+def _stored_providers(cur, org_id: str) -> frozenset[str]:
+    """Tools with credentials or links saved for the org, whether or not they
+    check out right now."""
     cur.execute(
-        """SELECT EXISTS (SELECT 1 FROM user_tokens
-                           WHERE org_id = %s AND is_active AND secret_ref IS NOT NULL AND provider = ANY(%s))
-               OR EXISTS (SELECT 1 FROM user_connections WHERE org_id = %s AND status = 'active' AND provider = ANY(%s))
-               OR EXISTS (SELECT 1 FROM user_github_installations WHERE org_id = %s AND disconnected_at IS NULL)
-               OR EXISTS (SELECT 1 FROM kubeconfig_clusters WHERE org_id = %s AND is_active)
-               OR EXISTS (SELECT 1 FROM kubectl_agent_tokens WHERE org_id = %s AND status = 'active')
-               OR EXISTS (SELECT 1 FROM user_manual_vms WHERE org_id = %s)""",
+        """SELECT provider FROM user_tokens
+            WHERE org_id = %s AND is_active AND secret_ref IS NOT NULL AND provider = ANY(%s)
+           UNION SELECT provider FROM user_connections
+            WHERE org_id = %s AND status = 'active' AND provider = ANY(%s)
+           UNION SELECT 'github' FROM user_github_installations WHERE org_id = %s AND disconnected_at IS NULL
+           UNION SELECT 'kubectl' FROM kubeconfig_clusters WHERE org_id = %s AND is_active
+           UNION SELECT 'kubectl' FROM kubectl_agent_tokens WHERE org_id = %s AND status = 'active'
+           UNION SELECT 'onprem' FROM user_manual_vms WHERE org_id = %s""",
         (org_id, list(ALL_PROVIDERS), org_id, list(ALL_PROVIDERS), org_id, org_id, org_id, org_id),
     )
-    return bool(cur.fetchone()[0])
+    return frozenset(row[0] for row in cur.fetchall())
+
+
+def unknown_parts(stored: frozenset[str], connected: frozenset[str], failed: frozenset[str]) -> list[str]:
+    """Parts whose state a failed check leaves open.
+
+    Most checkers swallow their own errors and just say "not connected", so a
+    tool that is saved but doesn't check out right now counts as unknown,
+    alongside the ones whose check failed outright. Emails never call such a
+    part missing.
+    """
+    open_ = (stored - connected) | failed
+    return [p for p in dict.fromkeys(part_of(x) for x in sorted(open_)) if p]
 
 
 def _sent(cur, user_id: str) -> dict[str, datetime]:
@@ -314,9 +328,34 @@ def _claim_due(cur, user_id: str, r: _Row, providers: frozenset[str], state: sch
     return _Claim(due.kind, kinds, r.email, r.guide, msg.subject, msg.text, msg.html, ctx.unsubscribe_url)
 
 
+def restore_pending(pending: list[str], pending_since: datetime | None, kinds: list[str],
+                    now: datetime) -> tuple[list[str], datetime | None]:
+    """Put the parts of a failed "connected" email back in the queue.
+
+    A run that overlapped the send saw the claim and dropped those parts from
+    pending; without this, they would be neither pending nor announced.
+    """
+    parts = [k.split(":", 1)[1] for k in kinds if k.startswith("connected:")]
+    back = pending + [p for p in parts if p not in pending]
+    if not parts:
+        return pending, pending_since
+    return back, pending_since or now
+
+
 def _release(user_id: str, kinds: list[str]) -> None:
-    """The provider refused the email: drop the claim so a later run tries again."""
+    """The email didn't go out: drop the claim, and requeue its parts, so a later run tries again."""
     with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT pending_parts, pending_since FROM onboarding_journeys WHERE user_id = %s FOR UPDATE",
+            (user_id,),
+        )
+        row = cur.fetchone()
+        if row:
+            pending, since = restore_pending(list(row[0] or []), row[1], kinds, _now())
+            cur.execute(
+                "UPDATE onboarding_journeys SET pending_parts = %s, pending_since = %s WHERE user_id = %s",
+                (pending, since, user_id),
+            )
         cur.execute("DELETE FROM onboarding_emails WHERE user_id = %s AND kind = ANY(%s)", (user_id, kinds))
         conn.commit()
 
@@ -338,7 +377,7 @@ def evaluate(user_id: str) -> str | None:
     checked = _connected_providers(user_id, org_id)
 
     with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
-        # The stored-credential tables are row-level secured, so _has_stored
+        # The stored-credential tables are row-level secured, so _stored_providers
         # sees nothing without this outside a request. It commits, so it goes
         # before the lock.
         if not set_rls_context(cur, conn, user_id, org_id=org_id, log_prefix="[ONBOARDING]"):
@@ -361,6 +400,7 @@ def evaluate(user_id: str) -> str | None:
             providers, unknown = checked.connected, checked.unknown
             _note_new_connections(r, providers, sent)
         ever = providers | r.known
+        stored = _stored_providers(cur, r.org_id)
         state = schedule.JourneyState(
             enrolled_at=r.created_at,
             email_verified=r.verified,
@@ -369,8 +409,8 @@ def evaluate(user_id: str) -> str | None:
             parts_ever=parts_connected(ever),
             pending_parts=r.pending,
             pending_since=r.pending_since,
-            has_stored=_has_stored(cur, r.org_id),
-            parts_unknown=[p for p in dict.fromkeys(part_of(x) for x in sorted(unknown)) if p],
+            has_stored=bool(stored),
+            parts_unknown=unknown_parts(stored, providers, unknown),
             unsubscribed=r.unsubscribed,
         )
         claim = _claim_due(cur, user_id, r, providers, state)
@@ -384,7 +424,12 @@ def evaluate(user_id: str) -> str | None:
 
     if claim is None:
         return None
-    if not send(claim.to, claim.guide, claim.subject, claim.text, claim.html, claim.unsubscribe_url):
+    try:
+        ok = send(claim.to, claim.guide, claim.subject, claim.text, claim.html, claim.unsubscribe_url)
+    except Exception:
+        logger.exception("[ONBOARDING] sending %s raised for user_hash=%s", claim.kind, hash_for_log(user_id))
+        ok = False
+    if not ok:
         _release(user_id, claim.kinds)
         return None
     ping_team(f"Sent \"{claim.subject}\" to {claim.to} from {claim.guide.first_name}.")

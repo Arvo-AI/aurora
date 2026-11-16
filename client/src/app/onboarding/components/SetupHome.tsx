@@ -107,7 +107,7 @@ function TeammatesLine({ slackOn }: Readonly<{ slackOn: boolean }>) {
   const slackSignIn = useSlackSignInAvailable(true)
   const [copied, setCopied] = useState(false)
   if (!(slackOn && slackSignIn)) {
-    return <>Setup stays here while you work. Come back to it from the setup button in the corner.</>
+    return <>Setup stays here while you work. Come back to it any time from Setup in your account menu.</>
   }
   const copy = async () => {
     try {
@@ -178,7 +178,9 @@ export default function SetupHome({ via: viaProp }: Readonly<{ via?: string }>) 
     <main className="h-full overflow-y-auto">
       <div className="mx-auto flex min-h-full w-full max-w-[640px] flex-col px-5 pb-16 pt-10 sm:pt-16">
         <div className="flex h-5 justify-end">
-          {!allDone && (
+          {/* The way out. Shown even if the page is still waiting (a hung
+              status or guide request), whatever is connected. */}
+          {(!allDone || (stalled && !ready)) && (
             <motion.button
               {...reveal(0)}
               animate={ready || stalled ? { opacity: 1, y: 0 } : { opacity: 0, y: 8 }}
@@ -187,7 +189,7 @@ export default function SetupHome({ via: viaProp }: Readonly<{ via?: string }>) 
               disabled={leaving}
               className="rounded text-sm text-white/45 transition-colors hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/30 disabled:opacity-60"
             >
-              Skip for now
+              {allDone ? "Go to Aurora" : "Skip for now"}
             </motion.button>
           )}
         </div>

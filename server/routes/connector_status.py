@@ -36,7 +36,6 @@ from utils.elastic_config import ELASTIC_SSL_VERIFY
 
 connector_status_bp = Blueprint("connector_status", __name__)
 
-LIVE_CHECK_TIMEOUT = 10
 HTTP_TIMEOUT = (3.5, 5)
 
 
@@ -251,7 +250,7 @@ def _check_rabbitmq(creds: Dict[str, Any]) -> Dict[str, Any]:
             url=url,
             username=username,
             password=password,
-            # The batch status call gives up at LIVE_CHECK_TIMEOUT.
+            # Short, so one slow broker doesn't hold up the whole status call.
             timeout=4,
         )
         try:
@@ -1068,12 +1067,14 @@ def _check_all_connectors(
             for prov, owner in providers.items()
         }
         for future in as_completed(futures):
+            # as_completed only yields finished futures, so result() never
+            # waits; _run_check already turns a raising checker into a result.
             try:
-                prov, status = future.result(timeout=LIVE_CHECK_TIMEOUT)
+                prov, status = future.result()
                 results[prov] = status
             except Exception as exc:
                 prov = futures[future]
-                logger.warning("[STATUS] %s check timed out: %s", prov, exc)
+                logger.warning("[STATUS] %s check failed: %s", prov, exc)
                 results[prov] = {"connected": False, "check_failed": True}
 
     # CloudBees OC/PAT (cloudbees_oc), FM (cloudbees_fm), and the standalone

@@ -254,3 +254,57 @@ def test_checkin_waits_when_a_missing_part_only_failed_its_check():
     assert due_email(s, at(hours=23)) is None
     s.parts_unknown = ["code"]  # the failed one is connected through another tool
     assert due_email(s, at(hours=23)) == Due("checkin")
+
+
+# ── checks that swallow their own errors, and failed sends ──
+
+
+def test_a_saved_tool_whose_check_swallowed_an_error_is_unknown_not_missing():
+    # GitHub checks out; Datadog is saved but its checker caught a timeout and
+    # just said "not connected", without check_failed.
+    from services.onboarding.journey import unknown_parts
+    unknown = unknown_parts(frozenset({"github", "datadog"}), frozenset({"github"}), frozenset())
+    assert unknown == ["alerts"]
+    s = state(sent={"welcome": at(minutes=4)}, parts_done=["code"], has_stored=True, parts_unknown=unknown)
+    assert due_email(s, at(hours=23)) is None
+
+
+def test_a_failed_connected_email_puts_its_part_back_in_the_queue():
+    from services.onboarding.journey import restore_pending
+    later = at(hours=2)
+    assert restore_pending([], None, ["connected:alerts"], later) == (["alerts"], later)
+    assert restore_pending(["cloud"], at(hours=1), ["connected:alerts", "connected:cloud"], later) == (["cloud", "alerts"], at(hours=1))
+    assert restore_pending(["cloud"], at(hours=1), ["checkin"], later) == (["cloud"], at(hours=1))
+
+
+def test_a_send_that_raises_releases_the_claim(monkeypatch):
+    from services.onboarding import journey, sender
+    released = []
+    claim = journey._Claim("welcome", ["welcome"], "dana@example.com",
+                           guides.Guide(key="a", name="Ada Lane", email="ada@example.com"), "s", "t", "<p>h</p>", "https://u")
+    monkeypatch.setattr(sender, "emails_enabled", lambda: True)
+    monkeypatch.setattr(journey, "_journey_org", lambda uid: "org")
+    monkeypatch.setattr(journey, "_connected_providers", lambda uid, org: None)
+
+    class _Cur:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+    class _Conn:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def cursor(self): return _Cur()
+        def commit(self): pass
+        def rollback(self): pass
+    monkeypatch.setattr(journey.db_pool, "get_admin_connection", lambda: _Conn())
+    monkeypatch.setattr("utils.auth.stateless_auth.set_rls_context", lambda *a, **k: "org")
+    monkeypatch.setattr(journey, "_load_locked", lambda cur, uid: journey._Row(
+        "org", "password", claim.guide, T0, False, set(), [], None, "dana@example.com", "Dana", True))
+    monkeypatch.setattr(journey, "_sent", lambda cur, uid: {})
+    monkeypatch.setattr(journey, "_stored_providers", lambda cur, org: frozenset())
+    monkeypatch.setattr(journey, "_claim_due", lambda *a: claim)
+    def boom(*a, **k): raise KeyError("access_token")
+    monkeypatch.setattr(sender, "send", boom)
+    monkeypatch.setattr(journey, "_release", lambda uid, kinds: released.append(kinds))
+    _Cur.execute = lambda self, *a, **k: None
+    assert journey.evaluate("u1") is None
+    assert released == [["welcome"]]

@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
-import { ChevronLeft, Settings, LogOut, User, Zap, Plug, Gauge, SquarePen, Workflow } from "lucide-react"
+import { ChevronLeft, Settings, LogOut, User, Zap, Plug, Gauge, SquarePen, Workflow, ListChecks } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import ChatHistory from "@/components/ChatHistory"
@@ -324,6 +324,16 @@ export default function Navigation({
                           <Settings className="h-4 w-4" />
                           Settings
                         </button>
+
+                        {/* Setup: always reachable, whether or not the corner button is showing */}
+                        <Link
+                          href="/onboarding"
+                          onClick={() => setIsUserMenuOpen(false)}
+                          className="flex items-center gap-2 w-full px-2 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-muted rounded-md transition-colors"
+                        >
+                          <ListChecks className="h-4 w-4" />
+                          Setup
+                        </Link>
                         
                         {/* Sign Out Button */}
                         <button
