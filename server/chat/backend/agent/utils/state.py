@@ -55,6 +55,7 @@ class State(BaseModel):
         None  # Pending RCA context updates for UI injection
     )
     guardrail_blocked: bool = False  # Set by workflow when input rail blocks the message
+    agent_error: Optional[str] = None  # Set when the agent stopped on an error it could not recover from
     permitted_tools: Optional[set] = None
 
     # --- Multi-agent orchestrator fields (defaults preserve single-agent behavior) ---

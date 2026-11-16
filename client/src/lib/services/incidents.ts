@@ -263,6 +263,9 @@ export interface Incident {
   createdAt?: string;
   updatedAt?: string;
   chatSessionId?: string;
+  // Set when the RCA stopped before it finished (time limit, stall, error); it can be continued.
+  unfinishedReason?: 'time_limit' | 'stalled' | 'error' | 'interrupted' | null;
+  continuationsLeft?: number;
   tokenUsage?: {
     requestCount: number;
     totalInputTokens: number;
@@ -416,6 +419,8 @@ export const incidentsService = {
         createdAt: inc.createdAt,
         updatedAt: inc.updatedAt,
         chatSessionId: inc.chatSessionId,
+        unfinishedReason: inc.unfinishedReason ?? null,
+        continuationsLeft: inc.continuationsLeft ?? 0,
         tokenUsage: inc.tokenUsage || null,
       };
     } catch (error) {
@@ -532,6 +537,16 @@ export const incidentsService = {
       console.error('Error applying fix suggestion:', error);
       const message = error instanceof Error ? error.message : 'Unknown error';
       return { success: false, error: message };
+    }
+  },
+
+  async continueInvestigation(incidentId: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      await apiPost(`/api/incidents/${incidentId}/continue`);
+      return { success: true };
+    } catch (error) {
+      const apiErr = error as ApiError;
+      return { success: false, error: apiErr.message || 'Failed to continue the investigation' };
     }
   },
 

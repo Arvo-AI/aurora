@@ -340,7 +340,7 @@ def test_a_dead_task_is_revoked_so_a_stuck_worker_frees_its_slot(monkeypatch, ta
     stale = DB_NOW - timedelta(minutes=6)
     monkeypatch.setattr(task.celery_app, "AsyncResult", lambda _t: SimpleNamespace(state="STARTED", result=None))
     _, revoked = _run_sweep(monkeypatch, task, {
-        "i.rca_celery_task_id IS NOT NULL": [("inc-1", "task-1", SESSION, stale)],
+        "i.rca_celery_task_id IS NOT NULL": [("inc-1", "task-1", SESSION, stale, True)],
         "FROM execution_steps": [],
         "FROM rca_findings": [],
         "UPDATE incidents SET aurora_status = 'error'": [("inc-1",)],
@@ -353,7 +353,7 @@ def test_a_live_task_is_not_revoked(monkeypatch, task):
     fresh = DB_NOW - timedelta(seconds=20)
     monkeypatch.setattr(task.celery_app, "AsyncResult", lambda _t: SimpleNamespace(state="STARTED", result=None))
     _, revoked = _run_sweep(monkeypatch, task, {
-        "i.rca_celery_task_id IS NOT NULL": [("inc-1", "task-1", SESSION, fresh)],
+        "i.rca_celery_task_id IS NOT NULL": [("inc-1", "task-1", SESSION, fresh, True)],
     })
     assert revoked == []
 
@@ -362,7 +362,7 @@ def test_the_stale_session_claim_rechecks_the_heartbeat(monkeypatch, task):
     """A beat landing between the sweep's SELECT and its UPDATE must keep the
     session alive, so the claim repeats the staleness test the SELECT used."""
     cursor, _ = _run_sweep(monkeypatch, task, {
-        "cs.heartbeat_at IS NOT NULL": [(SESSION, None, None)],
+        "cs.heartbeat_at IS NOT NULL": [(SESSION, None, None, False)],
     })
     sql, params = next(e for e in cursor.executed if e[0].startswith("UPDATE chat_sessions"))
     assert "GREATEST(heartbeat_at, updated_at) < %s" in sql
@@ -376,7 +376,7 @@ def test_a_task_that_beats_after_the_dead_check_is_left_alone(monkeypatch, task)
     stale = DB_NOW - timedelta(minutes=6)
     monkeypatch.setattr(task.celery_app, "AsyncResult", lambda _t: SimpleNamespace(state="STARTED", result=None))
     cursor, revoked = _run_sweep(monkeypatch, task, {
-        "i.rca_celery_task_id IS NOT NULL": [("inc-1", "task-1", SESSION, stale)],
+        "i.rca_celery_task_id IS NOT NULL": [("inc-1", "task-1", SESSION, stale, True)],
         "FROM execution_steps": [],
         "FROM rca_findings": [],
         "FOR UPDATE": [(True,)],  # the worker beat in the meantime
