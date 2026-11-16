@@ -1,7 +1,6 @@
 "use client"
 
 import AuroraShader from "@/app/components/AuroraShader"
-import { OnboardingProvider } from "./components/OnboardingContext"
 import { useDarkPageBackground } from "@/hooks/useDarkPageBackground"
 
 export default function OnboardingLayout({
@@ -12,7 +11,6 @@ export default function OnboardingLayout({
   useDarkPageBackground()
 
   return (
-    <OnboardingProvider>
       <div className="h-screen bg-[#0a0a0a] relative overflow-hidden">
         <div className="fixed inset-0">
           <AuroraShader className="absolute inset-0 w-full h-full blur-[8px]" />
@@ -29,6 +27,5 @@ export default function OnboardingLayout({
           {children}
         </div>
       </div>
-    </OnboardingProvider>
   )
 }

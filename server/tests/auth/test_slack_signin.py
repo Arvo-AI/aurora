@@ -286,7 +286,7 @@ class TestJoinWorkspaceOrg:
         app, mod, _ = signin_app
         with app.test_request_context(), _workspace(mod, db_rows=[("user-9", "org-other", "viewer", None)]) as (cur, _):
             resp = mod.join_workspace_org(_IDENTITY)
-        assert resp.location.endswith("error=account_exists")
+        assert resp.location.endswith("error=slack_other_org")
         assert _writes(cur) == []
 
     def test_account_linked_to_another_slack_user_is_refused(self, signin_app):

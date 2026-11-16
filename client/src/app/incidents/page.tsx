@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
+import { useConnectedSet } from '@/hooks/use-connected-set';
+import { progress } from '@/lib/onboarding/stack';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { Zap, Clock, ChevronRight, Loader2, CheckCircle2, Link2, GitMerge, Plus, AlertTriangle } from 'lucide-react';
@@ -228,11 +230,7 @@ export default function IncidentsPage() {
                 {!isConnectedToIncidentPlatform && !isLoadingAccounts ? (
                   <ConnectPlatformCTA />
                 ) : (
-                  <>
-                    <CheckCircle2 className="h-10 w-10 mx-auto text-green-500 mb-3" />
-                    <p className="font-medium">All clear</p>
-                    <p className="text-sm text-muted-foreground">No incidents yet</p>
-                  </>
+                  <AllClear />
                 )}
               </CardContent>
             </Card>
@@ -324,6 +322,30 @@ function DisconnectedBanner() {
 const alertConnectors = connectorRegistry
   .getAll()
   .filter(c => c.category && ALERT_CATEGORIES.has(c.category) && c.path);
+
+// Alerts are connected but nothing has fired: say what will happen, and
+// point at whatever setup is left instead of a dead end.
+function AllClear() {
+  const { connected } = useConnectedSet(null);
+  const { done, total, next } = progress(connected ?? new Set<string>());
+  return (
+    <>
+      <CheckCircle2 className="h-10 w-10 mx-auto text-green-500 mb-3" />
+      <p className="font-medium">All clear</p>
+      <p className="text-sm text-muted-foreground max-w-sm mx-auto">
+        Aurora is watching your alerts. When one fires, its investigation shows up here.
+      </p>
+      {connected && next && (
+        <Link
+          href={`/onboarding?step=${next.id}`}
+          className="inline-flex items-center mt-5 rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-muted/50 transition-colors"
+        >
+          Finish setup ({done} of {total} connected)
+        </Link>
+      )}
+    </>
+  );
+}
 
 function ConnectPlatformCTA() {
   const [open, setOpen] = useState(false);

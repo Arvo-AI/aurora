@@ -16,6 +16,7 @@ export const SLACK_RESUME_KEY = "aurora_resume_slack_connect"
 // Fixed strings only: the query param picks a message, it is never rendered.
 export const SLACK_ERRORS: Record<string, string> = {
   slack_account_exists: "Your Slack email already has an Aurora account. Sign in below and we'll finish adding Aurora to Slack.",
+  slack_other_org: "Your email already has an Aurora account in another organization. Sign in with your password below, or ask an admin there to invite you.",
   slack_workspace_not_connected: "Your Slack workspace doesn't use Aurora yet. Add it to Slack to create your team's account.",
   slack_not_member: "Only full members of the workspace can sign in with Slack. Guests and Slack Connect users need an invite.",
   slack_sso_required: "Your organization requires single sign-on. Sign in with SSO below.",

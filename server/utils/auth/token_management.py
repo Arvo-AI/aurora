@@ -500,6 +500,8 @@ def store_tokens_in_db(user_id: str, token_data: Dict, provider: str,
         # nothing to discover, and on a busy org it re-ran discovery every hour.
         if should_schedule:
             _schedule_prediscovery(user_id)
+            from services.onboarding.tasks import kick_org
+            kick_org(request_org_id)
 
         elapsed_time = (time.perf_counter() - start_time) * 1000
         _log_store_ok(provider, elapsed_time)

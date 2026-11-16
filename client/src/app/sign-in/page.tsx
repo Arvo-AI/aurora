@@ -104,7 +104,7 @@ function handoffDestination(via: string | null, slackAuth: string | null): strin
   if (via === "slack") return `/onboarding/slack?slack_auth=${slackAuth === "failed" ? "failed" : "success"}`
   if (via === "slack_join") return "/onboarding/slack?joined=1"
   if (via === "sso" || via === "slack_signin") return "/"
-  return "/connectors?installed=github"
+  return "/onboarding?via=github"
 }
 
 // Same-origin paths only — "//host" is protocol-relative and would leave the app.
@@ -389,8 +389,6 @@ function AuthPage() {
       }
       const result = await signIn("credentials", { email, password, redirect: false })
       if (result?.ok) {
-        sessionStorage.removeItem("aurora_onboarding_state")
-        sessionStorage.removeItem("aurora_onboarding_queue")
         sessionStorage.setItem("aurora_needs_onboarding", "true")
         const updated = await update()
         if (updated?.user?.emailVerified) {

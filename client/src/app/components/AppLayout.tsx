@@ -8,7 +8,7 @@ import { signOut } from "next-auth/react";
 import dynamic from "next/dynamic";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Gauge, LogOut, Plug, Settings, SquarePen, Workflow, Zap } from "lucide-react";
+import { Gauge, ListChecks, LogOut, Plug, Settings, SquarePen, Workflow, Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   Tooltip,
@@ -196,6 +196,16 @@ const SidebarStrip = ({
                     <Settings className="h-4 w-4" />
                     Settings
                   </button>
+
+                  {/* Setup: always reachable, whether or not the corner button is showing */}
+                  <Link
+                    href="/onboarding"
+                    onClick={() => setIsUserMenuOpen(false)}
+                    className="flex items-center gap-2 w-full px-2 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-muted rounded-md transition-colors"
+                  >
+                    <ListChecks className="h-4 w-4" />
+                    Setup
+                  </Link>
                   
                   {/* Sign Out Button */}
                   <button

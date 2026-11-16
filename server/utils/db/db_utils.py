@@ -1245,6 +1245,53 @@ def initialize_tables():
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_onboarding_selections_org
                         ON onboarding_selections(org_id);
                 """,
+                # Guided onboarding (services/onboarding). Not RLS-scoped: the
+                # journey sweep is cross-org, and every query filters by user_id.
+                "onboarding_journeys": """
+                    CREATE TABLE IF NOT EXISTS onboarding_journeys (
+                        user_id VARCHAR(255) PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                        org_id VARCHAR(255) REFERENCES organizations(id) ON DELETE CASCADE,
+                        via VARCHAR(32),
+                        guide_key VARCHAR(64),
+                        emails_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+                        known_connectors TEXT[] NOT NULL DEFAULT '{}',
+                        pending_parts TEXT[] NOT NULL DEFAULT '{}',
+                        pending_since TIMESTAMPTZ,
+                        unsubscribed_at TIMESTAMPTZ,
+                        last_checked_at TIMESTAMPTZ,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_onboarding_journeys_active
+                        ON onboarding_journeys(created_at) WHERE emails_enabled AND unsubscribed_at IS NULL;
+                    CREATE INDEX IF NOT EXISTS idx_onboarding_journeys_org ON onboarding_journeys(org_id);
+                    ALTER TABLE onboarding_journeys ADD COLUMN IF NOT EXISTS pending_since TIMESTAMPTZ;
+                """,
+                "onboarding_emails": """
+                    CREATE TABLE IF NOT EXISTS onboarding_emails (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(255) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                        kind VARCHAR(40) NOT NULL,
+                        subject VARCHAR(255),
+                        sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        UNIQUE (user_id, kind)
+                    );
+
+                    -- Early builds used TIMESTAMP, which reads as the DB session's
+                    -- zone. Those values were written as UTC.
+                    DO $$
+                    DECLARE c RECORD;
+                    BEGIN
+                        FOR c IN SELECT table_name, column_name FROM information_schema.columns
+                                  WHERE table_schema = current_schema()
+                                    AND table_name IN ('onboarding_journeys', 'onboarding_emails')
+                                    AND data_type = 'timestamp without time zone'
+                        LOOP
+                            EXECUTE format('ALTER TABLE %I ALTER COLUMN %I TYPE TIMESTAMPTZ USING %I AT TIME ZONE ''UTC''',
+                                           c.table_name, c.column_name, c.column_name);
+                        END LOOP;
+                    END $$;
+                """,
                 "org_command_policies": """
                     CREATE TABLE IF NOT EXISTS org_command_policies (
                         id SERIAL PRIMARY KEY,

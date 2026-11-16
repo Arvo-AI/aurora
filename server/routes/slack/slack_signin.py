@@ -248,7 +248,8 @@ def join_workspace_org(identity: dict) -> str | flask.Response | None:
             if existing:
                 user_id, user_org_id, role, linked_slack_user = existing
                 if user_org_id != org_id:
-                    return sign_in_error("account_exists")
+                    # Not "account_exists": that one is worded for GitHub signups.
+                    return sign_in_error("slack_other_org")
                 if linked_slack_user and linked_slack_user != identity["slack_user_id"]:
                     return sign_in_error("slack_identity_mismatch")
                 if role == "admin":
