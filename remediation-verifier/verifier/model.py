@@ -150,7 +150,12 @@ class ContainerStatus:
 
 @dataclass(frozen=True)
 class Pod:
-    """One pod. `last_state` is flattened to the terminated reason and exit code."""
+    """One pod, flattened to what the checks read.
+
+    `last_state` becomes the terminated reason and exit code. `terminating` is
+    True while the pod carries a deletion timestamp, which is what a rollout
+    leaves behind: such a pod is on its way out and not part of the workload.
+    """
 
     name: str
     uid: str
@@ -161,6 +166,7 @@ class Pod:
     last_terminated_reason: str | None = None
     last_exit_code: int | None = None
     containers: tuple[ContainerStatus, ...] = ()
+    terminating: bool = False
 
 
 @dataclass(frozen=True)

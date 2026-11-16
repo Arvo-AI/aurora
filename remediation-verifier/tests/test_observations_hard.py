@@ -239,7 +239,7 @@ class FakeKubectl:
 
     def text(self, args):
         self.text_calls.append(list(args))
-        if "deployment/worker" in args:
+        if any(str(argument).startswith("pod/") for argument in args):
             return "processed batch of 500 items\n"
         if self.loadgen_error:
             raise LiveError("loadgen log failed")

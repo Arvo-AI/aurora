@@ -122,6 +122,7 @@ def test_pod_evidence_keeps_the_fields_a_report_prints() -> None:
             "restart_count": 2,
             "last_terminated_reason": "OOMKilled",
             "waiting_reason": None,
+            "terminating": False,
         }
     ]
 

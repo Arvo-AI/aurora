@@ -88,9 +88,21 @@ def pod_evidence(pods: Sequence[Pod]) -> list[dict[str, Any]]:
             "restart_count": pod.restart_count,
             "last_terminated_reason": pod.last_terminated_reason,
             "waiting_reason": pod.waiting_reason,
+            "terminating": pod.terminating,
         }
         for pod in pods
     ]
+
+
+def current_pods(pods: Sequence[Pod]) -> tuple[Pod, ...]:
+    """Return the pods that are not on their way out.
+
+    A pod with a deletion timestamp is still listed by `kubectl get pods` while
+    it terminates, and that is how a rollout leaves an OOMKilled pod behind a
+    healthy one. Counting it would fail a fix that worked, so the window checks
+    read this view and the evidence keeps the ignored names.
+    """
+    return tuple(pod for pod in pods if not pod.terminating)
 
 
 def restart_counts(pods: Sequence[Pod]) -> dict[str, int]:

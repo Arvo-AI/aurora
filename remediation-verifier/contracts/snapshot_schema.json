@@ -40,6 +40,7 @@
         "waiting_reason": {"type": ["string", "null"]},
         "last_terminated_reason": {"type": ["string", "null"]},
         "last_exit_code": {"type": ["integer", "null"]},
+        "terminating": {"type": "boolean"},
         "containers": {"type": "array", "items": {"$ref": "#/$defs/container"}}
       }
     },

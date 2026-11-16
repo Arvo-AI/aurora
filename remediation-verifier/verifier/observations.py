@@ -204,6 +204,7 @@ def _pod(node: Mapping[str, Any], where: str) -> Pod:
             node.get("last_terminated_reason"), f"{where}.last_terminated_reason"
         ),
         last_exit_code=_optional_int(node.get("last_exit_code"), f"{where}.last_exit_code"),
+        terminating=_optional_flag(node.get("terminating"), f"{where}.terminating"),
         containers=tuple(
             _container(item, f"{where}.containers[{position}]")
             for position, item in enumerate(containers)
@@ -341,6 +342,13 @@ def _flag(value: Any, where: str) -> bool:
     if not isinstance(value, bool):
         raise ObservationError(f"{where}: expected a boolean")
     return value
+
+
+def _optional_flag(value: Any, where: str) -> bool:
+    """A flag that may be absent, which is how a pre-case-7 snapshot reads."""
+    if value is None:
+        return False
+    return _flag(value, where)
 
 
 def _restart_count(node: Mapping[str, Any], where: str) -> int:

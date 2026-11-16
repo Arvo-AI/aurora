@@ -30,6 +30,7 @@ from verifier.model import (
 from verifier.results import (
     build_result,
     counts_evidence,
+    current_pods,
     fault_for_check,
     find_declaration,
     has_oomkilled,
@@ -47,20 +48,23 @@ def check_no_oomkilled_in_window(
     blocked = incomplete_result(contract, check_id, start, end)
     if blocked is not None:
         return blocked
-    if not end.pods:
+    current = current_pods(end.pods)
+    terminating = [pod.name for pod in end.pods if pod.terminating]
+    if not current:
         return build_result(
             contract,
             check_id,
             INCONCLUSIVE,
-            "the end capture has no worker pod to examine",
-            {"pods_at_end": 0},
+            "the end capture has no current worker pod to examine",
+            {"pods_at_end": 0, "terminating_at_end": terminating},
         )
-    oomkilled_at_end = [pod.name for pod in end.pods if has_oomkilled(pod)]
+    oomkilled_at_end = [pod.name for pod in current if has_oomkilled(pod)]
     evidence = {
         "pods_at_start": pod_evidence(start.pods),
         "pods_at_end": pod_evidence(end.pods),
         "oomkilled_at_start": [pod.name for pod in start.pods if has_oomkilled(pod)],
         "oomkilled_at_end": oomkilled_at_end,
+        "terminating_at_end": terminating,
         "window_seconds": contract.oracle.observation.window_seconds,
     }
     if oomkilled_at_end:
@@ -70,7 +74,7 @@ def check_no_oomkilled_in_window(
         contract,
         check_id,
         PASS,
-        "no current worker pod carries an OOMKilled last state",
+        f"no current worker pod carries an OOMKilled last state{_ignored(terminating)}",
         evidence,
     )
 
@@ -83,21 +87,28 @@ def check_restart_count_not_increasing(
     blocked = incomplete_result(contract, check_id, start, end)
     if blocked is not None:
         return blocked
-    if not start.pods or not end.pods:
+    current_start = current_pods(start.pods)
+    current_end = current_pods(end.pods)
+    if not current_start or not current_end:
         return build_result(
             contract,
             check_id,
             INCONCLUSIVE,
-            "a capture has no worker pod, so a restart count cannot be compared",
-            {"pods_at_start": len(start.pods), "pods_at_end": len(end.pods)},
+            "a capture has no current worker pod, so a restart count cannot be compared",
+            {
+                "pods_at_start": len(current_start),
+                "pods_at_end": len(current_end),
+                "terminating_ignored": _terminating_names(start, end),
+            },
         )
-    start_counts = restart_counts(start.pods)
-    end_counts = restart_counts(end.pods)
+    start_counts = restart_counts(current_start)
+    end_counts = restart_counts(current_end)
     evidence = {
         "start": counts_evidence(start_counts),
         "end": counts_evidence(end_counts),
         "replaced_uids": sorted(set(start_counts) - set(end_counts)),
         "new_uids": sorted(set(end_counts) - set(start_counts)),
+        "terminating_ignored": _terminating_names(start, end),
         "window_seconds": contract.oracle.observation.window_seconds,
     }
     problems = []
@@ -337,6 +348,21 @@ def _json_body(body: str | None) -> Mapping[str, Any] | None:
 def _items_of(body: str | None) -> Any:
     parsed = _json_body(body)
     return None if parsed is None else parsed.get("items")
+
+
+def _ignored(names: Sequence[str]) -> str:
+    """Say how many terminating pods the check left out, or nothing."""
+    if not names:
+        return ""
+    noun = "pod" if len(names) == 1 else "pods"
+    return f"; ignored {len(names)} terminating {noun}"
+
+
+def _terminating_names(start: Observations, end: Observations) -> dict[str, list[str]]:
+    return {
+        "start": [pod.name for pod in start.pods if pod.terminating],
+        "end": [pod.name for pod in end.pods if pod.terminating],
+    }
 
 
 _WINDOW_CHECKS: Mapping[str, Callable[[Contract, Observations, Observations], CheckResult]] = {

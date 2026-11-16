@@ -53,8 +53,8 @@ def from_live(
     phases overwrite a name they share, because the measurement is the truth.
     """
     runner = kubectl if kubectl is not None else Kubectl()
-    worker = _fault_with(contract, "deployment")
-    frontend = _fault_with(contract, "service")
+    worker = fault_with(contract, "deployment")
+    frontend = fault_with(contract, "service")
     window = contract.oracle.observation.window_seconds
     phases: dict[str, float] = dict(timing or {})
 
@@ -80,7 +80,7 @@ def from_live(
 
     started = time.monotonic()
     logs = {
-        "worker": _log_lines(runner, worker, window),
+        "worker": _log_lines(runner, worker, window, pods),
         "loadgen": _loadgen_lines(runner, worker, window),
     }
     phases["logs"] = _elapsed(started)
@@ -209,11 +209,30 @@ def _probe_route(frontend: Fault, probe: ProbeFn, sleep: SleepFn) -> list[dict[s
     return probes
 
 
-def _log_lines(runner: Kubectl, worker: Fault, window: int) -> list[str]:
-    if not worker.deployment:
-        raise LiveError("the worker fault declares no deployment")
-    args = ["-n", worker.namespace, "logs", f"deployment/{worker.deployment}", f"--since={window}s"]
+def _log_lines(
+    runner: Kubectl, worker: Fault, window: int, pods: Sequence[Mapping[str, Any]]
+) -> list[str]:
+    """Read the log of the pod the capture counted, never of a pod being replaced.
+
+    `kubectl logs deployment/x` picks one pod and says which, and during a
+    rollout that can be the pod that is terminating. The log has to come from
+    the pod whose batch size the capture read, or a line from an earlier
+    container instance could satisfy the check.
+    """
+    name = _current_pod_name(pods)
+    if name is None:
+        LOGGER.warning("no current worker pod, so no worker log was captured")
+        return []
+    args = ["-n", worker.namespace, "logs", f"pod/{name}", f"--since={window}s"]
     return normalize_logs(runner.text(args))
+
+
+def _current_pod_name(pods: Sequence[Mapping[str, Any]]) -> str | None:
+    for pod in pods:
+        name = pod.get("name")
+        if isinstance(name, str) and name and not pod.get("terminating"):
+            return name
+    return None
 
 
 def _loadgen_lines(runner: Kubectl, worker: Fault, window: int) -> list[str]:
@@ -232,7 +251,7 @@ def _loadgen_lines(runner: Kubectl, worker: Fault, window: int) -> list[str]:
         return []
 
 
-def _fault_with(contract: Contract, attribute: str) -> Fault:
+def fault_with(contract: Contract, attribute: str) -> Fault:
     for fault in contract.oracle.faults.values():
         if getattr(fault, attribute):
             return fault
@@ -254,6 +273,7 @@ def _pod(item: Any) -> dict[str, Any]:
         "waiting_reason": _first_reason(containers, "state", "waiting"),
         "last_terminated_reason": _first_reason(containers, "lastState", "terminated"),
         "last_exit_code": _first_exit_code(containers),
+        "terminating": bool(metadata.get("deletionTimestamp")),
         "containers": [_container(container) for container in containers],
     }
 

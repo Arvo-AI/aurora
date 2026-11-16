@@ -33,7 +33,7 @@ DEPLOYMENT_ARGS = ["-n", "shop", "get", "deployment", "worker"]
 PODS_ARGS = ["-n", "shop", "get", "pods", "-l", "app=worker"]
 SERVICE_ARGS = ["-n", "shop", "get", "service", "frontend"]
 SLICE_ARGS = ["-n", "shop", "get", "endpointslices", "-l", "kubernetes.io/service-name=frontend"]
-WORKER_LOG_ARGS = ["-n", "shop", "logs", "deployment/worker", "--since=60s"]
+WORKER_LOG_ARGS = ["-n", "shop", "logs", "pod/worker-7d9", "--since=60s"]
 LOADGEN_LOG_ARGS = ["-n", "shop", "logs", "deployment/loadgen", "--since=60s"]
 
 PODS_PAYLOAD = json.loads(
@@ -54,6 +54,13 @@ ENDPOINTS_PAYLOAD = json.loads(
 DEPLOYMENT_PAYLOAD = json.loads(
     '{"metadata": {"name": "worker"}, "spec": {"template": {"spec": {"containers": ['
     '{"name": "worker", "env": [{"name": "BATCH_SIZE", "value": "2500"}]}]}}}}'
+)
+STALE_POD_PAYLOAD = json.loads(
+    '{"metadata": {"name": "worker-6cf", "uid": "old",'
+    ' "deletionTimestamp": "2026-11-15T20:00:30Z"}, "status": {"phase": "Running",'
+    ' "containerStatuses": [{"name": "worker", "ready": false, "restartCount": 7,'
+    ' "state": {"waiting": {"reason": "CrashLoopBackOff"}},'
+    ' "lastState": {"terminated": {"reason": "OOMKilled", "exitCode": 137}}}]}}'
 )
 
 
@@ -77,7 +84,7 @@ class FakeKubectl:
 
     def text(self, args: list[str]) -> str:
         self.text_calls.append(list(args))
-        if "deployment/worker" in args:
+        if "pod/worker-7d9" in args:
             return f"{WORKER_LOG}\n{WORKER_LOG}\n"
         return f"{LOADGEN_LOG}\n"
 
@@ -87,6 +94,27 @@ class FailingKubectl(FakeKubectl):
 
     def get(self, args: list[str]) -> dict[str, Any]:
         raise LiveError("kubectl failed")
+
+
+class StalePodKubectl(FakeKubectl):
+    """A rollout left the old pod behind, so the list carries two pods."""
+
+    def get(self, args: list[str]) -> dict[str, Any]:
+        document = super().get(args)
+        if "pods" in args:
+            document["items"].insert(0, copy.deepcopy(STALE_POD_PAYLOAD))
+        return document
+
+
+class TerminatingKubectl(FakeKubectl):
+    """Every worker pod carries a deletion timestamp."""
+
+    def get(self, args: list[str]) -> dict[str, Any]:
+        document = super().get(args)
+        if "pods" in args:
+            for item in document["items"]:
+                item["metadata"]["deletionTimestamp"] = "2026-11-15T20:00:30Z"
+        return document
 
 
 class FakeProbe:
@@ -219,6 +247,35 @@ def test_a_deployment_without_the_variable_reports_the_batch_size() -> None:
     )
     assert observations.batch_size is None
     assert "batch_size" in observations.missing_metadata
+
+
+def test_the_log_is_read_from_the_pod_the_capture_counted() -> None:
+    kubectl = StalePodKubectl()
+    observations = from_live(
+        load_contract(),
+        VARIANT,
+        kubectl=kubectl,
+        probe=FakeProbe(),
+        sleep=FakeSleep(),
+        captured_at=CAPTURED_AT,
+    )
+    assert [pod.name for pod in observations.pods] == ["worker-6cf", "worker-7d9"]
+    assert observations.pods[0].terminating is True
+    assert WORKER_LOG_ARGS in kubectl.text_calls
+
+
+def test_a_terminating_pod_has_no_log_to_read() -> None:
+    kubectl = TerminatingKubectl()
+    observations = from_live(
+        load_contract(),
+        VARIANT,
+        kubectl=kubectl,
+        probe=FakeProbe(),
+        sleep=FakeSleep(),
+        captured_at=CAPTURED_AT,
+    )
+    assert observations.logs.worker == ()
+    assert not any("pod/" in argument for call in kubectl.text_calls for argument in call)
 
 
 def test_three_probes_are_taken_with_the_route_and_the_timeout(capture: Capture) -> None:
