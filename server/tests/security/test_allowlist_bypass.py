@@ -35,6 +35,8 @@ class TestCompoundSmuggling:
         ("echo ok | rm -rf /", 2),
         ("$(rm -rf /)", 2),
         ("`rm -rf /`", 2),
+        ('echo "$(rm -rf /)"', 2),
+        ('echo "`rm -rf /`"', 2),
         ("true && LD_PRELOAD=/evil.so id", 2),
         ("echo a; ssh-keygen -t rsa", 2),
         ("a;b;c;d", 4),

@@ -12,7 +12,11 @@ import re
 
 import pytest
 
-from utils.security.read_only_classifier import describe_rejection, is_read_only_command
+from utils.security.read_only_classifier import (
+    describe_rejection,
+    is_read_only_command,
+    split_segments,
+)
 
 # The `Ask Mode Read-Only Enforcement` section of AGENTS.md quotes real
 # `describe_rejection()` output; `test_documented_rejection_examples_are_real`
@@ -692,3 +696,72 @@ def test_diagnostic_ssh_is_read_only(is_read_only, command):
 ])
 def test_ssh_writes_and_interactive_sessions_are_blocked(is_read_only, command):
     assert is_read_only(command) is False, command
+
+
+# Bash runs a substitution even when it is quoted, escaped or behind a comment.
+@pytest.mark.parametrize("command", [
+    f"ssh {_HOST} 'uptime \"$(pkill -f payments-api; rm -f /srv/orders.db)\"'",
+    f"ssh {_HOST} 'uptime \"`echo \\`rm -f /srv/orders.db\\``\"'",
+    f"ssh {_HOST} 'uptime \"$\\\n(rm -f /srv/orders.db)\"'",
+    f"ssh {_HOST} \"journalctl -u payments-api | grep -c order#\\\"\\$(rm -f /srv/orders.db)\\\"\"",
+    f"ssh {_HOST} 'tail -n 200 /var/log/app.log | grep -c ticket#4521; rm -f /srv/orders.db'",
+    f"ssh {_HOST} uptime $'\\nrm -f /srv/orders.db'",
+    f"ssh {_HOST} uptime $'\\047; rm -f /srv/orders.db; \\047'",
+    f"ssh {_HOST} uptime $'\\x23; rm -f /srv/orders.db'",
+    "kubectl get pods\\\n#; kubectl delete pod x",
+    f'ssh {_HOST} "uptime \\#x ; rm -f /srv/orders.db"',
+    't\\ouch /tmp/x logs',
+    "kubectl get pods;# x\nkubectl delete pod x",
+    'kubectl get pods "$(echo ${x:-"}")}; kubectl delete pod x)"',
+    "kubectl get pods \"$(( '$(kubectl delete pod x)' ))\"",
+    "kubectl get pods $[ '$(kubectl delete pod x)' ]",
+    # A substitution as the program or the operation, or feeding an ssh remote command.
+    '"$(echo sh)" -c "kubectl delete pod x" get',
+    'kubectl "$(date +delete)" pods get',
+    'kubectl "del$(date +ete)" pods get',
+    'gcloud compute instances "$(date +delete)" list',
+    f"ssh {_HOST} uptime \"$(echo ';systemctl stop api')\"",
+    f"ssh {_HOST} \"uptime $(date +%nreboot)\"",
+    # A read verb among file, process or code operands is only a name.
+    "touch /tmp/x logs",
+    "bash -c 'kubectl delete pod x' list",
+    f"ssh {_HOST} 'find /srv list -delete'",
+    "kubectl get pods \"$(cat /root/.ssh/id_rsa)\"",
+])
+def test_hidden_write_is_refused(is_read_only, command):
+    assert is_read_only(command) is False, command
+
+
+@pytest.mark.parametrize("command", [
+    "# list pods\nkubectl get pods -n prod",
+    "kubectl get pods \\\n  -n payments",
+    f"ssh {_HOST} 'tail -n 100 /var/log/syslog  # recent'",
+    f"ssh {_HOST} 'cut -d# -f1 /etc/fstab'",
+    "kubectl get pods -o wide | sort -t$'\\t' -k2",
+    "kubectl get pods $'\\x2d\\x2dall-namespaces'",
+    "kubectl get pods -n prod;# check status",
+    f"ssh {_HOST} 'uptime \"`echo \\`hostname\\``\"'",
+    f"ssh {_HOST} \"journalctl -u api --since \\\"$(date -d '1 hour ago' '+%F %T')\\\"\"",
+    'kubectl logs "$(kubectl get pods -n prod -l app=api -o name | head -1)" -n prod --tail=100',
+    "gcloud logging read \"timestamp>=\\\"$(date -u +%FT%TZ)\\\"\" --limit 50",
+    'aws cloudwatch get-metric-statistics --start-time "$(( $(date +%s) - 3600 ))" --period 300',
+])
+def test_literal_quoting_stays_read_only(is_read_only, command):
+    assert is_read_only(command) is True, describe_rejection(command)
+
+
+@pytest.mark.parametrize("command, reason", [
+    ('kubectl get pods -l "app=$(kubectl delete deploy payments)"', "'delete' is a write operation"),
+    (f"ssh {_HOST} uptime $'\\x60rm -f /srv/orders.db\\x60'", "'rm' is a write operation"),
+    (f"ssh {_HOST} uptime $'\\cJrm -f /srv/orders.db'", "it uses $'...' quoting, which shells decode differently"),
+    ("kubectl $'delete\\400' pods get", "it uses $'...' quoting, which shells decode differently"),
+    pytest.param("kubectl get pods " + '"$(' * 40 + "kubectl delete pod x" + ')"' * 40,
+                 'its substitutions are nested too deeply to check', id="deep-nesting"),
+])
+def test_refusal_names_the_cause(command, reason):
+    assert describe_rejection(command) == reason
+
+
+def test_quoted_substitution_segments_are_still_split_out():
+    # terminal_exec finds an ssh client in any segment, including one in "$(...)".
+    assert ['ssh', 'h', 'reboot'] in split_segments('uptime "$(ssh h reboot)"')
