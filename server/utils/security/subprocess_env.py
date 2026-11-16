@@ -61,6 +61,11 @@ def mcp_base_env() -> Dict[str, str]:
 def deny_same_uid_proc_access() -> bool:
     """Mark this process non-dumpable so same-uid children cannot read it.
 
+    Call it at process start, before anything spawns a child: the agent's own
+    shell commands run as same-uid children when pod isolation is off. The
+    flag survives fork, so a celery or gunicorn master that sets it covers the
+    workers it forks.
+
     A child running as the same uid can otherwise read ``/proc/<ppid>/environ``
     (or ptrace the parent) and recover every secret the parent was started
     with, whatever env the child itself was given. A non-dumpable process's
@@ -90,5 +95,5 @@ def deny_same_uid_proc_access() -> bool:
             logger.warning("Could not mark process non-dumpable: %s", type(exc).__name__)
             return False
         _dumpable_cleared.set()
-        logger.info("Process marked non-dumpable before starting MCP servers")
+        logger.info("Process marked non-dumpable")
         return True

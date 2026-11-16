@@ -61,3 +61,38 @@ print("DENIED" if r.returncode != 0 and b"PermissionError" in r.stderr else "REA
     out = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,
                          cwd=subprocess_env.__file__.rsplit("/utils/", 1)[0])
     assert out.stdout.strip() == "DENIED", out.stderr
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="prctl is Linux only")
+def test_forked_workers_inherit_the_flag():
+    # A celery/gunicorn master sets the flag, then forks workers that run shell
+    # commands. Neither the worker nor the master may be readable from that shell.
+    script = """
+import os, subprocess, sys
+from utils.security.subprocess_env import deny_same_uid_proc_access
+assert deny_same_uid_proc_access()
+master = os.getpid()
+pid = os.fork()
+if pid == 0:
+    cmd = "cat /proc/%d/environ /proc/$PPID/environ >/dev/null 2>&1 && echo READABLE || echo DENIED" % master
+    out = subprocess.run(["sh", "-c", cmd], capture_output=True, text=True, env={"PATH": os.environ["PATH"]})
+    sys.stdout.write(out.stdout); sys.stdout.flush()
+    os._exit(0)
+os.waitpid(pid, 0)
+"""
+    with open("/proc/self/status") as status:
+        cap_eff = next(int(line.split()[1], 16) for line in status if line.startswith("CapEff:"))
+    if cap_eff & (1 << 19):
+        pytest.skip("CAP_SYS_PTRACE is held")
+    out = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,
+                         cwd=subprocess_env.__file__.rsplit("/utils/", 1)[0])
+    assert out.stdout.strip() == "DENIED", out.stderr
+
+
+def test_celery_master_sets_the_flag_before_forking():
+    import celery_config
+
+    if getattr(celery_config, "worker_init", None) is None:
+        pytest.skip("celery is stubbed in this environment")
+    receivers = [r[1]() for r in celery_config.worker_init.receivers]
+    assert celery_config._deny_proc_access in receivers
