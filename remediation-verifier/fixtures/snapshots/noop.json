@@ -1,0 +1,103 @@
+{
+  "endpoints": [
+    {
+      "addresses": [],
+      "name": "frontend-z5hml"
+    }
+  ],
+  "http": [
+    {
+      "body": null,
+      "duration_seconds": 1.191,
+      "error": "wget: can't connect to remote host (10.96.155.44): Connection refused",
+      "route": "http://frontend.shop.svc.cluster.local/api/items",
+      "status": null
+    },
+    {
+      "body": null,
+      "duration_seconds": 1.231,
+      "error": "wget: can't connect to remote host (10.96.155.44): Connection refused",
+      "route": "http://frontend.shop.svc.cluster.local/api/items",
+      "status": null
+    },
+    {
+      "body": null,
+      "duration_seconds": 1.203,
+      "error": "wget: can't connect to remote host (10.96.155.44): Connection refused",
+      "route": "http://frontend.shop.svc.cluster.local/api/items",
+      "status": null
+    }
+  ],
+  "logs": {
+    "loadgen": [
+      "2026-11-16T01:12:08Z GET /api/items -> timeout",
+      "2026-11-16T01:12:11Z GET /api/items -> timeout",
+      "2026-11-16T01:12:14Z GET /api/items -> timeout",
+      "2026-11-16T01:12:17Z GET /api/items -> timeout",
+      "2026-11-16T01:12:20Z GET /api/items -> timeout",
+      "2026-11-16T01:12:23Z GET /api/items -> timeout",
+      "2026-11-16T01:12:26Z GET /api/items -> timeout",
+      "2026-11-16T01:12:29Z GET /api/items -> timeout",
+      "2026-11-16T01:12:32Z GET /api/items -> timeout",
+      "2026-11-16T01:12:35Z GET /api/items -> timeout",
+      "2026-11-16T01:12:38Z GET /api/items -> timeout",
+      "2026-11-16T01:12:41Z GET /api/items -> timeout",
+      "2026-11-16T01:12:44Z GET /api/items -> timeout",
+      "2026-11-16T01:12:47Z GET /api/items -> timeout",
+      "2026-11-16T01:12:50Z GET /api/items -> timeout",
+      "2026-11-16T01:12:53Z GET /api/items -> timeout",
+      "2026-11-16T01:12:56Z GET /api/items -> timeout",
+      "2026-11-16T01:12:59Z GET /api/items -> timeout",
+      "2026-11-16T01:13:02Z GET /api/items -> timeout"
+    ],
+    "worker": [
+      "worker started, batch size 2500"
+    ]
+  },
+  "meta": {
+    "captured_at": "2026-11-16T01:12:58Z",
+    "lab_commit": "4edcd9dfbc48cbd9ca8ea031e429832cf72842d0",
+    "mode": "LIVE",
+    "provenance": "LIVE",
+    "variant": "noop"
+  },
+  "pods": [
+    {
+      "containers": [
+        {
+          "last_exit_code": 137,
+          "last_terminated_reason": "OOMKilled",
+          "name": "worker",
+          "ready": false,
+          "restart_count": 4,
+          "waiting_reason": null
+        }
+      ],
+      "last_exit_code": 137,
+      "last_terminated_reason": "OOMKilled",
+      "name": "worker-86f68b9bf6-nctz9",
+      "phase": "Running",
+      "ready": false,
+      "restart_count": 4,
+      "terminating": false,
+      "uid": "3725680c-cbcb-4824-80df-dc57240a4254",
+      "waiting_reason": null
+    }
+  ],
+  "services": [
+    {
+      "cluster_ip": "10.96.155.44",
+      "name": "frontend",
+      "ports": [
+        80
+      ],
+      "selector": {
+        "app": "frontend",
+        "tier": "web"
+      }
+    }
+  ],
+  "worker": {
+    "batch_size": 2500
+  }
+}

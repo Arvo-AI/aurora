@@ -85,6 +85,26 @@ The observation layer reads two things that no check consumes. They are listed h
 |---|---|---|---|
 | `logs.loadgen` | `app/shop.yaml` | `#L236-L243` | `name: loadgen` |
 
+## The snapshot fixtures
+
+One LIVE capture on 2026-11-16 with `python -m verifier --mode capture` against the Kind cluster at the pin above. Each `captured_at` is inside its document, and every document is complete: no `missing_metadata`.
+
+| Fixture | Variant | Captured at | Verdict it supports | What it proves |
+|---|---|---|---|---|
+| `fixtures/snapshots/baseline.json` | baseline | `2026-11-16T01:03:39Z` | CONFIRMED, six FAIL | both faults are present after `break` |
+| `fixtures/snapshots/full.json` | full | `2026-11-16T01:05:53Z` | VERIFIED_WITHIN_CONTRACT | both fixes leave six PASS |
+| `fixtures/snapshots/partial_worker_only.json` | partial_worker_only | `2026-11-16T01:08:16Z` | REJECTED | the Service still has no endpoints |
+| `fixtures/snapshots/partial_frontend_only.json` | partial_frontend_only | `2026-11-16T01:10:34Z` | REJECTED | the worker still OOMKills |
+| `fixtures/snapshots/noop.json` | noop | `2026-11-16T01:12:58Z` | REJECTED | nothing changed, six FAIL |
+
+The capture ran on the machine described in `DECISIONS.md`, with the lab at `4edcd9dfbc48`. `--mode capture` refuses to run when the checkout is at another commit (D58), so the `meta.lab_commit` in each document is the commit the cluster actually ran.
+
+The incomplete fixture is derived, not captured:
+
+| Fixture | Derived from | What it proves |
+|---|---|---|
+| `tests/fixtures/snapshots/missing-pods.json` | `full.json` with the `pods` section removed on 2026-11-16 | one missing section turns all six checks INCONCLUSIVE (R11), so no positive verdict |
+
 ## Aurora's claim
 
 This row is a README citation, not a verifier input. It is here because the evaluator asks for the claim and its source in one place.
