@@ -54,7 +54,7 @@ canvas { width: 100%; height: 100%; display: block; position: absolute; top: 0; 
 </div>
 <script>
 const canvas = document.getElementById('c');
-const gl = canvas.getContext('webgl');
+const gl = canvas.getContext('webgl',{preserveDrawingBuffer:true});
 if (!gl) {
   throw new Error('WebGL is unavailable for aurora banner capture');
 }
@@ -223,20 +223,13 @@ const uTime = gl.getUniformLocation(prog, 'iTime');
 const uRes = gl.getUniformLocation(prog, 'iResolution');
 
 function resize() {
-  canvas.width = 900;
-  canvas.height = 300;
-  gl.viewport(0, 0, 900, 300);
+  canvas.width = 1800;
+  canvas.height = 600;
+  gl.viewport(0, 0, 1800, 600);
 }
 resize();
 
-const start = performance.now();
-(function loop() {
-  const t = (performance.now() - start) / 1000;
-  gl.uniform1f(uTime, t);
-  gl.uniform2f(uRes, canvas.width, canvas.height);
-  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-  requestAnimationFrame(loop);
-})();
+window.renderAt=(t)=>{gl.uniform1f(uTime,t);gl.uniform2f(uRes,canvas.width,canvas.height);gl.drawArrays(gl.TRIANGLE_STRIP,0,4);gl.finish();};window.renderAt(0);
 </script>
 </body>
 </html>
