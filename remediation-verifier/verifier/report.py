@@ -62,12 +62,12 @@ def report_document(
         "generated_at": generated_at,
         "source": _source(contract),
         "mode": _mode(runs),
-        "metrics": metrics_for(contract, runs),
+        "metrics": metrics_for(runs),
         "variants": [_variant(run) for run in runs],
     }
 
 
-def metrics_for(contract: Contract, runs: Sequence[Run]) -> dict[str, Any]:
+def metrics_for(runs: Sequence[Run]) -> dict[str, Any]:
     """Return every metric with its denominator, or null when there is none."""
     runs = tuple(runs)
     baseline = next((run for run in runs if run.verdict.kind == REPRODUCTION), None)
@@ -197,7 +197,7 @@ def render_markdown(contract: Contract, runs: Sequence[Run], *, generated_at: st
     """Return the report as Markdown, without a trailing newline."""
     runs = tuple(runs)
     _reject_unbacked_positive(runs)
-    metrics = metrics_for(contract, runs)
+    metrics = metrics_for(runs)
     lines = ["# Remediation verification report", ""]
     lines.append("Advisory. This report is evidence for a human reviewer and never a merge gate.")
     lines.append("")

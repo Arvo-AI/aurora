@@ -39,6 +39,9 @@ from verifier.schema import SchemaValidator
 
 LOGGER = logging.getLogger(__name__)
 
+ORACLE_VIEW = "$.oracle_view"
+SOURCE = "$.source"
+
 
 def load_contract(path: Path | str | None = None) -> Contract:
     """Read, validate and type the contract at `path`, or at the configured one."""
@@ -100,11 +103,11 @@ def _validate(document: dict[str, Any], schema_path: Path, contract_path: Path) 
 
 def _build(document: dict[str, Any]) -> Contract:
     oracle_raw = _mapping(document, "oracle_view", "$")
-    faults_raw = _mapping(oracle_raw, "faults", "$.oracle_view")
-    fixes_raw = _sequence(oracle_raw, "accepted_fixes", "$.oracle_view")
-    variants_raw = _mapping(oracle_raw, "variants", "$.oracle_view")
-    observation_raw = _mapping(oracle_raw, "observation", "$.oracle_view")
-    baseline_raw = _mapping(oracle_raw, "baseline", "$.oracle_view")
+    faults_raw = _mapping(oracle_raw, "faults", ORACLE_VIEW)
+    fixes_raw = _sequence(oracle_raw, "accepted_fixes", ORACLE_VIEW)
+    variants_raw = _mapping(oracle_raw, "variants", ORACLE_VIEW)
+    observation_raw = _mapping(oracle_raw, "observation", ORACLE_VIEW)
+    baseline_raw = _mapping(oracle_raw, "baseline", ORACLE_VIEW)
     agent_raw = _mapping(document, "agent_view", "$")
 
     faults = {
@@ -129,7 +132,7 @@ def _build(document: dict[str, Any]) -> Contract:
         agent=AgentView(alert=_text(agent_raw, "alert", "$.agent_view")),
         oracle=OracleView(
             observation=Observation(
-                window_seconds=_integer(observation_raw, "window_seconds", "$.oracle_view")
+                window_seconds=_integer(observation_raw, "window_seconds", ORACLE_VIEW)
             ),
             expected_faults=tuple(
                 _items_of(baseline_raw, "expected_faults", "$.oracle_view.baseline")
@@ -142,16 +145,16 @@ def _build(document: dict[str, Any]) -> Contract:
 
 
 def _source(raw: Mapping[str, Any]) -> Source:
-    files = _mapping(raw, "files", "$.source")
+    files = _mapping(raw, "files", SOURCE)
     return Source(
-        repo=_text(raw, "repo", "$.source"),
-        url=_text(raw, "url", "$.source"),
-        commit=_text(raw, "commit", "$.source"),
-        commit_date=_text(raw, "commit_date", "$.source"),
-        read_on=_text(raw, "read_on", "$.source"),
-        fork_repo=_text(raw, "fork_repo", "$.source"),
-        fork_commit=_text(raw, "fork_commit", "$.source"),
-        files={name: _text(files, name, "$.source.files") for name in files},
+        repo=_text(raw, "repo", SOURCE),
+        url=_text(raw, "url", SOURCE),
+        commit=_text(raw, "commit", SOURCE),
+        commit_date=_text(raw, "commit_date", SOURCE),
+        read_on=_text(raw, "read_on", SOURCE),
+        fork_repo=_text(raw, "fork_repo", SOURCE),
+        fork_commit=_text(raw, "fork_commit", SOURCE),
+        files={name: _text(files, name, f"{SOURCE}.files") for name in files},
     )
 
 

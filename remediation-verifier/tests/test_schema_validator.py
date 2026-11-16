@@ -101,18 +101,21 @@ def test_a_local_reference_resolves_and_keeps_the_path() -> None:
 
 
 def test_a_remote_reference_is_refused() -> None:
+    validator = SchemaValidator({"$ref": "https://example.com/schema.json"})
     with pytest.raises(AssertionError, match="only local references"):
-        SchemaValidator({"$ref": "https://example.com/schema.json"}).errors("x")
+        validator.errors("x")
 
 
 def test_a_reference_to_a_missing_definition_is_refused() -> None:
+    validator = SchemaValidator({"$ref": "#/$defs/absent"})
     with pytest.raises(AssertionError, match="does not resolve"):
-        SchemaValidator({"$ref": "#/$defs/absent"}).errors("x")
+        validator.errors("x")
 
 
 def test_a_type_the_validator_does_not_implement_is_refused() -> None:
+    validator = SchemaValidator({"type": "colour"})
     with pytest.raises(AssertionError, match="type this validator cannot honour"):
-        SchemaValidator({"type": "colour"}).errors("x")
+        validator.errors("x")
 
 
 def test_a_keyword_the_validator_does_not_implement_is_refused() -> None:

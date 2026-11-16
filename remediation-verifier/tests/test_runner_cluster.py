@@ -87,7 +87,8 @@ def test_an_address_that_is_not_ready_separates_the_two_endpoint_checks() -> Non
 def test_a_restart_inside_the_window_is_a_failure() -> None:
     simulation = simulate("flapping", variants=["full"])
     attempt = simulation.attempt("full")
-    assert attempt.start is not None and attempt.end is not None
+    assert attempt.start is not None
+    assert attempt.end is not None
     assert [pod.restart_count for pod in attempt.start.pods] == [0]
     assert [pod.restart_count for pod in attempt.end.pods] == [2]
 

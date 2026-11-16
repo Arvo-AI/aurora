@@ -128,6 +128,18 @@ def parse_wget(route: str, output: str, started: float) -> dict[str, Any]:
     body is the line that starts with `{`; anything else is a header or an
     error message.
     """
+    status, body, errors = _read_wget(output)
+    return {
+        "route": route,
+        "status": status,
+        "body": body,
+        "duration_seconds": _elapsed(started),
+        "error": None if status is not None else (" ".join(errors) or "no HTTP status"),
+    }
+
+
+def _read_wget(output: str) -> tuple[int | None, str | None, list[str]]:
+    """Split wget's merged stream into a status, a body and error lines."""
     status = None
     body = None
     errors: list[str] = []
@@ -138,19 +150,11 @@ def parse_wget(route: str, output: str, started: float) -> dict[str, Any]:
         match = STATUS_PATTERN.search(line)
         if match:
             status = int(match.group(1))
-            continue
-        if line.startswith("{") or line.startswith("["):
+        elif line.startswith(("{", "[")):
             body = line if body is None else f"{body}\n{line}"
-            continue
-        if status is None and line:
+        elif status is None and line:
             errors.append(line)
-    return {
-        "route": route,
-        "status": status,
-        "body": body,
-        "duration_seconds": _elapsed(started),
-        "error": None if status is not None else (" ".join(errors) or "no HTTP status"),
-    }
+    return status, body, errors
 
 
 def _elapsed(started: float) -> float:

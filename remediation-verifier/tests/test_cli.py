@@ -14,7 +14,7 @@ from snapshot_fixtures import fixtures_from
 from verifier.decision import REJECTED, VERIFIED_WITHIN_CONTRACT
 
 
-@pytest.fixture()
+@pytest.fixture
 def five(tmp_path: Path) -> Path:
     return fixtures_from(tmp_path / "fixtures", simulate())
 

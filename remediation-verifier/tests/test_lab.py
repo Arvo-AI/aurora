@@ -211,8 +211,9 @@ def test_the_lab_script_gets_the_arguments_and_the_lab_environment(tmp_path: Pat
 def test_a_failing_lab_script_reports_its_stderr(tmp_path: Path) -> None:
     script = tmp_path / "lab.sh"
     script.write_text("#!/usr/bin/env bash\necho boom >&2\nexit 4\n", encoding="utf-8")
+    lab = Lab(tmp_path)
     with pytest.raises(LiveError, match="exited 4: boom"):
-        Lab(tmp_path).run(["bash", str(script)], timeout_s=5)
+        lab.run(["bash", str(script)], timeout_s=5)
 
 
 def test_a_contract_step_is_split_without_a_shell() -> None:

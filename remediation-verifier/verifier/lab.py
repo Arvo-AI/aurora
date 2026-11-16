@@ -155,8 +155,9 @@ class LiveSession:
         )
 
     def apply_fix(self, steps: Sequence[str], timeout_s: float) -> None:
+        kubectl = self._lab.kubectl(timeout_s=timeout_s)
         for step in steps:
-            self._kubectl.text(fix_step_args(step))
+            kubectl.text(fix_step_args(step))
 
     def wait_rollout(self, timeout_s: float) -> None:
         """Wait for the worker rollout, and let a slow one become evidence.

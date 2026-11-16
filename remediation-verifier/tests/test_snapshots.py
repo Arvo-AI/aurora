@@ -36,7 +36,7 @@ from verifier.snapshots import (
 )
 
 
-@pytest.fixture()
+@pytest.fixture
 def five(tmp_path: Path) -> Path:
     """The five fixtures a full simulated cycle would capture."""
     return fixtures_from(tmp_path / "fixtures", simulate())
@@ -202,13 +202,13 @@ def test_a_table_without_a_baseline_says_so(tmp_path: Path) -> None:
 
 
 def test_the_observation_loader_keeps_the_variant_it_read(five: Path) -> None:
-    observations = load_observations(load_contract(), five, "noop")
+    observations = load_observations(five, "noop")
     assert observations.meta.variant == "noop"
     assert observations.is_complete
 
 
 def test_an_unknown_variant_is_a_missing_fixture_not_a_crash(tmp_path: Path) -> None:
     with pytest.raises(SnapshotError):
-        load_observations(load_contract(), tmp_path, "full")
+        load_observations(tmp_path, "full")
     with pytest.raises(SnapshotError):
-        load_observations(load_contract(), tmp_path, "no_such_variant")
+        load_observations(tmp_path, "no_such_variant")

@@ -212,10 +212,10 @@ class TestMetrics:
         first = decide_reproduction(contract, baseline, results(contract, ALL_FAIL))
         second = decide_reproduction(contract, baseline, results(contract, ONE_PASS))
         for runs in ([run(first)], [run(first), run(second)]):
-            metrics = metrics_for(contract, runs)
+            metrics = metrics_for(runs)
             assert metrics["fault_detection"] == {"failed": 6, "checks": 6}
             assert metrics["weak_checks"] == {"passed": 0, "checks": 6}
-        without = metrics_for(contract, [run(verified)])
+        without = metrics_for([run(verified)])
         assert without["fault_detection"] is None
         assert without["weak_checks"] is None
 
@@ -229,7 +229,7 @@ class TestMetrics:
         ),
     )
     def test_each_remediation_status_has_its_own_counter(self, status, counter, contract) -> None:
-        metrics = metrics_for(contract, [run(verdicts(contract)[status])])
+        metrics = metrics_for([run(verdicts(contract)[status])])
         assert metrics["remediation"][counter] == 1
         assert metrics["remediation"]["runs"] == 1
         for other in {"verified", "rejected", "inconclusive", "execution_error"} - {counter}:
@@ -237,7 +237,7 @@ class TestMetrics:
 
     def test_the_counts_add_up_and_the_document_carries_them(self, contract) -> None:
         runs = [run(verdict) for verdict in verdicts(contract).values()]
-        metrics = metrics_for(contract, runs)
+        metrics = metrics_for(runs)
         assert metrics["remediation"] == {
             "verified": 1,
             "rejected": 1,
@@ -247,11 +247,11 @@ class TestMetrics:
         }
         assert document_for(contract, runs)["metrics"] == metrics
         mixed = [run(confirmed(contract)), *runs]
-        assert metrics_for(contract, mixed)["remediation"]["runs"] == 4
+        assert metrics_for(mixed)["remediation"]["runs"] == 4
 
     def test_runs_per_variant_counts_repeats(self, contract, verified) -> None:
         baseline = confirmed(contract)
-        metrics = metrics_for(contract, [run(baseline), run(baseline), run(verified)])
+        metrics = metrics_for([run(baseline), run(baseline), run(verified)])
         assert metrics["runs_per_variant"] == {"baseline": 2, "full": 1}
 
 
@@ -267,8 +267,9 @@ class TestEvidence:
         )
         assert positive.status == VERIFIED_WITHIN_CONTRACT
         assert all(dict(result.evidence) == {} for result in positive.results)
+        positive_run = run(positive)
         with pytest.raises(ReportError):
-            document_for(contract, [run(positive)])
+            document_for(contract, [positive_run])
 
     def test_the_same_positive_with_evidence_is_reported(self, contract, verified) -> None:
         entry = document_for(contract, [run(verified)])["variants"][0]

@@ -86,7 +86,7 @@ class TestDoctor:
         payload = json.loads(capsys.readouterr().out)
         assert exit_code == 0
         assert payload
-        assert {"name", "status", "detail"} == set(payload[0])
+        assert set(payload[0]) == {"name", "status", "detail"}
 
     def test_text_output_names_the_available_mode(self, capsys: pytest.CaptureFixture[str]) -> None:
         assert doctor.main([]) == 0

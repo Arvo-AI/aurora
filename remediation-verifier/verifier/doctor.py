@@ -30,6 +30,8 @@ MINIMUM_PYYAML = (6, 0)
 COMMAND_TIMEOUT_S = 10
 
 DEV_TOOLS = ("mypy", "pytest", "ruff")
+DOCKER_DAEMON = "docker daemon"
+LAB_CHECKOUT = "lab checkout"
 
 
 class Status(StrEnum):
@@ -73,11 +75,12 @@ def _package_version(distribution: str) -> str | None:
         return None
 
 
-def _run(command: Sequence[str]) -> str | None:
+def _run(command: Sequence[str], *, cwd: Path | None = None) -> str | None:
     """Run a command and return its stdout, or None if it is unavailable."""
     try:
         completed = subprocess.run(
             command,
+            cwd=cwd,
             capture_output=True,
             text=True,
             timeout=COMMAND_TIMEOUT_S,
@@ -140,26 +143,26 @@ def check_kind() -> Check:
 
 def check_docker_daemon() -> Check:
     if shutil.which("docker") is None:
-        return Check("docker daemon", Status.WARN, "docker missing; LIVE unavailable")
+        return Check(DOCKER_DAEMON, Status.WARN, "docker missing; LIVE unavailable")
     output = _run(["docker", "info", "--format", "{{.ServerVersion}}"])
     if not output:
-        return Check("docker daemon", Status.WARN, "not reachable; start Docker Desktop for LIVE")
-    return Check("docker daemon", Status.OK, f"server {output}")
+        return Check(DOCKER_DAEMON, Status.WARN, "not reachable; start Docker Desktop for LIVE")
+    return Check(DOCKER_DAEMON, Status.OK, f"server {output}")
 
 
 def check_lab(lab_dir: Path) -> Check:
     if not (lab_dir / "lab.sh").is_file():
-        return Check("lab checkout", Status.WARN, f"not found at {lab_dir}")
-    head = _run(["git", "-C", str(lab_dir), "rev-parse", "HEAD"])
+        return Check(LAB_CHECKOUT, Status.WARN, f"not found at {lab_dir}")
+    head = _run(["git", "rev-parse", "HEAD"], cwd=lab_dir)
     if head is None:
-        return Check("lab checkout", Status.WARN, f"not a git checkout: {lab_dir}")
+        return Check(LAB_CHECKOUT, Status.WARN, f"not a git checkout: {lab_dir}")
     if head != LAB_COMMIT:
         return Check(
-            "lab checkout",
+            LAB_CHECKOUT,
             Status.WARN,
             f"{head[:12]} at {lab_dir}, pinned {LAB_COMMIT[:12]}",
         )
-    return Check("lab checkout", Status.OK, f"{head[:12]} at {lab_dir}")
+    return Check(LAB_CHECKOUT, Status.OK, f"{head[:12]} at {lab_dir}")
 
 
 def run_checks(lab_dir: Path | None = None) -> list[Check]:
@@ -179,7 +182,7 @@ def run_checks(lab_dir: Path | None = None) -> list[Check]:
 
 def live_available(checks: Sequence[Check]) -> bool:
     """LIVE needs the client, the cluster builder and a reachable daemon."""
-    required = {"kubectl", "kind", "docker daemon"}
+    required = {"kubectl", "kind", DOCKER_DAEMON}
     return all(check.status is Status.OK for check in checks if check.name in required)
 
 

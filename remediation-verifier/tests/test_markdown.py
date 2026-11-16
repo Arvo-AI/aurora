@@ -117,7 +117,8 @@ def payload(block: str) -> Any:
     body = re.sub(r"<summary>.*?</summary>", "", block, flags=re.DOTALL)
     body = "\n".join(line for line in body.splitlines() if not line.strip().startswith("```"))
     start, end = body.find("{"), body.rfind("}")
-    assert start != -1 and end > start, f"no JSON object in the evidence block: {block!r}"
+    assert start != -1
+    assert end > start, f"no JSON object in the evidence block: {block!r}"
     return json.loads(body[start : end + 1])
 
 
@@ -159,9 +160,11 @@ class TestMetrics:
         text = render(contract, [run(verdicts["baseline"])])
         metrics = until(text, "## Metrics", ("## Variants",))
         detection = row_containing(metrics, "6 failed")
-        assert "6 checks" in detection and "fault" in detection.lower()
+        assert "6 checks" in detection
+        assert "fault" in detection.lower()
         weak = row_containing(metrics, "0 passed")
-        assert "6 checks" in weak and "weak" in weak.lower()
+        assert "6 checks" in weak
+        assert "weak" in weak.lower()
         runs = [run(verdicts["full"]), run(verdicts["partial_worker_only"])]
         remediations = until(render(contract, runs), "## Metrics", ("## Variants",))
         row = row_containing(remediations, "2 remediation runs")
@@ -267,13 +270,18 @@ class TestGuardsAndWriting:
             contract, contract.oracle.variants["full"], bare, baseline=verdicts["baseline"]
         )
         assert positive.status == VERIFIED_WITHIN_CONTRACT
-        with pytest.raises(ReportError):
+        positive_run = run(positive)
+
+        def emit() -> None:
             if entry == "render":
-                render(contract, [run(positive)])
+                render(contract, [positive_run])
             else:
                 write_markdown(
-                    contract, [run(positive)], tmp_path / "report.md", generated_at=GENERATED_AT
+                    contract, [positive_run], tmp_path / "report.md", generated_at=GENERATED_AT
                 )
+
+        with pytest.raises(ReportError):
+            emit()
 
     def test_write_creates_parents_and_overwrites(self, contract, verdicts, tmp_path) -> None:
         runs = [run(verdicts["baseline"]), run(verdicts["full"])]

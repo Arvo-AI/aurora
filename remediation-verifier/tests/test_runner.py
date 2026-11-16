@@ -123,7 +123,8 @@ def test_a_repeated_fix_reaches_the_same_verdict_from_a_fresh_reset() -> None:
     verdicts = [attempt.verdict for attempt in simulation.attempts if attempt.variant == "full"]
     assert {verdict.status for verdict in verdicts} == {VERIFIED_WITHIN_CONTRACT}
     first, second = (attempt.start for attempt in simulation.attempts[2:])
-    assert first is not None and second is not None
+    assert first is not None
+    assert second is not None
     assert first.pods[0].uid != "worker-w2"
 
 
@@ -134,14 +135,16 @@ def test_only_the_requested_remediation_runs() -> None:
 
 def test_the_baseline_cannot_be_requested_as_a_remediation() -> None:
     contract = simulate().contract
+    runner = Runner(contract, simulate(variants=["noop"]).session)
     with pytest.raises(ContractError, match="baseline"):
-        Runner(contract, simulate(variants=["noop"]).session).run(["baseline"])
+        runner.run(["baseline"])
 
 
 def test_an_unknown_variant_is_a_contract_error() -> None:
     contract = simulate().contract
+    runner = Runner(contract, simulate(variants=["noop"]).session)
     with pytest.raises(ContractError, match="declares no variant"):
-        Runner(contract, simulate(variants=["noop"]).session).run(["ghost"])
+        runner.run(["ghost"])
 
 
 def test_a_timing_row_is_recorded_for_every_phase_of_a_remediation() -> None:

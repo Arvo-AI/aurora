@@ -57,7 +57,7 @@ def variant_names(contract: Contract) -> tuple[str, ...]:
     return (BASELINE_VARIANT, *rest)
 
 
-def load_observations(contract: Contract, directory: Path | str, variant: str) -> Observations:
+def load_observations(directory: Path | str, variant: str) -> Observations:
     """Read one fixture and refuse it when it does not describe the variant."""
     path = fixture_path(directory, variant)
     if not path.is_file():
@@ -82,7 +82,7 @@ def verify(contract: Contract, directory: Path | str) -> tuple[Attempt, ...]:
     is a different case: it loads with `missing_metadata`, every check turns
     INCONCLUSIVE, and the verdict is INCONCLUSIVE (R11).
     """
-    baseline = load_observations(contract, directory, BASELINE_VARIANT)
+    baseline = load_observations(directory, BASELINE_VARIANT)
     baseline_variant = contract.oracle.variants[BASELINE_VARIANT]
     baseline_verdict = decide_reproduction(
         contract, baseline_variant, run_checks(contract, baseline, baseline)
@@ -92,7 +92,7 @@ def verify(contract: Contract, directory: Path | str) -> tuple[Attempt, ...]:
     ]
     for name in variant_names(contract)[1:]:
         variant = contract.oracle.variants[name]
-        observations = load_observations(contract, directory, name)
+        observations = load_observations(directory, name)
         results = run_checks(contract, observations, observations)
         verdict = decide_remediation(contract, variant, results, baseline=baseline_verdict)
         attempts.append(_attempt(variant, verdict, observations, baseline))

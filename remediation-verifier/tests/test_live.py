@@ -147,7 +147,7 @@ class Capture(NamedTuple):
     sleep: FakeSleep
 
 
-@pytest.fixture()
+@pytest.fixture
 def capture() -> Capture:
     kubectl = FakeKubectl()
     probe = FakeProbe()
@@ -297,13 +297,17 @@ def test_sleep_waits_between_the_probes(capture: Capture) -> None:
 
 
 def test_a_kubectl_failure_raises_live_error() -> None:
+    contract = load_contract()
+    kubectl = FailingKubectl()
+    probe = FakeProbe()
+    sleep = FakeSleep()
     with pytest.raises(LiveError):
         from_live(
-            load_contract(),
+            contract,
             VARIANT,
-            kubectl=FailingKubectl(),
-            probe=FakeProbe(),
-            sleep=FakeSleep(),
+            kubectl=kubectl,
+            probe=probe,
+            sleep=sleep,
             captured_at=CAPTURED_AT,
         )
 

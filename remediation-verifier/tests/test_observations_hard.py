@@ -144,7 +144,8 @@ class TestReading:
         data["http"] = [{"route": ROUTE, "status": None, "body": None, "error": "timeout"}]
         observations = from_snapshot(data)
         flags = {c.name: c.ready for c in observations.pods[0].containers}
-        assert observations.is_complete and flags == {"worker": False, "sidecar": True}
+        assert observations.is_complete
+        assert flags == {"worker": False, "sidecar": True}
         assert (observations.http[0].status, observations.http[0].error) == (None, "timeout")
         data = document()
         del data["meta"]
@@ -177,7 +178,8 @@ class TestFilesAndWriting:
         to_snapshot(original, path)
         text = path.read_text(encoding="utf-8")
         assert text == json.dumps(json.loads(text), indent=2, sort_keys=True) + "\n"
-        assert "timing" not in text and from_snapshot(path).is_complete
+        assert "timing" not in text
+        assert from_snapshot(path).is_complete
         written = snapshot_document(original)
         assert set(written) == {
             "meta",
@@ -200,7 +202,8 @@ class TestFilesAndWriting:
             raise AssertionError("subprocess call")
 
         monkeypatch.setattr(subprocess, "run", refuse)
-        assert from_snapshot(path).is_complete and from_snapshot(document()).is_complete
+        assert from_snapshot(path).is_complete
+        assert from_snapshot(document()).is_complete
 
 
 SERVICE = {"metadata": {"name": "frontend"}, "spec": {"selector": {"app": "frontend"}, "ports": []}}

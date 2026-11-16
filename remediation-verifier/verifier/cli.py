@@ -213,7 +213,8 @@ def _require_pinned(lab: Path, contract: Contract) -> None:
 def _lab_head(lab: Path) -> str | None:
     try:
         result = subprocess.run(
-            ["git", "-C", str(lab), "rev-parse", "HEAD"],
+            ["git", "rev-parse", "HEAD"],
+            cwd=lab,
             capture_output=True,
             text=True,
             timeout=10,
