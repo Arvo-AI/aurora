@@ -12,7 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keyed by its management host and port, with an optional name. The connector
   page lists every broker and can remove one at a time. Agent tools take
   `account_id` to target one broker, query every broker the caller may use
-  when it is omitted, and `rabbitmq_list_brokers` lists them. Connector access
+  when it is omitted (up to five; past that the agent must pick one), and
+  `rabbitmq_list_brokers` lists them. A fan-out splits the output evenly across brokers. Connector access
   can grant each broker to a role or team on its own. An existing single
   connection keeps working with no action needed.
 
