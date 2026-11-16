@@ -248,6 +248,70 @@ class GitHubPRAdapter:
         return data if isinstance(data, dict) else None
 
     # ------------------------------------------------------------------
+    # Replay reads (services.change_gating.replay)
+    # ------------------------------------------------------------------
+
+    def get_repo(self) -> Dict[str, Any]:
+        """GET the repository object (carries ``default_branch``)."""
+        response = self._session.get(
+            f"{GITHUB_API_BASE}/repos/{self.repo_full_name}",
+            headers=self._headers(), timeout=_TIMEOUT_SECONDS,
+        )
+        self._raise_for_status(response, "")
+        return response.json()
+
+    def find_pull_request(self, pr_number: int) -> Optional[Dict[str, Any]]:
+        """Like :meth:`get_pull_request`, but None when the PR does not exist.
+
+        A revert can reference an issue number or a deleted PR; that must
+        skip one case, not fail the whole replay.
+        """
+        path = f"/pulls/{pr_number}"
+        response = self._session.get(
+            self._url(path), headers=self._headers(), timeout=_TIMEOUT_SECONDS
+        )
+        if response.status_code == 404:
+            return None
+        self._raise_for_status(response, path)
+        return response.json()
+
+    def search_merged_pulls(self, query: str = "", limit: int = 100) -> List[Dict[str, Any]]:
+        """Search this repo's merged PRs, newest first (GitHub issue search).
+
+        Search reaches a busy repo's reverts in one call where walking the
+        PR list would page through days of unrelated PRs. Items are issue
+        objects; ``merged_at`` is hoisted from ``pull_request`` so callers
+        can treat them like PRs. They carry no ``base``/``head``: fetch the
+        PR itself before reviewing it.
+        """
+        path = "/search/issues"
+        results: List[Dict[str, Any]] = []
+        page = 1
+        while len(results) < limit:
+            per_page = min(_PER_PAGE, limit - len(results))
+            response = self._session.get(
+                f"{GITHUB_API_BASE}{path}",
+                headers=self._headers(),
+                params={
+                    "q": f"repo:{self.repo_full_name} is:pr is:merged {query}".strip(),
+                    "sort": "created", "order": "desc",
+                    "per_page": per_page, "page": page,
+                },
+                timeout=_TIMEOUT_SECONDS,
+            )
+            self._raise_for_status(response, path)
+            items = (response.json() or {}).get("items") or []
+            for item in items:
+                if isinstance(item, dict):
+                    item = dict(item)
+                    item["merged_at"] = (item.get("pull_request") or {}).get("merged_at")
+                    results.append(item)
+            if len(items) < per_page:
+                break
+            page += 1
+        return results[:limit]
+
+    # ------------------------------------------------------------------
     # Writes
     # ------------------------------------------------------------------
 
@@ -387,3 +451,34 @@ class GitHubPRAdapter:
             if body.startswith(note):
                 return
             self.update_review_body(pr_number, review_id, f"{note}\n\n{body}")
+
+
+class PublicRepoReader(GitHubPRAdapter):
+    """Read-only GitHub client for a public repo, no App installation needed.
+
+    Powers the zero-install replay (``replay_cli``): anyone can point Aurora
+    at a public repository and get a result before installing anything.
+    ``token`` is optional; without it GitHub allows 60 requests an hour,
+    enough for a 10-PR replay. Only the read methods are meant to be used;
+    every write raises so a misuse can never post to someone else's repo.
+    """
+
+    def __init__(self, repo_full_name: str, token: Optional[str] = None):
+        super().__init__(installation_id=0, repo_full_name=repo_full_name)
+        self._token = token
+
+    def _headers(self, accept: str = "application/vnd.github+json") -> Dict[str, str]:
+        headers = {
+            "Accept": accept,
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "aurora-revert-replay",
+        }
+        if self._token:
+            headers["Authorization"] = f"Bearer {self._token}"
+        return headers
+
+    def _read_only(self, *args, **kwargs):
+        raise PermissionError("PublicRepoReader is read-only")
+
+    post_review = dismiss_review = update_review_body = _read_only
+    post_issue_comment = delete_issue_comment = supersede_review = _read_only

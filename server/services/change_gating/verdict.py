@@ -421,6 +421,23 @@ def parse_verdict(text: Optional[str]) -> Optional[Dict[str, Any]]:
 _EXTRACTION_MAX_CHARS = 30_000
 
 
+def normalize_verdict(
+    verdict: dict[str, Any], *, log_key: str = "", log_ctx: str = "", session_id: Any = None
+) -> dict[str, Any]:
+    """SAFE never carries findings; RISKY without findings is demoted to SAFE
+    (nothing actionable to anchor or list)."""
+    if verdict.get("verdict") == "SAFE":
+        verdict["findings"] = []
+    elif verdict.get("verdict") == "RISKY" and not verdict.get("findings"):
+        logger.info(
+            "change_gating=%s %s session_id=%s status=demoted_risky_no_findings",
+            log_key, log_ctx, session_id,
+        )
+        verdict["verdict"] = "SAFE"
+        verdict["findings"] = []
+    return verdict
+
+
 def _create_extraction_llm():
     """Build the structured-output verdict extractor.
 

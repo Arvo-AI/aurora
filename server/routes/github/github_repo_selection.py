@@ -366,13 +366,93 @@ def update_change_gating(user_id, repo_full_name):
                     conn.rollback()
                     return jsonify({"error": "Repository not found"}), 404
                 conn.commit()
+        replay_queued = False
+        if enabled:
+            # First result on day one: replay the review over this repo's
+            # recent reverted PRs instead of waiting for the next PR.
+            replay_queued = _start_replay(user_id, org_id, row[0], repo_full_name)
         return jsonify({
             "repo_full_name": repo_full_name,
             "change_gating_enabled": enabled,
+            "replay_queued": replay_queued,
         })
     except Exception:
         logger.exception("Error updating change gating")
         return jsonify({"error": "Failed to update change gating"}), 500
+
+
+def _start_replay(user_id, org_id, installation_id, repo_full_name) -> bool:
+    """Best-effort: a replay that fails to queue must never fail the toggle.
+
+    Skipped when a report already exists, so toggling Incident Prevention
+    off and on does not re-spend ten agent runs.
+    """
+    try:
+        from tasks.change_gating_replay import enqueue_replay, load_report
+
+        if load_report(org_id, repo_full_name):
+            return False
+        return enqueue_replay(user_id, org_id, installation_id, repo_full_name)
+    except Exception:
+        logger.exception("Failed to queue revert replay for %s", repo_full_name)
+        return False
+
+
+def _enrolled_installation(user_id, org_id, repo_full_name):
+    """Installation id of an org repo with Incident Prevention on, else None."""
+    predicate, pred_params = org_read_predicate(user_id, org_id)
+    with db_pool.get_admin_connection() as conn:
+        with conn.cursor() as cur:
+            set_rls_context(cur, conn, user_id, log_prefix="[github_repo_selection:replay]")
+            cur.execute(
+                f"""SELECT r.installation_id
+                     FROM connected_repos r
+                     JOIN github_installations i
+                       ON i.installation_id = r.installation_id
+                    WHERE r.provider = 'github'
+                      AND r.repo_full_name = %s AND {predicate}
+                      AND r.change_gating_enabled = TRUE
+                      AND i.suspended_at IS NULL
+                    ORDER BY r.updated_at DESC
+                    LIMIT 1""",
+                (repo_full_name, *pred_params),
+            )
+            found = cur.fetchone()
+    return found[0] if found else None
+
+
+@github_repo_selection_bp.route("/repo-selections/<path:repo_full_name>/replay", methods=["GET"])
+@require_permission("connectors", "read")
+def get_revert_replay(user_id, repo_full_name):
+    """Latest revert replay report for a repo (status, scores, per-PR verdicts)."""
+    try:
+        from tasks.change_gating_replay import load_report
+
+        report = load_report(resolve_org(user_id), repo_full_name)
+        if report is None:
+            return jsonify({"repo_full_name": repo_full_name, "status": "none"})
+        return jsonify(report)
+    except Exception:
+        logger.exception("Error reading revert replay")
+        return jsonify({"error": "Failed to read revert replay"}), 500
+
+
+@github_repo_selection_bp.route("/repo-selections/<path:repo_full_name>/replay", methods=["POST"])
+@require_permission("connectors", "write")
+def rerun_revert_replay(user_id, repo_full_name):
+    """Queue a fresh replay. Only for repos with Incident Prevention on."""
+    try:
+        from tasks.change_gating_replay import enqueue_replay
+
+        org_id = resolve_org(user_id)
+        installation_id = _enrolled_installation(user_id, org_id, repo_full_name)
+        if installation_id is None:
+            return jsonify({"error": "Turn on Incident Prevention for this repository first."}), 409
+        queued = enqueue_replay(user_id, org_id, installation_id, repo_full_name)
+        return jsonify({"repo_full_name": repo_full_name, "replay_queued": queued}), (202 if queued else 200)
+    except Exception:
+        logger.exception("Error queueing revert replay")
+        return jsonify({"error": "Failed to queue revert replay"}), 500
 
 
 @github_repo_selection_bp.route("/repo-metadata/generate", methods=["POST"])
