@@ -1,26 +1,29 @@
-"""Thin wrappers around the two things a LIVE run needs: kubectl and HTTP.
+"""The two things a LIVE run needs: kubectl, and a request through the Service.
 
 No Kubernetes client library: the verifier shells out to `kubectl` with an
-explicit timeout, and reads the service through `urllib` so the request path is
-the one a client would take. Only `verifier.live` imports this module.
+explicit timeout. The HTTP check runs through `kubectl exec` in the load
+generator, because the host cannot resolve a cluster-internal Service name, and
+the load generator is the client the runbook reads.
+
+Only `verifier.live` and `verifier.lab` import this module.
 """
 
 from __future__ import annotations
 
 import json
+import math
+import re
 import subprocess
 import time
-import urllib.error
-import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from verifier.config import ENCODING
-
 DEFAULT_COMMAND_TIMEOUT_S = 10.0
 DEFAULT_HTTP_TIMEOUT_S = 5.0
-MAX_BODY_BYTES = 4096
+
+STATUS_PATTERN = re.compile(r"HTTP/\d(?:\.\d)?\s+(\d{3})")
+EXIT_MARKER = "RV_EXIT:"
 
 ProbeFn = Callable[[str, float], Mapping[str, Any]]
 SleepFn = Callable[[float], None]
@@ -76,27 +79,68 @@ class Kubectl:
         return result.stdout
 
 
-def probe_http(route: str, timeout_s: float) -> Mapping[str, Any]:
-    """Send one GET and return the evidence, including failures."""
-    started = time.monotonic()
-    request = urllib.request.Request(route, method="GET")
-    try:
-        with urllib.request.urlopen(request, timeout=timeout_s) as response:
-            body = response.read(MAX_BODY_BYTES).decode(ENCODING, errors="replace")
-            return _probe(route, response.status, body, started)
-    except urllib.error.HTTPError as error:
-        body = error.read(MAX_BODY_BYTES).decode(ENCODING, errors="replace")
-        return _probe(route, error.code, body, started)
-    except (urllib.error.URLError, TimeoutError, OSError) as error:
-        return {"route": route, "error": str(error), "duration_seconds": _elapsed(started)}
+def probe_in_cluster(kubectl: Kubectl, namespace: str, deployment: str) -> ProbeFn:
+    """Return a probe that asks the client inside the cluster, not the host.
+
+    The host cannot resolve `frontend.shop.svc.cluster.local`, so the request
+    runs in the load generator, the same client the runbook reads. The shell
+    always exits 0 and reports wget's own status on the last line, so a 503 is
+    evidence about the Service and not a command failure.
+    """
+
+    def probe(route: str, timeout_s: float) -> Mapping[str, Any]:
+        started = time.monotonic()
+        command = (
+            f"wget -q -S -O - -T {math.ceil(timeout_s)} {route} 2>&1; "
+            'code=$?; echo; echo "RV_EXIT:$code"'
+        )
+        try:
+            output = kubectl.text(
+                ["-n", namespace, "exec", f"deployment/{deployment}", "--", "sh", "-c", command]
+            )
+        except LiveError as error:
+            return {
+                "route": route,
+                "status": None,
+                "body": None,
+                "duration_seconds": _elapsed(started),
+                "error": str(error),
+            }
+        return parse_wget(route, output, started)
+
+    return probe
 
 
-def _probe(route: str, status: int | None, body: str, started: float) -> dict[str, Any]:
+def parse_wget(route: str, output: str, started: float) -> dict[str, Any]:
+    """Read the last status line and the JSON body out of wget's output.
+
+    wget prints the response headers with `-S` and the body with `-O -`, both
+    merged into one stream. The app answers with a one-line JSON object, so the
+    body is the line that starts with `{`; anything else is a header or an
+    error message.
+    """
+    status = None
+    body = None
+    errors: list[str] = []
+    for raw in output.splitlines():
+        line = raw.strip()
+        if line.startswith(EXIT_MARKER):
+            continue
+        match = STATUS_PATTERN.search(line)
+        if match:
+            status = int(match.group(1))
+            continue
+        if line.startswith("{") or line.startswith("["):
+            body = line if body is None else f"{body}\n{line}"
+            continue
+        if status is None and line:
+            errors.append(line)
     return {
         "route": route,
         "status": status,
         "body": body,
         "duration_seconds": _elapsed(started),
+        "error": None if status is not None else (" ".join(errors) or "no HTTP status"),
     }
 
 

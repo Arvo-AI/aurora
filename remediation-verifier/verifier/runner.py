@@ -58,19 +58,21 @@ class Plan:
     """Every wait a variant may take, in seconds.
 
     The break budget covers what `lab.sh break` does: a reset that waits up to
-    240s for the deployments, a fault wait of up to 240s, and a 45s settle
-    (lab.sh#L60-L83). The rollout uses the 120s the plan sets for a single
-    replica, which covers an image pull on a cold node. The endpoint wait is one
-    observation window: an address that has not appeared by then fails
-    `service_has_endpoints` anyway. The poll follows the two seconds `lab.sh
-    reset` waits between its own probes (lab.sh#L63-L66).
+    240s for the deployments and a fault wait of up to 240s (lab.sh#L60-L83).
+    The settle it sleeps afterwards is zero: the verifier's own window settles.
+
+    The rollout uses the 120s the plan sets for a single replica, which covers
+    an image pull on a cold node. The endpoint wait is a pacing step, not a
+    check: five seconds is longer than the controller needs to fill a slice,
+    and if it is still empty the window runs anyway and the two endpoint checks
+    decide on the end capture; the poll is one second for the same reason.
     """
 
     break_timeout_s: float = 720.0
     fix_timeout_s: float = 60.0
     rollout_timeout_s: float = 120.0
-    endpoints_timeout_s: float = 60.0
-    endpoint_poll_s: float = 2.0
+    endpoints_timeout_s: float = 5.0
+    endpoint_poll_s: float = 1.0
     variant_timeout_s: float = 900.0
 
 

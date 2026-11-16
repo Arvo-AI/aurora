@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
@@ -24,7 +25,7 @@ from verifier.kubectl import (
     LiveError,
     ProbeFn,
     SleepFn,
-    probe_http,
+    probe_in_cluster,
 )
 from verifier.model import Contract, Fault, Observations
 from verifier.observations import MODE_LIVE, PROVENANCE_LIVE, from_snapshot
@@ -41,12 +42,15 @@ def from_live(
     variant: str,
     *,
     kubectl: Kubectl | None = None,
-    probe: ProbeFn = probe_http,
+    probe: ProbeFn | None = None,
     sleep: SleepFn = time.sleep,
     captured_at: str | None = None,
     timing: Mapping[str, float] | None = None,
 ) -> Observations:
     """Collect the observation a variant produces, for a LIVE run.
+
+    The HTTP probe defaults to one executed inside the load generator. A test
+    may pass its own, which is how the suite runs without a cluster.
 
     Each collection phase is timed and returned in `timing`. A caller may pass
     its own phases, such as the runner's reset and fix steps; the measured
@@ -58,32 +62,40 @@ def from_live(
     window = contract.oracle.observation.window_seconds
     phases: dict[str, float] = dict(timing or {})
 
-    started = time.monotonic()
-    batch_size = _batch_size_of(runner, worker)
-    phases["deployment"] = _elapsed(started)
+    in_cluster = probe or probe_in_cluster(runner, frontend.namespace, LOADGEN_DEPLOYMENT)
+    capture_started = time.monotonic()
+    http_started = time.monotonic()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        # The probes wait the contract's interval between requests. The kubectl
+        # reads fit inside that wait, so they run while the client waits.
+        http_future = pool.submit(_probe_route, frontend, in_cluster, sleep)
+
+        started = time.monotonic()
+        batch_size = _batch_size_of(runner, worker)
+        phases["deployment"] = _elapsed(started)
+
+        started = time.monotonic()
+        pods = _pods_of(runner, worker)
+        phases["pods"] = _elapsed(started)
+
+        started = time.monotonic()
+        services = _services_of(runner, frontend)
+        phases["services"] = _elapsed(started)
+
+        started = time.monotonic()
+        endpoints = _endpoints_of(runner, frontend)
+        phases["endpoints"] = _elapsed(started)
+
+        http = http_future.result()
+    phases["http"] = _elapsed(http_started)
 
     started = time.monotonic()
-    pods = _pods_of(runner, worker)
-    phases["pods"] = _elapsed(started)
-
-    started = time.monotonic()
-    services = _services_of(runner, frontend)
-    phases["services"] = _elapsed(started)
-
-    started = time.monotonic()
-    endpoints = _endpoints_of(runner, frontend)
-    phases["endpoints"] = _elapsed(started)
-
-    started = time.monotonic()
-    http = _probe_route(frontend, probe, sleep)
-    phases["http"] = _elapsed(started)
-
-    started = time.monotonic()
-    logs = {
-        "worker": _log_lines(runner, worker, window, pods),
-        "loadgen": _loadgen_lines(runner, worker, window),
-    }
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        worker_logs = pool.submit(_log_lines, runner, worker, window, pods)
+        loadgen_logs = pool.submit(_loadgen_lines, runner, worker, window)
+        logs = {"worker": worker_logs.result(), "loadgen": loadgen_logs.result()}
     phases["logs"] = _elapsed(started)
+    phases["capture"] = _elapsed(capture_started)
 
     document: dict[str, Any] = {
         "meta": {

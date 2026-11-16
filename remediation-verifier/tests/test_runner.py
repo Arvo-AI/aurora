@@ -43,7 +43,7 @@ def test_a_remediation_fixes_after_the_pre_fix_capture_and_before_the_waits() ->
         ("capture", "full"),
         ("fix", simulation.contract.oracle.fixes["full"].steps),
         ("rollout", 120.0),
-        ("endpoints", (60.0, 2.0)),
+        ("endpoints", (5.0, 1.0)),
     ]
     assert calls[8:10] == [("capture", "full"), ("capture", "full")]
 

@@ -193,7 +193,15 @@ def test_the_worker_and_loadgen_logs_are_captured(capture: Capture) -> None:
 
 def test_every_collection_phase_is_timed(capture: Capture) -> None:
     timing = capture.observations.timing
-    assert set(timing) == {"deployment", "pods", "services", "endpoints", "http", "logs"}
+    assert set(timing) == {
+        "capture",
+        "deployment",
+        "pods",
+        "services",
+        "endpoints",
+        "http",
+        "logs",
+    }
     assert all(value >= 0 for value in timing.values())
 
 

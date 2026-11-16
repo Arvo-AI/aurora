@@ -18,7 +18,7 @@ import pytest
 from simulated_cluster import FULL_STEPS, SimulatedCluster
 from simulated_session import CAPTURED_AT, RecordingSleep
 from verifier.contract import load_contract
-from verifier.kubectl import Kubectl, LiveError
+from verifier.kubectl import Kubectl, LiveError, parse_wget, probe_in_cluster
 from verifier.lab import Lab, LiveSession, endpoint_addresses, fix_step_args
 from verifier.observations import MODE_LIVE
 
@@ -47,6 +47,40 @@ ENDPOINTS_ARGS = [
     "-l",
     "kubernetes.io/service-name=frontend",
 ]
+ROUTE = "http://frontend.shop.svc.cluster.local/api/items"
+HTTP_200 = """  HTTP/1.1 200 OK
+  Server: nginx/1.27
+  Content-Type: application/json
+  Content-Length: 44
+
+{"items": ["kettle", "mug", "teapot"]}
+RV_EXIT:0
+"""
+CONNECTION_REFUSED = """wget: can't connect to remote host (10.96.45.48): Connection refused
+RV_EXIT:1
+"""
+HTTP_503 = """  HTTP/1.1 503 Service Temporarily Unavailable
+  Server: nginx/1.27
+  Content-Type: text/html
+
+<html><body>503</body></html>
+RV_EXIT:8
+"""
+
+
+class ProbeKubectl:
+    """Return a recorded wget output, or fail the way kubectl does."""
+
+    def __init__(self, output: str = "", error: Exception | None = None) -> None:
+        self.output = output
+        self.error = error
+        self.calls: list[list[str]] = []
+
+    def text(self, args: list[str]) -> str:
+        self.calls.append(list(args))
+        if self.error is not None:
+            raise self.error
+        return self.output
 
 
 class RecordingKubectl:
@@ -204,6 +238,86 @@ def test_endpoint_addresses_counts_across_slices() -> None:
 
 def test_endpoint_addresses_tolerates_another_shape() -> None:
     assert endpoint_addresses({"items": "nope"}) == 0
+
+
+def test_the_probe_runs_in_the_loadgen_pod_and_keeps_the_route() -> None:
+    kubectl = ProbeKubectl(HTTP_200)
+    result = probe_in_cluster(kubectl, "shop", "loadgen")(ROUTE, 5)
+    assert kubectl.calls[0][:7] == [
+        "-n",
+        "shop",
+        "exec",
+        "deployment/loadgen",
+        "--",
+        "sh",
+        "-c",
+    ]
+    command = kubectl.calls[0][-1]
+    assert "-T 5" in command
+    assert ROUTE in command
+    assert result["status"] == 200
+
+
+def test_a_200_response_keeps_the_status_and_the_body() -> None:
+    result = probe_in_cluster(ProbeKubectl(HTTP_200), "shop", "loadgen")(ROUTE, 5)
+    assert result["status"] == 200
+    assert json.loads(str(result["body"])) == {"items": ["kettle", "mug", "teapot"]}
+    assert result["error"] is None
+
+
+def test_a_connection_error_keeps_the_message() -> None:
+    result = probe_in_cluster(ProbeKubectl(CONNECTION_REFUSED), "shop", "loadgen")(ROUTE, 5)
+    assert result["status"] is None
+    assert "Connection refused" in str(result["error"])
+
+
+def test_a_503_keeps_the_status_and_reports_no_json_body() -> None:
+    result = probe_in_cluster(ProbeKubectl(HTTP_503), "shop", "loadgen")(ROUTE, 5)
+    assert result["status"] == 503
+    assert result["body"] is None
+
+
+def test_a_probe_that_cannot_exec_is_an_error_not_a_status() -> None:
+    kubectl = ProbeKubectl(error=LiveError("pods not found"))
+    result = probe_in_cluster(kubectl, "shop", "loadgen")(ROUTE, 5)
+    assert result["status"] is None
+    assert "pods not found" in str(result["error"])
+
+
+def test_the_parser_keeps_the_last_status_line() -> None:
+    output = '  HTTP/1.1 301 Moved Permanently\n  HTTP/1.1 200 OK\n\n{"items": []}\nRV_EXIT:0\n'
+    result = parse_wget(ROUTE, output, 0.0)
+    assert result["status"] == 200
+    assert result["body"] == '{"items": []}'
+
+
+def test_the_break_tells_the_lab_not_to_settle(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[list[str], dict[str, str] | None, float]] = []
+
+    def fake_run(
+        self: Lab, argv: list[str], *, timeout_s: float, extra_env: dict[str, str] | None = None
+    ) -> str:
+        calls.append((list(argv), extra_env, timeout_s))
+        return ""
+
+    monkeypatch.setattr(Lab, "run", fake_run)
+    session = LiveSession(load_contract(), Lab(Path("/lab")))
+    session.break_scenario(720)
+    argv, extra_env, timeout_s = calls[0]
+    assert argv[-1] == "12-two-faults-oom-and-selector"
+    assert extra_env == {"SETTLE": "0"}
+    assert timeout_s == 720
+
+
+def test_the_lab_child_receives_the_extra_environment(tmp_path: Path) -> None:
+    record = tmp_path / "settle.txt"
+    script = tmp_path / "lab.sh"
+    script.write_text(
+        f"#!/usr/bin/env bash\nprintf '%s' \"$SETTLE\" > {record}\n",
+        encoding="utf-8",
+    )
+    Lab(tmp_path).run(["bash", str(script)], timeout_s=5, extra_env={"SETTLE": "0"})
+    assert record.read_text(encoding="utf-8") == "0"
 
 
 def test_the_endpoint_wait_stops_as_soon_as_an_address_appears(

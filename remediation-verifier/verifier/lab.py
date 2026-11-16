@@ -30,7 +30,6 @@ from verifier.kubectl import (
     Kubectl,
     LiveError,
     ProbeFn,
-    probe_http,
 )
 from verifier.live import fault_with, from_live
 from verifier.model import Contract, Observations
@@ -81,9 +80,17 @@ class Lab:
         environment["KUBECONFIG"] = str(self.kubeconfig)
         return environment
 
-    def run(self, argv: Sequence[str], *, timeout_s: float) -> str:
+    def run(
+        self,
+        argv: Sequence[str],
+        *,
+        timeout_s: float,
+        extra_env: Mapping[str, str] | None = None,
+    ) -> str:
         """Run one lab command and return stdout, raising LiveError on failure."""
         command = list(argv)
+        environment = self.environment()
+        environment.update(extra_env or {})
         try:
             completed = subprocess.run(
                 command,
@@ -91,7 +98,7 @@ class Lab:
                 text=True,
                 timeout=timeout_s,
                 check=False,
-                env=self.environment(),
+                env=environment,
             )
         except (OSError, subprocess.TimeoutExpired) as error:
             raise LiveError(f"cannot run {command[0]}: {error}") from error
@@ -111,25 +118,34 @@ class LiveSession:
         contract: Contract,
         lab: Lab,
         *,
-        probe: ProbeFn = probe_http,
+        probe: ProbeFn | None = None,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], str] | None = None,
         command_timeout_s: float = DEFAULT_COMMAND_TIMEOUT_S,
+        settle_s: float = 0.0,
     ) -> None:
         self._contract = contract
         self._lab = lab
         self._probe = probe
         self._sleep = sleep
         self._clock = clock or utc_now
+        self._settle_s = settle_s
         self._kubectl = lab.kubectl(timeout_s=command_timeout_s)
         self._worker = fault_with(contract, "deployment")
         self._frontend = fault_with(contract, "service")
 
     def break_scenario(self, timeout_s: float) -> None:
-        """Break the scenario. `lab.sh break` resets first, so nothing leaks in."""
+        """Break the scenario. `lab.sh break` resets first, so nothing leaks in.
+
+        `SETTLE` is set to zero on purpose. `lab.sh` sleeps 45 seconds after the
+        fault appears so backoffs accumulate; `check.sh` has already proved both
+        faults, and the verifier's own window is the settle that matters. This
+        is the single largest saving in a LIVE run.
+        """
         self._lab.run(
             ["bash", str(self._lab.script), "break", self._contract.scenario],
             timeout_s=timeout_s,
+            extra_env={"SETTLE": f"{self._settle_s:g}"},
         )
 
     def apply_fix(self, steps: Sequence[str], timeout_s: float) -> None:
