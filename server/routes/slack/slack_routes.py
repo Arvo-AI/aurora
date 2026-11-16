@@ -197,7 +197,7 @@ def complete_slack_connection(user_id, token_data):
             "incidents_channel_id": channel_result.get('channel_id'),
             "incidents_channel_name": channel_result.get('channel_name'),
         }
-        store_tokens_in_db(user_id, slack_token_data, "slack")
+        store_tokens_in_db(user_id, slack_token_data, "slack", schedule_prediscovery=True)
 
         # Persist channel ID as org preference so it survives disconnect/reconnect
         if org_id and channel_result.get('channel_id'):

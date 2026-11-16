@@ -9,6 +9,12 @@ from dotenv import load_dotenv
 # Load environment variables from the project root .env file
 load_dotenv()
 
+# Same-uid children (agent commands, MCP servers) must not read this process's
+# env from /proc. Under gunicorn --preload this runs in the master, so the
+# forked workers inherit it.
+from utils.security.subprocess_env import deny_same_uid_proc_access
+deny_same_uid_proc_access()
+
 import logging
 import os
 import sys
@@ -647,8 +653,10 @@ app.register_blueprint(visualization_bp)
 # --- Monitor Routes (Agent Fleet / Waterfall) ---
 from routes.monitor.fleet_routes import fleet_bp
 from routes.monitor.waterfall_routes import waterfall_bp
+from routes.monitor.chat_audit_routes import chat_audit_bp
 app.register_blueprint(fleet_bp)
 app.register_blueprint(waterfall_bp)
+app.register_blueprint(chat_audit_bp)
 
 # --- Audit Log Routes ---
 from routes.audit_routes import audit_bp

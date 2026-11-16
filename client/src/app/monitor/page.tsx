@@ -1,18 +1,22 @@
 'use client';
 
 import { useState } from 'react';
-import { Radar, HeartPulse, Timer, ShieldCheck, BookOpen } from 'lucide-react';
+import { useUrlParam } from './components/audit-controls';
+import { Radar, HeartPulse, Timer, ShieldCheck, BookOpen, MessagesSquare } from 'lucide-react';
+import { useCanAuditChats } from '@/hooks/useCanAuditChats';
 import { PeriodSelector, type Period } from './components/charts';
 import FleetTab from './components/fleet-tab';
 import SreTab from './components/sre-tab';
 import WaterfallTab from './components/waterfall-tab';
 import AuditTab from './components/audit-tab';
 import ArtifactsTab from './components/artifacts-tab';
+import ChatsTab from './components/chats-tab';
 
 const TABS = [
   { id: 'fleet', label: 'Fleet', icon: Radar },
   { id: 'sre', label: 'SRE Metrics', icon: HeartPulse },
   { id: 'waterfall', label: 'Execution', icon: Timer },
+  { id: 'chats', label: 'Chat history', icon: MessagesSquare, auditOnly: true },
   { id: 'artifacts', label: 'Artifacts', icon: BookOpen },
   { id: 'audit', label: 'Audit Log', icon: ShieldCheck },
 ] as const;
@@ -20,8 +24,14 @@ const TABS = [
 type TabId = typeof TABS[number]['id'];
 
 export default function MonitorPage() {
-  const [tab, setTab] = useState<TabId>('fleet');
+  // In the URL (?tab=chats) so a link can open a tab, e.g. ?tab=chats&view=tool-calls.
+  const [tabParam, setTab] = useUrlParam('tab', 'fleet');
   const [period, setPeriod] = useState<Period>('30d');
+  // Chat history lists every user's chats: shown only to people the org's
+  // conversation-audit setting allows. The backend enforces the same rule.
+  const canAudit = useCanAuditChats();
+  const tabs = TABS.filter(t => !('auditOnly' in t && t.auditOnly) || canAudit);
+  const tab: TabId = tabs.some(t => t.id === tabParam) ? (tabParam as TabId) : 'fleet';
 
   return (
     <div className="max-w-[1400px] mx-auto py-8 px-4 sm:px-6">
@@ -36,7 +46,7 @@ export default function MonitorPage() {
 
       {/* Tab bar */}
       <div className="flex items-center gap-1 border-b border-zinc-800/80 mb-6">
-        {TABS.map(t => {
+        {tabs.map(t => {
           const Icon = t.icon;
           const active = tab === t.id;
           return (
@@ -61,6 +71,7 @@ export default function MonitorPage() {
         {tab === 'fleet' && <FleetTab period={period} />}
         {tab === 'sre' && <SreTab period={period} />}
         {tab === 'waterfall' && <WaterfallTab period={period} />}
+        {tab === 'chats' && canAudit && <ChatsTab period={period} />}
         {tab === 'artifacts' && <ArtifactsTab />}
         {tab === 'audit' && <AuditTab period={period} />}
       </div>

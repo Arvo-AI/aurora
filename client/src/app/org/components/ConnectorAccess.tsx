@@ -1,11 +1,12 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
-import { Brain, Check, Loader2, MessageSquare } from "lucide-react";
+import { Brain, Check, Loader2, MessageSquare, MessagesSquare, Minus } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { connectorRegistry } from "@/components/connectors/ConnectorRegistry";
 import { toast } from "@/hooks/use-toast";
+import { refreshChatAudit } from "@/hooks/useCanAuditChats";
 import { ROLE_ADMIN, ROLE_EDITOR, ROLE_VIEWER, type UserRole } from "@/lib/roles";
 
 const ROLES: { id: UserRole; label: string }[] = [
@@ -336,17 +337,28 @@ function LockedOn() {
   );
 }
 
+function LockedOff() {
+  return (
+    <span className="flex h-8 items-center justify-center" title="Not available to this role">
+      <Minus className="h-3.5 w-3.5 text-foreground/25" />
+    </span>
+  );
+}
+
 function ViewerRunTable({
-  run, disabled, onChange,
+  run, disabled, onChange, auditEditors, auditDisabled, onAuditChange,
 }: {
   run: ViewerRun;
   disabled: boolean;
   onChange: (next: ViewerRun) => void;
+  auditEditors: boolean;
+  auditDisabled: boolean;
+  onAuditChange: (editors: boolean) => void;
 }) {
   return (
     <div className="text-sm">
       <p className="mb-3 text-sm text-muted-foreground">
-        Admins can always do both. Editors can always run chats. Check a box to allow the rest.
+        Admins can always do all of these. Editors can always run chats. Check a box to allow the rest.
       </p>
       <div className={`${GRID} px-1 pb-2 text-xs font-medium text-muted-foreground border-b border-border`}>
         <span />
@@ -391,6 +403,28 @@ function ViewerRunTable({
         />
         <LockedOn />
       </div>
+      <div className={`${GRID} px-1 py-1.5 border-b border-border/30`}>
+        <div className="flex min-w-0 items-start gap-2">
+          <div className="mt-0.5 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md border border-border/40 bg-muted">
+            <MessagesSquare className="h-3.5 w-3.5 text-foreground" />
+          </div>
+          <div className="min-w-0">
+            <span className="font-medium">Chat history audit</span>
+            <p className="text-xs text-muted-foreground">
+              Who can open Monitor → Chat history and ask Aurora about other users&apos; chats and tool calls.
+              {auditEditors ? " Admins and editors." : " Admins only."}
+            </p>
+          </div>
+        </div>
+        <LockedOff />
+        <AccessCheck
+          checked={auditEditors}
+          disabled={auditDisabled}
+          label="Editors can audit chat history and tool calls"
+          onChange={onAuditChange}
+        />
+        <LockedOn />
+      </div>
     </div>
   );
 }
@@ -403,6 +437,9 @@ export default function ConnectorAccess() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
   const [savingRun, setSavingRun] = useState(false);
+  // Chat history audit: false = admins only (default), true = admins and editors.
+  const [auditEditors, setAuditEditors] = useState(false);
+  const [savingAudit, setSavingAudit] = useState(false);
   const audienceRef = useRef(audience);
   audienceRef.current = audience;
 
@@ -412,10 +449,11 @@ export default function ConnectorAccess() {
     const still = () => isCurrent() && audienceRef.current === requested;
     const teamQuery = audience === EVERYONE ? "" : `?teamId=${encodeURIComponent(audience)}`;
     try {
-      const [accessRes, runRes, teamsRes] = await Promise.all([
+      const [accessRes, runRes, teamsRes, auditRes] = await Promise.all([
         fetch(`/api/org/connector-access${teamQuery}`),
         fetch("/api/org/viewer-run"),
         fetch("/api/org/teams"),
+        fetch("/api/org/chat-audit"),
       ]);
       // A slower response for the previous audience must not overwrite this one.
       if (!still()) return;
@@ -432,6 +470,11 @@ export default function ConnectorAccess() {
           // Missing means editors can still edit, which is the stored default.
           editorMemory: run.editorMemory !== false,
         });
+      }
+      if (auditRes.ok) {
+        const audit = await auditRes.json();
+        if (!still()) return;
+        setAuditEditors(audit.editors === true);
       }
       if (teamsRes.ok) {
         const teamData = await teamsRes.json();
@@ -522,6 +565,26 @@ export default function ConnectorAccess() {
     }
   }
 
+  async function saveAudit(editors: boolean) {
+    setSavingAudit(true);
+    setAuditEditors(editors);
+    try {
+      const res = await fetch("/api/org/chat-audit", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ editors }),
+      });
+      if (!res.ok) throw new Error("save failed");
+      // The Chat history tab and the sidebar link read this too.
+      void refreshChatAudit();
+    } catch {
+      toast({ title: "Could not update chat history access", variant: "destructive" });
+      await load();
+    } finally {
+      setSavingAudit(false);
+    }
+  }
+
   async function saveRun(next: ViewerRun) {
     setSavingRun(true);
     setViewerRun(next);
@@ -577,12 +640,22 @@ export default function ConnectorAccess() {
         </div>
       ) : connectors.length === 0 ? (
         <>
-          {audience === EVERYONE && <ViewerRunTable run={viewerRun} disabled={savingRun} onChange={saveRun} />}
+          {audience === EVERYONE && (
+            <ViewerRunTable
+              run={viewerRun} disabled={savingRun} onChange={saveRun}
+              auditEditors={auditEditors} auditDisabled={savingAudit} onAuditChange={saveAudit}
+            />
+          )}
           <p className="text-sm text-muted-foreground">No connectors are connected yet.</p>
         </>
       ) : (
       <>
-      {audience === EVERYONE && <ViewerRunTable run={viewerRun} disabled={savingRun} onChange={saveRun} />}
+      {audience === EVERYONE && (
+            <ViewerRunTable
+              run={viewerRun} disabled={savingRun} onChange={saveRun}
+              auditEditors={auditEditors} auditDisabled={savingAudit} onAuditChange={saveAudit}
+            />
+          )}
       <p className="text-sm text-muted-foreground">
         Check a role to let it use a connector. On AWS and GCP, uncheck Modify to leave read-only, or uncheck Read-only to remove access.
       </p>

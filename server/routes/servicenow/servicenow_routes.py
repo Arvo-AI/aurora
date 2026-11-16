@@ -199,7 +199,7 @@ def connect(user_id):
         token_payload["client_secret"] = client_secret
 
     try:
-        store_tokens_in_db(user_id, token_payload, PROVIDER)
+        store_tokens_in_db(user_id, token_payload, PROVIDER, schedule_prediscovery=True)
     except Exception:
         logger.exception("[SERVICENOW] Failed to store credentials for user %s", user_id)
         return jsonify({"error": "Failed to store credentials"}), 500

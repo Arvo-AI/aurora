@@ -83,7 +83,7 @@ def connect(user_id):
     token_payload = {"api_key": api_key}
 
     try:
-        store_tokens_in_db(user_id, token_payload, "incidentio")
+        store_tokens_in_db(user_id, token_payload, "incidentio", schedule_prediscovery=True)
     except Exception:
         logger.exception("[INCIDENTIO] Failed to store credentials for user %s", user_id)
         return jsonify({"error": "Failed to store credentials"}), 500

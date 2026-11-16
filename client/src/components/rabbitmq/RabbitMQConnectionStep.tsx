@@ -14,6 +14,10 @@ interface RabbitMQConnectionStepProps {
   setPassword: (value: string) => void;
   vhost: string;
   setVhost: (value: string) => void;
+  name: string;
+  setName: (value: string) => void;
+  /** A broker is already connected: skip the setup steps and add one more. */
+  addAnother?: boolean;
   loading: boolean;
   onConnect: (event: React.FormEvent<HTMLFormElement>) => void;
 }
@@ -27,12 +31,17 @@ export function RabbitMQConnectionStep({
   setPassword,
   vhost,
   setVhost,
+  name,
+  setName,
+  addAnother = false,
   loading,
   onConnect,
 }: Readonly<RabbitMQConnectionStepProps>) {
+  const submitLabel = addAnother ? "Add broker" : "Connect RabbitMQ";
   return (
     <Card>
       <CardContent className="space-y-6 pt-6">
+        {!addAnother && (
         <div className="border rounded-lg">
           <div className="w-full p-4 flex items-center gap-3">
             <div className="flex h-7 w-7 items-center justify-center rounded-full bg-orange-600 text-white text-sm font-bold">
@@ -60,17 +69,24 @@ rabbitmqctl set_permissions -p / <username> "^$" "^$" ".*"`}</pre>
             </div>
           </div>
         </div>
+        )}
 
         <div className="border rounded-lg">
           <div className="w-full p-4 flex items-center gap-3">
-            <div className="flex h-7 w-7 items-center justify-center rounded-full bg-orange-600 text-white text-sm font-bold">
-              2
-            </div>
-            <span className="font-semibold">Enter management credentials</span>
+            {!addAnother && (
+              <div className="flex h-7 w-7 items-center justify-center rounded-full bg-orange-600 text-white text-sm font-bold">
+                2
+              </div>
+            )}
+            <span className="font-semibold">
+              {addAnother ? "Add another broker" : "Enter management credentials"}
+            </span>
           </div>
           <div className="p-4 pt-0 space-y-4 text-sm border-t">
             <p className="text-muted-foreground">
-              The password is stored in Vault. Only a reference is written to the database.
+              {addAnother
+                ? "Each broker keeps its own URL, user, and default vhost. Connecting the same management URL again replaces that broker's credentials."
+                : "The password is stored in Vault. Only a reference is written to the database."}
             </p>
             <form className="space-y-4" onSubmit={onConnect}>
               <div className="space-y-2">
@@ -109,6 +125,20 @@ rabbitmqctl set_permissions -p / <username> "^$" "^$" ".*"`}</pre>
                 </div>
               </div>
               <div className="space-y-2">
+                <Label htmlFor="rabbitmq-name">Name (optional)</Label>
+                <Input
+                  id="rabbitmq-name"
+                  autoComplete="off"
+                  maxLength={100}
+                  placeholder="production"
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  How this broker is shown, and a name investigations can use to pick it.
+                </p>
+              </div>
+              <div className="space-y-2">
                 <Label htmlFor="rabbitmq-vhost">Default vhost</Label>
                 <Input
                   id="rabbitmq-vhost"
@@ -122,7 +152,7 @@ rabbitmqctl set_permissions -p / <username> "^$" "^$" ".*"`}</pre>
               </div>
               <div className="pt-2">
                 <Button type="submit" disabled={loading} className="w-full md:w-auto">
-                  {loading ? "Connecting…" : "Connect RabbitMQ"}
+                  {loading ? "Connecting…" : submitLabel}
                 </Button>
               </div>
             </form>

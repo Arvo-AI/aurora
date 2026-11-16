@@ -32,6 +32,7 @@ from utils.query_helpers import clamp, duration_ms, fetch_dicts, iso_utc
 from utils.validation import is_valid_uuid
 from utils.db.connection_pool import db_pool
 from utils.auth.stateless_auth import set_rls_context
+from utils.text.text_utils import truncate
 
 logger = logging.getLogger(__name__)
 
@@ -851,3 +852,327 @@ def grafana_list_alerts(state=None, limit=50, *, user_id, **_) -> dict:
         for r in rows
     ]
     return {"alerts": alerts, "count": len(alerts)}
+
+
+# ---------------------------------------------------------------------------
+# Chat history audit (same answers as Monitor → Chat history)
+# ---------------------------------------------------------------------------
+#
+# Who may call these is the org's conversation-audit rule (``may_audit_chats``:
+# admins, or admins and editors), checked when the tool list is built and
+# again on every call. Arguments never change the scope: everything is the
+# caller's org. Results come from the same functions as the page, so they are
+# redacted the same way and exclude deleted chats.
+
+GUEST_REFUSAL = "Tool-call history isn't available to guest users. Ask a member of the organization."
+AUDIT_REFUSAL = (
+    "Access to the organization's chat history isn't enabled for your role. "
+    "An admin can change this under Organization settings → Access."
+)
+SHARED_CHANNEL_NOTE = (
+    "This answer is visible to others (a shared channel or an incident), so other people's "
+    "message text is left out. Open the links in Aurora to read the chats; a link only "
+    "opens for people allowed to read that chat."
+)
+TRANSCRIPT_MESSAGES = 20          # most recent messages returned by get_conversation
+TRANSCRIPT_TEXT_CHARS = 1500      # per message, after redaction
+TRANSCRIPT_INPUT_CHARS = 300      # per failed tool call input
+QUERY_WINDOW_RADIUS = 300         # chars shown on each side of a query occurrence
+QUERY_MAX_HITS = 20               # occurrences returned per conversation
+FULL_MESSAGE_CHARS = 12_000       # cap when reading one message in full
+AUDIT_PAGE_MAX = 50
+
+
+@contextmanager
+def _audit_cursor(user_id: str):
+    """``_cursor`` for the audit tools, refusing callers the org's rule doesn't allow."""
+    from utils.auth.connector_access import pinned_roles
+    from utils.auth.viewer_run import may_audit_chats
+
+    # A Slack guest runs under the connector owner's id; say so plainly.
+    if pinned_roles() is not None:
+        raise IntrospectionError(GUEST_REFUSAL)
+    with _cursor(user_id) as (cur, org_id):
+        if not may_audit_chats(user_id, org_id):
+            raise IntrospectionError(AUDIT_REFUSAL)
+        yield cur, org_id
+
+
+def _answer_is_private() -> bool:
+    """True when this chat's answer is seen only by the person asking (web chat, Slack DM).
+
+    Not in an incident's chat: its tool output shows in the incident timeline.
+    """
+    from services.monitor.chat_audit import private_answer_channel
+    from utils.cloud.cloud_utils import get_state_context
+
+    state = get_state_context()
+    if state is None:
+        return False  # unknown context: treat as shared
+    return private_answer_channel(
+        getattr(state, "trigger_metadata", None),
+        # A state without the flag is not known to be interactive: treat as background.
+        is_background=bool(getattr(state, "is_background", True)),
+        incident_id=getattr(state, "incident_id", None),
+    )
+
+
+def _page(limit, offset) -> tuple[int, int, int]:
+    """(per_page, page, effective offset) for the page-based list functions."""
+    per_page = clamp(limit, 1, AUDIT_PAGE_MAX)
+    page = max(0, int(offset or 0)) // per_page + 1
+    return per_page, page, (page - 1) * per_page
+
+
+def _audit_call(fn, cur, org_id, raw):
+    from services.monitor.chat_audit import InvalidFilter, filter_error_message
+
+    try:
+        return fn(cur, org_id, raw)
+    except InvalidFilter as exc:
+        raise IntrospectionError(filter_error_message(exc)) from None
+
+
+_PERIOD_FIELD = Field(default="7d", description="Time window ending now: 24h, 7d (default, 'last week'), 30d, or 90d.")
+_SOURCE_FIELD = Field(
+    default=None,
+    description="Where the chat came from: web, slack, google_chat, teams, rca, action, scheduled, or background.",
+)
+_USER_FIELD = Field(default=None, description="A user id (from a previous result) to limit to that user's chats.")
+_LIMIT_FIELD = Field(default=20, description="Max results (1–50, default 20).")
+_OFFSET_FIELD = Field(default=0, description="Skip this many results, for the next page (rounded down to a multiple of limit).")
+
+
+class SearchToolCallsArgs(BaseModel):
+    status: Optional[str] = Field(
+        default="failed",
+        description="failed (default), succeeded, running, or all.",
+    )
+    period: Optional[str] = _PERIOD_FIELD
+    issue: Optional[str] = Field(
+        default=None,
+        description=(
+            "Only failures of one kind: missing_permission, blocked_command, not_connected, "
+            "timeout, unavailable, or other. Implies status=failed."
+        ),
+    )
+    tool: Optional[str] = Field(default=None, description="Exact tool name, e.g. cloud_exec, terminal_exec.")
+    source: Optional[str] = _SOURCE_FIELD
+    user: Optional[str] = _USER_FIELD
+    query: Optional[str] = Field(
+        default=None, description="Free text matched against the tool name, its redacted command and its reason.",
+    )
+    limit: int = _LIMIT_FIELD
+    offset: int = _OFFSET_FIELD
+
+
+@introspection_tool
+def search_tool_calls(
+    status="failed", period="7d", issue=None, tool=None, source=None, user=None, query=None,
+    limit=20, offset=0, *, user_id, **_,
+) -> dict:
+    """Tool calls Aurora made across the org, with status, issue type and reason."""
+    from services.monitor.chat_audit import list_tool_calls
+
+    per_page, page, start = _page(limit, offset)
+    raw = {"status": status, "period": period, "issue": issue, "tool": tool, "source": source,
+           "user": user, "q": query, "page": page, "per_page": per_page}
+    private = _answer_is_private()
+    with _audit_cursor(user_id) as (cur, org_id):
+        result = _audit_call(list_tool_calls, cur, org_id, raw)
+    calls = []
+    for r in result["tool_calls"]:
+        call = {
+            "started_at": r["started_at"], "tool": r["tool_name"], "status": r["status"], "issue": r["category"],
+            "user": r["user"].get("email") or r["user"].get("name"), "user_id": r["user"].get("id"),
+            "source": r["source"], "link": r["link"],
+        }
+        # Commands, reasons and chat titles carry other people's words.
+        if private:
+            call.update(command=r["input"], reason=r["reason"], chat_title=r["chat_title"])
+        calls.append(call)
+    out = {
+        "tool_calls": calls,
+        "total_matching": result["total"],
+        # With free text, only the most recent matches are searched: then the
+        # total is a lower bound ("at least N").
+        "total_is_lower_bound": bool(result.get("search_capped")),
+        "offset": start,
+        "status_counts": result["status_counts"],
+        "failures_by_issue": [{"issue": c["category"], "calls": c["calls"], "chats": c["chats"]}
+                              for c in result["issue_counts"]],
+    }
+    if not private:
+        out["note"] = SHARED_CHANNEL_NOTE
+    return out
+
+
+class SearchConversationsArgs(BaseModel):
+    period: Optional[str] = _PERIOD_FIELD
+    source: Optional[str] = _SOURCE_FIELD
+    status: Optional[str] = Field(default=None, description="completed, failed, or in_progress.")
+    user: Optional[str] = _USER_FIELD
+    issue: Optional[str] = Field(
+        default=None,
+        description=(
+            "Only chats with a failed tool call of this kind: missing_permission, blocked_command, "
+            "not_connected, timeout, unavailable, other, or any."
+        ),
+    )
+    query: Optional[str] = Field(default=None, description="Full-text search over questions and Aurora's replies.")
+    limit: int = _LIMIT_FIELD
+    offset: int = _OFFSET_FIELD
+
+
+@introspection_tool
+def search_conversations(
+    period="7d", source=None, status=None, user=None, issue=None, query=None,
+    limit=20, offset=0, *, user_id, **_,
+) -> dict:
+    """Every chat in the org (all users and channels), newest activity first."""
+    from services.monitor.chat_audit import ChatFilters, list_chats
+
+    per_page, page, start = _page(limit, offset)
+    raw = {"period": period, "source": source, "status": status, "user": user, "issue": issue,
+           "q": query, "page": page, "per_page": per_page}
+    private = _answer_is_private()
+    with _audit_cursor(user_id) as (cur, org_id):
+        result = _audit_call(lambda c, o, r: list_chats(c, o, ChatFilters.parse(r)), cur, org_id, raw)
+    chats = []
+    for c in result["chats"]:
+        match = c.get("match")
+        chats.append({
+            "id": c["id"],
+            **({"title": c["title"]} if private else {}),   # titles are users' first messages
+            "user": c["user"].get("email") or c["user"].get("name"), "user_id": c["user"].get("id"),
+            "source": c["source"], "status": c["status"],
+            "started_at": c["created_at"], "updated_at": c["updated_at"],
+            "messages": c["message_count"], "issues": c["issues"], "failed_tool_calls": c["failed_tool_calls"],
+            # Snippets are other people's words: only where the answer stays private.
+            "match": ({"sender": match["sender"], "text": match["text"]} if private else {"matched": True})
+            if match else None,
+            # exact: one message contains the phrase; all_words: the words appear somewhere.
+            **({"match_type": c["match_type"]} if "match_type" in c else {}),
+            "link": c["link"],
+        })
+    out = {"conversations": chats, "total_matching": result["total"],
+           "total_is_lower_bound": bool(result.get("search_capped")), "offset": start,
+           "failures_by_issue": [{"issue": c["category"], "calls": c["calls"], "chats": c["chats"]}
+                                 for c in result["issue_counts"]]}
+    if not private:
+        out["note"] = SHARED_CHANNEL_NOTE
+    return out
+
+
+class GetConversationArgs(BaseModel):
+    conversation_id: str = Field(description="The conversation id, from search_conversations or a link.")
+    query: Optional[str] = Field(
+        default=None,
+        description=(
+            "Exact text to look for. Returns every message containing it (within the first 20,000 "
+            "characters of each of the latest 2,000 messages), with the redacted text around each "
+            "occurrence. Use this to confirm and quote an exact sentence."
+        ),
+    )
+    message_index: Optional[int] = Field(
+        default=None, description="Read this one message in full (redacted, up to 12,000 characters).",
+    )
+
+
+def _query_hits(messages: list, query: str) -> list[dict]:
+    """Redacted windows around every occurrence of ``query`` (already-redacted message text)."""
+    from services.monitor.chat_audit import phrase_pattern
+
+    words = re.findall(r"\w+", query or "")
+    if not words:
+        raise IntrospectionError("query needs at least one word.")
+    pattern = phrase_pattern(" ".join(words))
+    hits = []
+    for m in messages:
+        for found in pattern.finditer(m["text"]):
+            start = max(0, found.start() - QUERY_WINDOW_RADIUS)
+            end = min(len(m["text"]), found.end() + QUERY_WINDOW_RADIUS)
+            hits.append({
+                "message_index": m["id"], "from": "user" if m["sender"] == "user" else "aurora",
+                "position": found.start(),
+                "text": ("…" if start else "") + m["text"][start:end] + ("…" if end < len(m["text"]) else ""),
+            })
+            if len(hits) >= QUERY_MAX_HITS:
+                return hits
+    return hits
+
+
+@introspection_tool
+def get_conversation(conversation_id, query=None, message_index=None, *, user_id, **_) -> dict:
+    """One chat's read-only, redacted summary: its latest messages and every failed tool call.
+
+    With ``query``, every occurrence of that text instead; with ``message_index``,
+    that one message in full. Message text is already redacted by get_transcript.
+    """
+    from services.monitor.chat_audit import get_transcript
+
+    private = _answer_is_private()
+    with _audit_cursor(user_id) as (cur, org_id):
+        # get_transcript validates the id (constant message on a bad one).
+        # tail: the agent reports a chat's latest messages, so load the last ones.
+        transcript = _audit_call(lambda c, o, _r: get_transcript(c, o, conversation_id, tail=True),
+                                 cur, org_id, None)
+    if transcript is None:
+        raise IntrospectionError("Conversation not found.")
+
+    chat = transcript["chat"]
+    out = {
+        "conversation": {
+            "id": chat["id"], **({"title": chat["title"]} if private else {}),
+            "user": chat["user"].get("email") or chat["user"].get("name"),
+            "source": chat["source"], "status": chat["status"],
+            "started_at": chat["created_at"], "updated_at": chat["updated_at"],
+            "messages": chat["message_count"], "link": chat["link"],
+        },
+        "issues": [
+            {"issue": i["category"], "tool": i["tool_name"], "message_index": i["message_index"],
+             **({"reason": truncate(i["summary"], TRANSCRIPT_INPUT_CHARS)} if private else {})}
+            for i in transcript["issues"]
+        ],
+    }
+    if not private:
+        out["note"] = SHARED_CHANNEL_NOTE
+        return out
+
+    if query:
+        hits = _query_hits(transcript["messages"], query)
+        out["query"] = {"text": query, "found": len(hits), "occurrences": hits}
+        return out
+    if message_index is not None:
+        message = next((m for m in transcript["messages"] if m["id"] == message_index), None)
+        if message is None:
+            raise IntrospectionError("No message with that index in this conversation.")
+        out["message"] = {
+            "index": message["id"], "from": "user" if message["sender"] == "user" else "aurora",
+            "text": truncate(message["text"], FULL_MESSAGE_CHARS),
+            "failed_tool_calls": [
+                {"tool": tc["tool_name"], "input": truncate(tc["input"], TRANSCRIPT_INPUT_CHARS),
+                 "reason": tc["error"] or ""}
+                for tc in message["toolCalls"] if tc["status"] == "error"
+            ],
+        }
+        return out
+
+    shown = transcript["messages"][-TRANSCRIPT_MESSAGES:]
+    out["messages_shown"] = (
+        f"last {len(shown)} of {chat['message_count']}, each up to {TRANSCRIPT_TEXT_CHARS} characters; "
+        "pass query to find exact text anywhere, or message_index to read one message in full"
+    )
+    out["messages"] = [
+        {
+            "index": m["id"], "from": "user" if m["sender"] == "user" else "aurora",
+            "text": truncate(m["text"], TRANSCRIPT_TEXT_CHARS),
+            "failed_tool_calls": [
+                {"tool": tc["tool_name"], "input": truncate(tc["input"], TRANSCRIPT_INPUT_CHARS),
+                 "reason": tc["error"] or ""}
+                for tc in m["toolCalls"] if tc["status"] == "error"
+            ],
+        }
+        for m in shown
+    ]
+    return out

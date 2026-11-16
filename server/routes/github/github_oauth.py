@@ -309,6 +309,7 @@ def github_callback():
                 "api_url": "https://api.github.com",
             },
             "github",
+            schedule_prediscovery=True,
         )
     except Exception:
         safe_user = sanitize(aurora_user_id).replace("\r", "_").replace("\n", "_")

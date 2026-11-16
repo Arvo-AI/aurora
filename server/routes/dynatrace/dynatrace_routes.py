@@ -124,7 +124,7 @@ def connect(user_id):
     version = client.get_cluster_version()
 
     try:
-        store_tokens_in_db(user_id, {"api_token": api_token, "environment_url": environment_url, "version": version}, "dynatrace")
+        store_tokens_in_db(user_id, {"api_token": api_token, "environment_url": environment_url, "version": version}, "dynatrace", schedule_prediscovery=True)
     except Exception as exc:
         logger.exception("[DYNATRACE] Failed to store credentials for user %s: %s", user_id, exc)
         return jsonify({"error": "Failed to store Dynatrace credentials"}), 500

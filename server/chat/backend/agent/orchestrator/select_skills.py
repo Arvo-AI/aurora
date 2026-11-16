@@ -116,6 +116,7 @@ _TOOL_METADATA: dict = {
     "rabbitmq_list_connections": {"capability_tags": ["runtime_state"], "mutates": False, "cacheable": True},
     "rabbitmq_list_consumers": {"capability_tags": ["runtime_state"], "mutates": False, "cacheable": True},
     "rabbitmq_health_checks": {"capability_tags": ["runtime_state", "observability"], "mutates": False, "cacheable": True},
+    "rabbitmq_list_brokers": {"capability_tags": ["runtime_state"], "mutates": False, "cacheable": True},
     # Jira — ticket history (read) vs mutate (write)
     "jira_search_issues": {"capability_tags": ["ticket_history"], "mutates": False, "cacheable": True},
     "jira_get_issue": {"capability_tags": ["ticket_history"], "mutates": False, "cacheable": True},

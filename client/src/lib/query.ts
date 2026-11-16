@@ -150,7 +150,10 @@ async function doFetch<T>(
         e.validating = false; e.inflight = null; e.abortController = null; emit(e);
         throw error;
       }
-      if (attempt < opts.retryCount) {
+      // A 4xx (when the fetcher reports it) is the request's fault: retrying won't help.
+      const status = (error as Error & { status?: number }).status;
+      const clientError = typeof status === 'number' && status >= 400 && status < 500;
+      if (attempt < opts.retryCount && !clientError) {
         e.inflight = null;
         const delay = opts.retryDelay * Math.pow(2, attempt);
         return new Promise<T>((resolve, reject) => {

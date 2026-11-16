@@ -421,7 +421,7 @@ def _validate_account(account: Dict[str, Any]) -> Dict[str, Any]:
     return {**summary, "valid": True}
 
 
-def _store_accounts(user_id: str, accounts: list) -> None:
+def _store_accounts(user_id: str, accounts: list, schedule_prediscovery=None) -> None:
     """Persist the account list, mirroring the primary at the top level.
 
     The mirror is load-bearing: store_tokens_in_db's datadog branch reads
@@ -430,7 +430,7 @@ def _store_accounts(user_id: str, accounts: list) -> None:
     """
     stored = dict(accounts[0])
     stored["accounts"] = accounts
-    store_tokens_in_db(user_id, stored, "datadog")
+    store_tokens_in_db(user_id, stored, "datadog", schedule_prediscovery=schedule_prediscovery)
 
 
 @datadog_bp.route("/connect", methods=["POST"])
@@ -531,7 +531,7 @@ def connect(user_id):
     replaced = same_org is not None
 
     try:
-        _store_accounts(user_id, accounts)
+        _store_accounts(user_id, accounts, schedule_prediscovery=True)
         logger.info(
             "[DATADOG] Stored credentials for user %s (site=%s, label=%s, accounts=%d, replaced=%s)",
             sanitize(user_id), sanitize(site), sanitize(account_label(token_payload)),

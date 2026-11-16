@@ -186,7 +186,7 @@ def teams_callback():
             logger.warning("Refusing Teams connect because the tenant is already connected in another org")
             return redirect(_teams_oauth_failure_redirect("tenant_already_connected"))
 
-        store_tokens_in_db(user_id, teams_token_data, "teams")
+        store_tokens_in_db(user_id, teams_token_data, "teams", schedule_prediscovery=True)
         _clear_teams_displacement(org_id)
 
         try:

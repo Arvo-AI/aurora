@@ -1211,7 +1211,9 @@ async def handle_connection(websocket) -> None:
                     }))
                     continue
 
-            # RBAC: block viewers from sending messages in incident-linked sessions
+            # RBAC: block viewers from sending messages in incident-linked sessions,
+            # and anyone from continuing someone else's chat: the agent would load
+            # that chat's history and could repeat it.
             _rbac_incident_id = None
             if session_id and user_id and org_id:
                 try:
@@ -1220,10 +1222,22 @@ async def handle_connection(websocket) -> None:
                         with conn.cursor() as cur:
                             set_rls_context(cur, conn, user_id, log_prefix="[Chatbot:RBAC]")
                             cur.execute(
-                                "SELECT incident_id FROM chat_sessions WHERE id = %s AND org_id = %s",
+                                "SELECT incident_id, user_id FROM chat_sessions WHERE id = %s AND org_id = %s",
                                 (session_id, org_id),
                             )
                             row = cur.fetchone()
+                    if row and not row[0] and row[1] != user_id:
+                        from utils.auth.viewer_run import CHAT_ACCESS_DENIED
+                        from utils.log_sanitizer import sanitize
+                        logger.warning(
+                            "Denied: user=%s tried to chat in another user's session=%s",
+                            sanitize(user_id), sanitize(session_id),
+                        )
+                        await websocket.send(json.dumps({
+                            "type": "error",
+                            "data": {"text": CHAT_ACCESS_DENIED}
+                        }))
+                        continue
                     if row and row[0]:
                         _rbac_incident_id = str(row[0])
                         from utils.auth.enforcer import enforce_with_reload
@@ -1746,6 +1760,10 @@ async def main():
 # Terraform cleanup is now handled by utils/terraform_cleanup.py
 
 if __name__ == "__main__":
+    # Before anything spawns a child: agent commands and MCP servers run as
+    # same-uid children and could otherwise read this process's env from /proc.
+    from utils.security.subprocess_env import deny_same_uid_proc_access
+    deny_same_uid_proc_access()
     try:
         # Start MCP preloader service for faster chat responses
         try:

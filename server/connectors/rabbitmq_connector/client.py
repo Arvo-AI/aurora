@@ -7,7 +7,7 @@ Message bodies are never fetched: the ``/get`` endpoint dequeues.
 import ipaddress
 import logging
 import socket
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import quote, urlparse
 
 import requests
@@ -39,6 +39,28 @@ _QUEUE_ARGUMENTS = (
     "x-single-active-consumer",
     "x-delivery-limit",
 )
+
+# Policy keys that change what happens to a message. Production brokers set
+# dead-lettering and limits by policy far more often than by queue argument.
+_POLICY_KEYS = (
+    "dead-letter-exchange",
+    "dead-letter-routing-key",
+    "dead-letter-strategy",
+    "message-ttl",
+    "expires",
+    "max-length",
+    "max-length-bytes",
+    "overflow",
+    "delivery-limit",
+    "queue-mode",
+    "queue-version",
+    "ha-mode",
+    "ha-params",
+    "ha-sync-mode",
+)
+
+# Consumers shown on one queue. Enough to name the worker processes.
+MAX_QUEUE_CONSUMERS = 20
 
 _RATE_KEYS = (
     "publish",
@@ -196,6 +218,34 @@ def _short(value: Any, limit: int = 200) -> Any:
     return str(value)[:limit]
 
 
+def _depth_rate(queue: Dict[str, Any], key: str) -> Any:
+    details = queue.get(f"{key}_details")
+    return details.get("rate") if isinstance(details, dict) else None
+
+
+def _policy(queue: Dict[str, Any]) -> Dict[str, Any]:
+    effective = queue.get("effective_policy_definition")
+    if not isinstance(effective, dict):
+        return {}
+    return {key: _short(effective.get(key)) for key in _POLICY_KEYS if key in effective}
+
+
+# An empty list here is information: no quorum member online, not "not reported".
+_KEEP_EMPTY_LIST = frozenset({"members", "online"})
+
+
+def _optional(queue: Dict[str, Any], keys: tuple) -> Dict[str, Any]:
+    """Fields only some queue types report, such as a quorum queue's leader and members."""
+    kept = {}
+    for key in keys:
+        value = queue.get(key)
+        if key in _KEEP_EMPTY_LIST and isinstance(value, list):
+            kept[key] = value
+        elif value not in (None, "", []):
+            kept[key] = value
+    return kept
+
+
 def summarize_queue(queue: Dict[str, Any]) -> Dict[str, Any]:
     arguments = queue.get("arguments") if isinstance(queue.get("arguments"), dict) else {}
     return {
@@ -211,7 +261,18 @@ def summarize_queue(queue: Dict[str, Any]) -> Dict[str, Any]:
         "memory": queue.get("memory"),
         "idle_since": queue.get("idle_since"),
         "arguments": {key: _short(arguments.get(key)) for key in _QUEUE_ARGUMENTS if key in arguments},
+        # Dead-letter and limit settings applied by policy, not by the queue's own arguments.
+        "policy": queue.get("policy"),
+        "operator_policy": queue.get("operator_policy"),
+        "effective_policy": _policy(queue),
+        # Per-second change in depth. Positive means the backlog is growing.
+        "depth_rate": {
+            "messages": _depth_rate(queue, "messages"),
+            "messages_ready": _depth_rate(queue, "messages_ready"),
+            "messages_unacknowledged": _depth_rate(queue, "messages_unacknowledged"),
+        },
         "rates": _rates(queue.get("message_stats")),
+        **_optional(queue, ("node", "leader", "members", "online", "head_message_timestamp", "single_active_consumer_tag")),
     }
 
 
@@ -234,6 +295,8 @@ def summarize_node(node: Dict[str, Any]) -> Dict[str, Any]:
         "sockets_total": node.get("sockets_total"),
         "proc_used": node.get("proc_used"),
         "proc_total": node.get("proc_total"),
+        # A non-empty list means this node sees a network partition: the cluster is split.
+        "partitions": node.get("partitions") if isinstance(node.get("partitions"), list) else [],
     }
 
 
@@ -310,6 +373,20 @@ def summarize_consumer(consumer: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def summarize_queue_consumer(consumer: Dict[str, Any]) -> Dict[str, Any]:
+    """One consumer as listed on a queue, keyed to the process that holds it."""
+    channel = consumer.get("channel_details") if isinstance(consumer.get("channel_details"), dict) else {}
+    return {
+        "consumer_tag": _short(consumer.get("consumer_tag")),
+        "active": consumer.get("active"),
+        "activity_status": consumer.get("activity_status"),
+        "prefetch_count": consumer.get("prefetch_count"),
+        "ack_required": consumer.get("ack_required"),
+        "connection_name": _short(channel.get("connection_name")),
+        "peer_host": _short(channel.get("peer_host")),
+    }
+
+
 def summarize_binding(binding: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "source": binding.get("source"),
@@ -372,7 +449,8 @@ class RabbitMQClient:
         url: str,
         username: str,
         password: str,
-        timeout: int = TIMEOUT_SECONDS,
+        # Seconds, or (connect, read) as requests accepts.
+        timeout: Union[float, Tuple[float, float]] = TIMEOUT_SECONDS,
         default_vhost: str = "/",
         session: Optional[requests.Session] = None,
     ):
@@ -454,6 +532,9 @@ class RabbitMQClient:
                 "name", "vhost", "state", "type", "messages", "messages_ready",
                 "messages_unacknowledged", "consumers", "consumer_utilisation",
                 "memory", "idle_since", "arguments", "message_stats",
+                "policy", "operator_policy", "effective_policy_definition",
+                "messages_details", "messages_ready_details", "messages_unacknowledged_details",
+                "node", "leader", "members", "online", "head_message_timestamp",
             )),
         }
         if name:
@@ -469,7 +550,14 @@ class RabbitMQClient:
         body = self._get_json(f"/api/queues/{path_segment(vhost)}/{path_segment(name)}")
         if not isinstance(body, dict):
             raise RabbitMQAPIError(_UNEXPECTED)
-        return summarize_queue(body)
+        summary = summarize_queue(body)
+        details = body.get("consumer_details") if isinstance(body.get("consumer_details"), list) else []
+        summary["consumer_details"] = [
+            summarize_queue_consumer(item) for item in details[:MAX_QUEUE_CONSUMERS] if isinstance(item, dict)
+        ]
+        if len(details) > MAX_QUEUE_CONSUMERS:
+            summary["consumer_details_truncated"] = len(details)
+        return summary
 
     def exchanges(
         self,

@@ -254,7 +254,7 @@ def connect(user_id):
     }
 
     try:
-        store_tokens_in_db(user_id, token_payload, "elastic")
+        store_tokens_in_db(user_id, token_payload, "elastic", schedule_prediscovery=True)
         logger.info(
             "[ELASTIC] Stored credentials for user %s (cluster=%s, type=%s, kibana=%s)",
             sanitize(user_id), sanitize(cluster_name), deployment_type, kibana_reachable,

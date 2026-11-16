@@ -25,6 +25,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in the same session with everything gathered so far and a fresh time budget,
   then updates the report and the card in place. Up to three continuations per
   incident.
+- RabbitMQ: connect more than one broker. Each broker is its own account,
+  keyed by its management host and port, with an optional name. The connector
+  page lists every broker and can remove one at a time. Agent tools take
+  `account_id` to target one broker, query every broker the caller may use
+  when it is omitted (up to five; past that the agent must pick one), and
+  `rabbitmq_list_brokers` lists them. A fan-out splits the output evenly across brokers.
+- RabbitMQ: queue details now include dead-letter and limit settings applied by
+  policy, whether the backlog is growing, the connection behind each consumer,
+  and quorum leader and members. Nodes report network partitions.
+
+### Fixed
+- RabbitMQ: bindings for a queue that does not exist return an error instead of
+  the default-exchange binding RabbitMQ reports for any name. A regex-looking
+  queue filter with no match says the filter is a substring, and a capped
+  `page_size` is reported. Connector access
+  can grant each broker to a role or team on its own. An existing single
+  connection keeps working with no action needed.
 
 ## [1.5.24] - 2026-11-12
 

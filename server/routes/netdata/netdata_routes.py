@@ -54,7 +54,7 @@ def connect(user_id):
     }
 
     try:
-        store_tokens_in_db(user_id, token_payload, "netdata")
+        store_tokens_in_db(user_id, token_payload, "netdata", schedule_prediscovery=True)
         logger.info(f"[NETDATA] Stored credentials for user {user_id}")
     except Exception as exc:
         logger.exception(f"[NETDATA] Failed to store credentials for user {user_id}: {exc}")

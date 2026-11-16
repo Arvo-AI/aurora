@@ -179,7 +179,7 @@ def connect(user_id):
     }
 
     try:
-        store_tokens_in_db(user_id, token_payload, "sentry")
+        store_tokens_in_db(user_id, token_payload, "sentry", schedule_prediscovery=True)
         logger.info(
             "[SENTRY] Stored credentials for user %s (org=%s)",
             sanitize(user_id), sanitize(org_slug),

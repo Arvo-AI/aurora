@@ -33,8 +33,10 @@ export async function GET(
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
       console.error('Backend error response:', errorData);
+      // 403: the chat exists but this person may not read it; the page shows
+      // the backend's message, so pass it (and its code) through as is.
       return NextResponse.json(
-        { error: errorData.error || 'Failed to fetch chat session' },
+        { error: errorData.error || 'Failed to fetch chat session', code: errorData.code },
         { status: response.status }
       );
     }

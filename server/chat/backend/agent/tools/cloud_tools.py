@@ -122,6 +122,7 @@ from .rabbitmq_tool import (
     rabbitmq_list_connections,
     rabbitmq_list_consumers,
     rabbitmq_health_checks,
+    rabbitmq_list_brokers,
     is_rabbitmq_connected,
     RabbitMQOverviewArgs,
     RabbitMQNodesArgs,
@@ -132,6 +133,7 @@ from .rabbitmq_tool import (
     RabbitMQListConnectionsArgs,
     RabbitMQListConsumersArgs,
     RabbitMQHealthArgs,
+    RabbitMQListBrokersArgs,
 )
 from .coroot_tool import (
     coroot_get_incidents,
@@ -2127,6 +2129,9 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                 graph_get_service, GraphGetServiceArgs,
                 postmortem_list, PostmortemListArgs,
                 grafana_list_alerts, GrafanaListAlertsArgs,
+                search_tool_calls, SearchToolCallsArgs,
+                search_conversations, SearchConversationsArgs,
+                get_conversation, GetConversationArgs,
             )
 
             _INTROSPECTION_TOOLS = [
@@ -2267,6 +2272,54 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     GrafanaListAlertsArgs,
                 ),
             ]
+
+            # Conversation audit: every user's chats and tool calls, so only for
+            # people the org's rule allows (admins, or admins and editors). The
+            # tools check again on every call.
+            from utils.auth.stateless_auth import get_org_id_for_user
+            from utils.auth.viewer_run import may_audit_chats
+            if may_audit_chats(user_id, get_org_id_for_user(user_id)):
+                _INTROSPECTION_TOOLS += [
+                    (
+                        search_conversations,
+                        "search_conversations",
+                        "Search every chat in this org (all users and channels: web, Slack, Teams, "
+                        "Google Chat, RCAs, Actions, scheduled runs) by period, source, status, user, "
+                        "issue type and full text over questions and replies. A quoted query or one of 3+ "
+                        "words is matched as a phrase first: match_type 'exact' means one message "
+                        "contains it, 'all_words' only that the words appear. Returns title, user, "
+                        "source, status, dates, message count, issue counts, a redacted matching "
+                        "snippet and title (only in private chats) and a link. When total_is_lower_bound is true, "
+                        "say 'at least N'. Read-only.",
+                        SearchConversationsArgs,
+                    ),
+                    (
+                        search_tool_calls,
+                        "search_tool_calls",
+                        "Search the tool calls Aurora made across this org (default: failed calls in "
+                        "the last 7 days). Filters: status, period, issue type (missing_permission, "
+                        "blocked_command, not_connected, timeout, unavailable, other), tool, source, "
+                        "user and free text over the redacted command and reason. Returns each call's "
+                        "tool, redacted command, status, issue, reason, user, chat and link, plus counts "
+                        "by status and by issue. When total_is_lower_bound is true, say 'at least N'. In a "
+                        "shared channel, commands, reasons and chat titles are left out. "
+                        "Use for 'which tool calls failed last week and why' or "
+                        "'which permissions is Aurora missing'. Read-only.",
+                        SearchToolCallsArgs,
+                    ),
+                    (
+                        get_conversation,
+                        "get_conversation",
+                        "Read one chat from search_conversations: its latest messages (redacted, capped "
+                        "at 1,500 characters each) and every failed tool call with its reason. To check "
+                        "an exact sentence, pass query: it returns every message containing that text "
+                        "(within the first 20,000 characters of each of the latest 2,000 messages), with "
+                        "the redacted text around each occurrence. To read one message in full, pass "
+                        "message_index. In a shared channel it returns only metadata, issues and the link. "
+                        "Read-only.",
+                        GetConversationArgs,
+                    ),
+                ]
 
             for _fn, _name, _desc, _schema in _INTROSPECTION_TOOLS:
                 _ctx_wrapped = with_user_context(_fn)
@@ -3113,6 +3166,9 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     try:
         if rabbitmq_connected and _open("rabbitmq"):
             _rabbitmq_tools = [
+                (rabbitmq_list_brokers, "rabbitmq_list_brokers", RabbitMQListBrokersArgs,
+                 ("List the RabbitMQ brokers this user can query, with each account_id and name. "
+                  "Every other RabbitMQ tool takes account_id to pick one broker. Omitting it queries every broker, up to 5; with more, pick one from this list.")),
                 (rabbitmq_get_overview, "rabbitmq_get_overview", RabbitMQOverviewArgs,
                  ("Read RabbitMQ cluster overview: version, queue totals, message rates, and listeners. "
                   "Start here when a broker or consumer outage is suspected.")),
@@ -3122,7 +3178,8 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                  ("List RabbitMQ queues sorted by depth. Shows ready, unacked, consumers, and rates. "
                   "Zero consumers with a growing ready count means nothing is subscribed to that queue. Check the worker connection and which queue it consumes.")),
                 (rabbitmq_get_queue, "rabbitmq_get_queue", RabbitMQGetQueueArgs,
-                 "Get one RabbitMQ queue, including dead-letter arguments and publish/deliver rates."),
+                 ("Get one RabbitMQ queue: depth and whether it is growing (depth_rate), dead-letter and limit settings from both "
+                  "queue arguments and policy (effective_policy), its consumers with the connection that holds each, and rates.")),
                 (rabbitmq_list_exchanges, "rabbitmq_list_exchanges", RabbitMQListExchangesArgs,
                  "List RabbitMQ exchanges and their publish rates."),
                 (rabbitmq_list_bindings, "rabbitmq_list_bindings", RabbitMQListBindingsArgs,

@@ -179,7 +179,7 @@ def google_chat_callback():
             "incidents_space_name": space_result.get("space_name"),
             "incidents_space_display_name": space_result.get("space_display_name"),
         }
-        store_tokens_in_db(user_id, google_chat_config, "google_chat")
+        store_tokens_in_db(user_id, google_chat_config, "google_chat", schedule_prediscovery=True)
 
         logger.info("Google Chat connected for user %s", user_id)
 

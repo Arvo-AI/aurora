@@ -70,7 +70,7 @@ def callback():
 
         token_data["expires_at"] = int(time()) + token_data.get("expires_in", 3600)
 
-        store_tokens_in_db(user_id, token_data, "gcp")
+        store_tokens_in_db(user_id, token_data, "gcp", schedule_prediscovery=True)
 
         # Clear Redis cache to ensure new credentials are used immediately
         try:
@@ -382,7 +382,7 @@ def connect_service_account(user_id):
     }
 
     try:
-        store_tokens_in_db(user_id, token_payload, "gcp")
+        store_tokens_in_db(user_id, token_payload, "gcp", schedule_prediscovery=True)
         logging.info(
             "GCP SA connect: stored service account credentials for user %s (projects=%d)",
             user_id,
