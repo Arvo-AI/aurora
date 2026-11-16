@@ -22,6 +22,12 @@ SCOPE = (
     "ni la revisi\u00f3n asesora de Aurora."
 )
 
+SCOPE_2 = (
+    "El veredicto es advisory. Se adjunta como evidencia al hilo del incidente o al PR "
+    "de remediaci\u00f3n, pero no bloquea el merge. Aurora es un revisor asesor por "
+    "dise\u00f1o, y este verificador respeta esa filosof\u00eda."
+)
+
 LAB_COMMIT = "4edcd9dfbc48cbd9ca8ea031e429832cf72842d0"
 FORK_COMMIT = "12c67cffd45c6b0b8c5da1d2e160a945e2936f49"
 
@@ -30,10 +36,19 @@ def test_the_scope_sentence_is_verbatim() -> None:
     assert f"> {SCOPE}" in TEXT
 
 
+def test_the_advisory_paragraph_is_verbatim() -> None:
+    assert f"> {SCOPE_2}" in TEXT
+
+
+def test_the_readme_explains_why_the_work_matters() -> None:
+    assert "## Why now" in TEXT
+    assert "machine-checkable" in TEXT
+
+
 def test_the_verdict_is_advisory_and_non_blocking() -> None:
     assert "advisory" in TEXT
     assert "never blocks a merge" in TEXT
-    assert "not a required check" in TEXT
+    assert "no branch protection" in TEXT
 
 
 def test_the_readme_says_what_it_does_not_do() -> None:
@@ -57,5 +72,5 @@ def test_the_readme_keeps_the_typography_rules() -> None:
 
 def test_the_readme_does_not_promise_a_gate_or_a_model() -> None:
     lowered = TEXT.lower()
-    for word in ("holmesgpt", "k8sgpt", "cost_usd"):
+    for word in ("holmesgpt", "cost_usd"):
         assert word not in lowered

@@ -6,7 +6,7 @@ Each row names the rule, what the deliverable does about it, and the file a revi
 |---|---|---|
 | R1 | Every result carries a provenance label. A capture records `mode: LIVE`; a replay of a fixture records `SNAPSHOT`. The report prints the mode for the run and for each variant, and the JSON carries one `mode` per run. | `verifier/observations.py` (`Meta.mode`), `verifier/report.py` (`_mode`), header of `out/report.md` |
 | R2 | The verdict is advisory. The command line says so, the README says so, and no target or workflow step presents the verifier as a required check on the `aurora` repository. | `verifier/cli.py` (`description`), `README.md`, `tests/test_workflow.py` |
-| R3 | The only positive state is named `VERIFIED_WITHIN_CONTRACT`. No document says a fix is fixed or solved. | `verifier/decision.py`, `verifier/report.py`, `README.md` |
+| R3 | The only positive state is named `VERIFIED_WITHIN_CONTRACT`. No document claims a remediation succeeded without that phrase. | `verifier/decision.py`, `verifier/report.py`, `README.md` |
 | R4 | Every check, fix and fixture has a source with a path and a line. The alternative fix's 384Mi comes from the runbook's 244MiB measurement plus a stated margin. | `contracts/scenario_12.yaml`, `contracts/PROVENANCE.md`, `contracts/DECISIONS.md` (D59) |
 | R5 | No check accepts a fix by matching a constant. The six checks read the observation, and C1 shows each one flips when its evidence changes. | `verifier/checks.py`, `tests/test_controls.py` |
 | R6 | `agent_view()` returns the alert and nothing else. Tests compare its keys with the oracle's and search its text for the second fault. | `verifier/contract.py`, `tests/test_contract_loader.py` (`test_the_agent_view_holds_only_the_alert`), `tests/test_contract.py` |

@@ -1,8 +1,18 @@
 # Remediation verifier, aurora-lab scenario 12
 
-This repository decides one question about a proposed fix: does the fix close the incident that `aurora-lab` scenario `12-two-faults-oom-and-selector` injects, or does it only silence the alert? The answer is advisory evidence for a human reviewer. It never blocks a merge and it is not a required check anywhere.
+In this incident the shop stops serving items, and the alert names only one of the two faults behind it. Scenario `12-two-faults-oom-and-selector` puts both in one namespace. The alerted fault: the worker crash-loops because `BATCH_SIZE` went from 500 to 2500 against a 192Mi limit. The silent one: the frontend Service selects `app=frontend,tier=web`, no pod carries `tier=web`, so the Service has no endpoint and every request fails. Both are documented in the scenario (`scenario.yaml#L3`, `#L17-L18`) at [commit 4edcd9df](https://github.com/Arvo-AI/aurora-lab/tree/4edcd9dfbc48cbd9ca8ea031e429832cf72842d0/scenarios/12-two-faults-oom-and-selector).
+
+Kubernetes tooling such as K8sGPT detects the crash loop. None of it verifies that a remediation closed both faults, and that is the gap this repository fills: it reads the incident contract, runs six checks against a fix, and attaches the result as evidence. A fix for the worker alone leaves the shop down, which is why `partial_worker_only` is rejected on the three frontend checks.
 
 > Este verificador comprueba las condiciones declaradas en el contrato del incidente. No demuestra que no exista ningún otro defecto, y no reemplaza el juicio humano ni la revisión asesora de Aurora.
+>
+> El veredicto es advisory. Se adjunta como evidencia al hilo del incidente o al PR de remediación, pero no bloquea el merge. Aurora es un revisor asesor por diseño, y este verificador respeta esa filosofía.
+
+The verdict is advisory evidence for a human reviewer: it is attached to the incident or the pull request, it never blocks a merge, and no branch protection lists it as a required check.
+
+## Why now
+
+Remediation is becoming machine-checkable. In two years an incident will hand an agent a contract with the conditions that define "closed", and the agent will propose a fix against them; the reviewer will read a verifier report, not a wall of logs. Aurora already diagnoses well, and what it does not do today is attach the verification of the remediation to the incident thread and to the pull request, as an advisor. This repository is that step for one scenario: the contract is data, and the six checks decide the fix, not the alert.
 
 ## Run it
 
@@ -54,7 +64,7 @@ A check that passes on the baseline is a weak check, and the verdict reports it 
 
 ## Provenance
 
-Every fixture is a LIVE capture from `aurora-lab` commit `4edcd9dfbc48cbd9ca8ea031e429832cf72842d0`, taken on 2026-11-16 between `01:03:39Z` and `01:39:46Z`. Each snapshot carries `lab_commit`, `variant`, `captured_at` and `provenance: LIVE`. A snapshot missing any of them becomes INCONCLUSIVE, never a positive. `contracts/PROVENANCE.md` maps every fixture, fix and check to a path and a line, and `contracts/DECISIONS.md` records the choices that are ours. `make verify` produced the same six verdicts against the lab on 2026-11-16 at `02:07:34Z`, with 0 execution errors.
+Every fixture is a LIVE capture from `aurora-lab` commit `4edcd9dfbc48cbd9ca8ea031e429832cf72842d0`, taken on 2026-11-16 between `01:03:39Z` and `01:39:46Z`. Each snapshot carries `lab_commit`, `variant`, `captured_at` and `provenance: LIVE`. A snapshot missing any of them becomes INCONCLUSIVE, never a positive. Every result is labelled `LIVE` or `SNAPSHOT`: `LIVE` means the capture came from the cluster, `SNAPSHOT` means it replays a committed fixture. `RECORDED` would be a stored trace replayed the same way, and this repository does not produce that mode. `contracts/PROVENANCE.md` maps every fixture, fix and check to a path and a line, and `contracts/DECISIONS.md` records the choices that are ours. `make verify` produced the same six verdicts against the lab on 2026-11-16 at `02:07:34Z`, with 0 execution errors.
 
 ## Controls
 
@@ -77,7 +87,7 @@ Every fixture is a LIVE capture from `aurora-lab` commit `4edcd9dfbc48cbd9ca8ea0
 
 ## Next step
 
-A second contract for a scenario whose alert names one fault, so the same six checks run where the second fault lives in another resource. The contract, the checks and the report already take any scenario as data.
+The step after this repository is in Aurora: attach the report to a remediation pull request, with the conditions that hold, the ones that fail and the evidence for each, as an advisor that never blocks the merge. The success criterion is a reviewer who decides in under five minutes without rerunning the lab, with every claim in the report backed by a check and a source. A second scenario is then a new contract file, because the contract, the checks and the report already take a scenario as data.
 
 ## Sources
 
