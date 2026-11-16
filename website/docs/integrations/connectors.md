@@ -596,14 +596,14 @@ before upgrading, or webhook deliveries will fail signature checks.
 
 :::note Kubernetes (Helm)
 A Helm deployment has no `.env`. All the `GITHUB_APP_*` keys (including
-`GITHUB_APP_WEBHOOK_SECRET`) already live under `config:` in the chart's
-`values.yaml` — fill in your values there and apply with `helm upgrade`.
-For the private key, either store it in your secrets backend at
+`GITHUB_APP_WEBHOOK_SECRET` and `GITHUB_APP_PRIVATE_KEY`) live under
+`secrets.backend` in the chart's `values.yaml`: fill in your values there and
+apply with `helm upgrade`. For the private key, either set
+`secrets.backend.GITHUB_APP_PRIVATE_KEY` (base64 of the `.pem`, or the PEM
+text), or leave it empty and store the key in your secrets backend at
 `aurora/system/github-app/private-key` (`vault kv put` or
-`aws secretsmanager create-secret`) exactly as in Step 3, or put it in
-`secrets.githubAppKey` (inline or via `existingSecret`), which is mounted only
-into the server, celery-worker and chatbot pods. If `secrets.githubAppKey` is
-set, the backend is not read for the key.
+`aws secretsmanager create-secret`) exactly as in Step 3. If the value is set,
+the backend is not read for the key.
 :::
 
 **Per-environment Apps**: create separate `aurora-<customer>-prod`,
