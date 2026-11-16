@@ -2,7 +2,7 @@
 
 Credentials come from Vault via ``list_rabbitmq_accounts``. Several brokers may be
 connected; each tool takes ``account_id`` to pick one, and fans out to every
-broker this user can access when it is omitted.
+broker this user can access when it is omitted, up to ``MAX_FANOUT``.
 None of these tools publish, purge, or dequeue messages.
 """
 
@@ -26,6 +26,10 @@ from utils.rabbitmq_accounts import (
 logger = logging.getLogger(__name__)
 
 MAX_OUTPUT_CHARS = 80_000
+# Past this many brokers, a call with no account_id lists them instead of querying all.
+MAX_FANOUT = 5
+# Room kept for the broker list and the wrapper keys when the budget is split.
+_FANOUT_OVERHEAD_CHARS = 2_000
 _NOT_CONNECTED = "RabbitMQ not connected. Ask the user to connect RabbitMQ first."
 _PAGE_HELP = "Page number, starting at 1."
 _VISIBILITY_NOTE = (
@@ -71,6 +75,38 @@ def _broker_fields(account: Dict[str, Any]) -> Dict[str, Any]:
         "account_id": account.get("account_id"),
         "broker": display_name(account),
         "broker_url": account.get("url"),
+    }
+
+
+def _broker_listing(targets: list) -> list:
+    return [
+        {**_broker_fields(a), "default_vhost": a.get("vhost") or "/", "cluster_name": a.get("cluster_name")}
+        for a in targets
+    ]
+
+
+def _pick_a_broker(targets: list) -> str:
+    """Too many brokers to query at once: name them so the agent can choose one."""
+    return _dump({
+        "error": (
+            f"{len(targets)} RabbitMQ brokers are connected. Pass account_id to pick one. "
+            "Choose from the brokers below by name or environment, then retry."
+        ),
+        "code": "ACCOUNT_REQUIRED",
+        "brokers": _broker_listing(targets),
+    })
+
+
+def _fit(item: Dict[str, Any], budget: int, account: Dict[str, Any]) -> Dict[str, Any]:
+    """Cut one broker's result to its share, so a large broker cannot crowd out the rest."""
+    text = json.dumps(item, default=str)
+    if len(text) <= budget:
+        return item
+    return {
+        **_broker_fields(account),
+        "truncated": True,
+        "message": "This broker's result exceeded its share of the output. Retry with its account_id, or narrow by vhost or name.",
+        "preview": text[:max(budget - 500, 0)],
     }
 
 
@@ -131,12 +167,16 @@ def _run_one(fn: Callable[..., Any], account: Dict[str, Any], user_id: str, kwar
 
 
 def _by_account(fn: Callable[..., Any], targets: list, user_id: str, kwargs: Dict[str, Any]) -> Dict[str, Any]:
-    """Run one call per granted broker. A slow broker does not block the others."""
+    """Run one call per granted broker. A slow broker does not block the others.
+
+    Each broker gets an equal share of the output cap.
+    """
+    budget = max((MAX_OUTPUT_CHARS - _FANOUT_OVERHEAD_CHARS) // len(targets), 1_000)
 
     def one(account):
         item = dict(_run_one(fn, account, user_id, kwargs))
         item.update(_broker_fields(account))
-        return account["account_id"], item
+        return account["account_id"], _fit(item, budget, account)
 
     # A Context cannot be entered on two threads at once, so each worker copies it.
     def guarded(account):
@@ -152,6 +192,8 @@ def _rabbitmq_tool(fn: Callable[..., Any]) -> Callable[..., str]:
     One broker returns its result with the broker fields alongside. Several
     return ``results_by_account`` keyed by account id. Either way ``brokers``
     comes first, so a truncated excerpt still names where the data came from.
+    More than ``MAX_FANOUT`` brokers with no account_id returns the broker list
+    and asks for one, instead of querying them all.
     """
 
     @functools.wraps(fn)
@@ -161,6 +203,8 @@ def _rabbitmq_tool(fn: Callable[..., Any]) -> Callable[..., str]:
         targets, error = _tool_targets(user_id, account_id)
         if error:
             return error
+        if len(targets) > MAX_FANOUT:
+            return _pick_a_broker(targets)
         brokers = [_broker_fields(a) for a in targets]
         if len(targets) == 1:
             body: Dict[str, Any] = {"brokers": brokers, **brokers[0]}
@@ -173,7 +217,8 @@ def _rabbitmq_tool(fn: Callable[..., Any]) -> Callable[..., str]:
 
 _ACCOUNT_HELP = (
     "Broker to query: its account id (management host:port), URL, or saved name. "
-    "Omit to query every broker this user can access."
+    f"Omit to query every broker this user can access, up to {MAX_FANOUT}. "
+    "With more, account_id is required."
 )
 
 
@@ -192,13 +237,7 @@ def rabbitmq_list_brokers(*, user_id: Optional[str] = None, **kwargs: Any) -> st
     targets, error = _tool_targets(user_id, None)
     if error:
         return error
-    return _dump({
-        "brokers": [
-            {**_broker_fields(a), "default_vhost": a.get("vhost") or "/", "cluster_name": a.get("cluster_name")}
-            for a in targets
-        ],
-        "count": len(targets),
-    })
+    return _dump({"brokers": _broker_listing(targets), "count": len(targets)})
 
 
 class RabbitMQOverviewArgs(_BrokerArgs):

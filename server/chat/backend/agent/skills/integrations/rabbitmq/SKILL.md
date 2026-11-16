@@ -35,7 +35,8 @@ Read-only management API. The connected user should have the `monitoring` tag an
 More than one broker can be connected. Each is its own account, identified by its management `host:port` (for example `rabbit-prod.internal:15672`), and may also have a saved name. A role or team may be allowed one broker and not another. Tools only see brokers this user can access.
 
 - `rabbitmq_list_brokers()` lists them with `account_id`, `broker` (name), and the default vhost. It makes no call to RabbitMQ.
-- Omit `account_id` to query every allowed broker. With more than one, the result is `results_by_account`, keyed by account id; one broker's error does not hide the others.
+- Omit `account_id` to query every allowed broker, up to 5. With more than one, the result is `results_by_account`, keyed by account id; one broker's error does not hide the others, and each broker gets an equal share of the output.
+- With more than 5 brokers, a call without `account_id` returns `code: ACCOUNT_REQUIRED` and the broker list instead of data. Pick the broker that matches the failing service's environment or name (from the alert, service name, or cluster), pass its `account_id`, and retry. Query a second broker only if the first does not explain the issue.
 - Pass `account_id='host:port'` (or the saved name) once you know which broker the failing service uses, and keep passing it.
 - Every result starts with `brokers`: the brokers that call talked to. Say which broker a finding came from.
 - Queue and vhost names can repeat across brokers. `rabbitmq_get_queue` and `rabbitmq_list_bindings` without `account_id` return a not-found error on brokers that lack the queue; that is expected.

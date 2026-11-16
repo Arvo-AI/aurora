@@ -624,3 +624,68 @@ def test_truncated_tool_output_keeps_brokers_first(monkeypatch):
     assert parsed["truncated"] is True
     assert list(parsed)[0] == "brokers"
     assert CitationExtractor._rabbitmq_broker_label({}, out) == "10.0.0.1:15672, 10.0.0.2:15672"
+
+
+# --- many brokers ------------------------------------------------------------
+
+
+def _many(n):
+    return [_broker(f"10.0.1.{i}:15672", name=f"broker-{i}") for i in range(1, n + 1)]
+
+
+def test_too_many_brokers_asks_for_one_without_calling_rabbitmq(monkeypatch, tool):
+    targets = _many(tool.MAX_FANOUT + 1)
+    _targets(monkeypatch, tool, targets)
+    calls = []
+    monkeypatch.setattr(tool.RabbitMQClient, "nodes", lambda self: calls.append(self.url) or [])
+
+    out = json.loads(tool.rabbitmq_list_nodes(user_id=USER))
+
+    assert calls == []
+    assert out["code"] == "ACCOUNT_REQUIRED"
+    assert len(out["brokers"]) == tool.MAX_FANOUT + 1
+    assert out["brokers"][0]["broker"] == "broker-1"
+    assert "pw" not in json.dumps(out["brokers"])
+
+
+def test_fanout_limit_still_queries_every_broker(monkeypatch, tool):
+    _targets(monkeypatch, tool, _many(tool.MAX_FANOUT))
+    monkeypatch.setattr(tool.RabbitMQClient, "nodes", lambda self: [])
+
+    out = json.loads(tool.rabbitmq_list_nodes(user_id=USER))
+
+    assert len(out["results_by_account"]) == tool.MAX_FANOUT
+
+
+def test_account_id_still_works_with_many_brokers(monkeypatch, tool):
+    accounts = _many(tool.MAX_FANOUT + 3)
+    monkeypatch.setattr(tool, "list_rabbitmq_accounts", lambda user_id: accounts)
+    import utils.rabbitmq_accounts as accounts_mod
+
+    monkeypatch.setattr(accounts_mod, "account_allowed", lambda user_id, account_id: True)
+    monkeypatch.setattr(tool.RabbitMQClient, "overview", lambda self: {"ok": True})
+
+    out = json.loads(tool.rabbitmq_get_overview(user_id=USER, account_id="broker-7"))
+
+    assert out["account_id"] == "10.0.1.7:15672"
+    assert out["ok"] is True
+
+
+def test_one_large_broker_does_not_crowd_out_the_others(monkeypatch, tool):
+    _targets(monkeypatch, tool, [_broker("10.0.0.1:15672"), _broker("10.0.0.2:15672")])
+
+    def overview(self):
+        if "10.0.0.1" in self.url:
+            return {"blob": "x" * tool.MAX_OUTPUT_CHARS}
+        return {"cluster_name": "small"}
+
+    monkeypatch.setattr(tool.RabbitMQClient, "overview", overview)
+
+    text = tool.rabbitmq_get_overview(user_id=USER)
+    out = json.loads(text)
+
+    assert len(text) <= tool.MAX_OUTPUT_CHARS
+    big = out["results_by_account"]["10.0.0.1:15672"]
+    assert big["truncated"] is True
+    assert big["account_id"] == "10.0.0.1:15672"
+    assert out["results_by_account"]["10.0.0.2:15672"]["cluster_name"] == "small"

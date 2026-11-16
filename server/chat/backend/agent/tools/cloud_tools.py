@@ -3168,7 +3168,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
             _rabbitmq_tools = [
                 (rabbitmq_list_brokers, "rabbitmq_list_brokers", RabbitMQListBrokersArgs,
                  ("List the RabbitMQ brokers this user can query, with each account_id and name. "
-                  "Every other RabbitMQ tool takes account_id to pick one broker, and queries every broker when it is omitted.")),
+                  "Every other RabbitMQ tool takes account_id to pick one broker. Omitting it queries every broker, up to 5; with more, pick one from this list.")),
                 (rabbitmq_get_overview, "rabbitmq_get_overview", RabbitMQOverviewArgs,
                  ("Read RabbitMQ cluster overview: version, queue totals, message rates, and listeners. "
                   "Start here when a broker or consumer outage is suspected.")),
