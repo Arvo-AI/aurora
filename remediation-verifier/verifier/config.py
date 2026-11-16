@@ -20,6 +20,11 @@ SNAPSHOT_SCHEMA_NAME = "snapshot_schema.json"
 ENCODING = "utf-8"
 
 CONTRACT_PATH_ENV = "REMEDIATION_VERIFIER_CONTRACT"
+LAB_DIR_ENV = "RV_LAB_DIR"
+
+# The lab checkout sits next to the fork in the assessment workspace. LIVE runs
+# read it, and the doctor reports whether it is the pinned commit.
+DEFAULT_LAB_DIR = PROJECT_ROOT.parent.parent / "aurora-lab"
 
 # The lab commit every observation in this project is pinned to. The contract
 # carries the same value as data; a test keeps the two in step (D20).
@@ -30,6 +35,12 @@ def default_contract_path() -> Path:
     """Return the contract path, honouring the environment override."""
     override = os.environ.get(CONTRACT_PATH_ENV)
     return Path(override).expanduser() if override else DEFAULT_CONTRACT_PATH
+
+
+def resolve_lab_dir() -> Path:
+    """Return the lab checkout, honouring the environment override."""
+    override = os.environ.get(LAB_DIR_ENV)
+    return Path(override).expanduser() if override else DEFAULT_LAB_DIR
 
 
 def schema_path_for(contract_path: Path) -> Path:

@@ -11,7 +11,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import shutil
 import subprocess
 import sys
@@ -22,15 +21,13 @@ from enum import StrEnum
 from importlib import metadata
 from pathlib import Path
 
-from verifier.config import LAB_COMMIT, PROJECT_ROOT
+from verifier.config import LAB_COMMIT, resolve_lab_dir
 
 LOGGER = logging.getLogger(__name__)
 
 MINIMUM_PYTHON = (3, 11)
 MINIMUM_PYYAML = (6, 0)
 COMMAND_TIMEOUT_S = 10
-
-DEFAULT_LAB_DIR = PROJECT_ROOT.parent.parent / "aurora-lab"
 
 DEV_TOOLS = ("mypy", "pytest", "ruff")
 
@@ -92,14 +89,6 @@ def _run(command: Sequence[str]) -> str | None:
     if completed.returncode != 0:
         return None
     return completed.stdout.strip()
-
-
-def resolve_lab_dir() -> Path:
-    """Locate the aurora-lab checkout, allowing an explicit override."""
-    override = os.environ.get("RV_LAB_DIR")
-    if override:
-        return Path(override).expanduser()
-    return DEFAULT_LAB_DIR
 
 
 def check_python() -> Check:

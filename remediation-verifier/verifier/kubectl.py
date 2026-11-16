@@ -32,10 +32,16 @@ class LiveError(RuntimeError):
 
 @dataclass(frozen=True)
 class Kubectl:
-    """Small subprocess wrapper. No Kubernetes client, only the binary."""
+    """Small subprocess wrapper. No Kubernetes client, only the binary.
+
+    `global_args` are inserted between the binary and the subcommand, which is
+    where `--kubeconfig` and `--context` have to be for every call to resolve
+    against the lab cluster and nowhere else.
+    """
 
     binary: str = "kubectl"
     timeout_s: float = DEFAULT_COMMAND_TIMEOUT_S
+    global_args: tuple[str, ...] = ()
 
     def get(self, args: Sequence[str]) -> Mapping[str, Any]:
         """Run kubectl with `-o json` and return the parsed object."""
@@ -53,7 +59,7 @@ class Kubectl:
         return self._run(args)
 
     def _run(self, args: Sequence[str]) -> str:
-        command = [self.binary, *args]
+        command = [self.binary, *self.global_args, *args]
         try:
             result = subprocess.run(
                 command,
