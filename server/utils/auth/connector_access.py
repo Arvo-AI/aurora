@@ -467,7 +467,7 @@ def _role_phrase(roles: Iterable[str]) -> str:
 
 def denial_message(connector: str, audience: str) -> str:
     """What the tool tells the model when this caller cannot use the connector."""
-    who = f" as a {audience}" if audience else ""
+    who = f" as {_article(audience)} {audience}" if audience else ""
     return (
         f"You don't have access to {connector}{who}. "
         "Ask an admin to change this permission in org Settings, on the Access tab."
