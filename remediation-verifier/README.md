@@ -1,8 +1,8 @@
 # Remediation verifier, aurora-lab scenario 12
 
-In this incident, documented at [scenario 12, commit 4edcd9df](https://github.com/Arvo-AI/aurora-lab/tree/4edcd9dfbc48cbd9ca8ea031e429832cf72842d0/scenarios/12-two-faults-oom-and-selector) in `scenario.yaml#L3` and `#L17-L18`, the shop stops serving items and the alert names only one of the two faults behind it. Both live in one namespace: the worker crash-loops because `BATCH_SIZE` went from 500 to 2500 against a 192Mi limit, and the frontend Service selects `app=frontend,tier=web`, which no pod carries, so the Service has no endpoint and every request fails. The mechanism of each fault is in `break.sh`, and the two conditions the lab checks are in `check.sh#L1-L2`.
+In this incident, documented at [scenario 12, commit 4edcd9df](https://github.com/Arvo-AI/aurora-lab/tree/4edcd9dfbc48cbd9ca8ea031e429832cf72842d0/scenarios/12-two-faults-oom-and-selector) in `scenario.yaml#L3` and `#L17-L18`, the shop stops serving items and the alert names only one of the two faults behind it. Both live in one namespace: a worker crash-looping at `BATCH_SIZE=2500` against a 192Mi limit, and a frontend Service selecting `app=frontend,tier=web`, which no pod carries, so it has no endpoint and every request fails. The mechanisms are in `break.sh`; the conditions the lab checks are in `check.sh#L1-L2`.
 
-Kubernetes tooling such as K8sGPT detects the crash loop, and Aurora's [OOMKilled runbook](https://www.aurorasre.ai/runbooks/fix-oomkilled-kubernetes) explains the memory arithmetic that the scenario cites at `README.md#L160`. None of it verifies that a remediation closed both faults, and that is the gap this repository fills: it reads the incident contract, runs six checks against a fix, and attaches the result as evidence. The frontend stays down while the selector is wrong, so `partial_worker_only` is rejected on `service_has_endpoints`, `endpoints_ready` and `http_expected_response`.
+Aurora's [published report](https://www.aurorasre.ai/blog/aurora-lab-report-kubernetes-19-failures) records why this matters: 0 of 2 runs on this scenario, and in run r1 the frontend was called healthy from pod status alone while its Service had no endpoint. Kubernetes tooling such as K8sGPT detects the crash loop; none of it verifies that a remediation closed both faults. That is the gap this repository fills: it reads the incident contract, runs six checks against a fix, and attaches the result as evidence. The frontend stays down while the selector is wrong, so `partial_worker_only` is rejected on `service_has_endpoints`, `endpoints_ready` and `http_expected_response`.
 
 > Este verificador comprueba las condiciones declaradas en el contrato del incidente. No demuestra que no exista ningún otro defecto, y no reemplaza el juicio humano ni la revisión asesora de Aurora.
 >
@@ -17,22 +17,21 @@ Remediation is becoming machine-checkable. In two years an incident will hand an
 ## Run it
 
 ```bash
-cd remediation-verifier
 make install
 make doctor
 make verify-snapshot
 ```
 
-`make verify-snapshot` takes about 0.6 s, prints the table below and writes `out/report.json` and `out/report.md`. It reads the committed fixtures, so it needs no cluster, no network and no credentials. `make ci` runs lint, typecheck, the test suite and that snapshot gate. `make help` lists the rest.
+`make verify-snapshot` takes 0.6 s, prints the table below and writes `out/report.json` and `out/report.md`. It needs no cluster, network or credentials. `make ci` adds lint, typecheck and the 498 tests.
 
 The LIVE path needs Docker, `kind` and `kubectl`:
 
 ```bash
-make verify    # about 15 minutes, six variants against a kind cluster
+make verify    # about 15 minutes, six variants in a kind cluster
 make capture   # maintenance: rewrites fixtures/snapshots, never part of a review
 ```
 
-`make lab-pin` clones `aurora-lab` at `4edcd9df` into `.cache/aurora-lab` and checks out the commit named in `verifier/config.py`. `make lab-up` creates the cluster when it is missing. Both run first, so `make verify` is enough once those three tools are installed.
+`make verify` clones and checks out the pinned lab in `.cache/aurora-lab` first, so it only needs those three tools.
 
 ## What it decides
 
@@ -45,30 +44,19 @@ make capture   # maintenance: rewrites fixtures/snapshots, never part of a revie
 | partial_frontend_only | selector only | REJECTED | 3/6 |
 | noop | nothing | REJECTED | 0/6 |
 
-The four states are `VERIFIED_WITHIN_CONTRACT` (six PASS with evidence), `REJECTED` (any FAIL), `INCONCLUSIVE` (missing or ambiguous evidence) and `EXECUTION_ERROR` (a command, the cluster or a timeout failed).
-
-The alert names the worker only. The second fault leaves the frontend Service with no endpoint, and a fix for the worker alone keeps the shop down. The three rejected variants are that case: a healthy worker is not a closed incident.
+The states are `VERIFIED_WITHIN_CONTRACT` (six PASS), `REJECTED` (any FAIL), `INCONCLUSIVE` (missing or ambiguous evidence) and `EXECUTION_ERROR` (a command or a timeout failed). The three rejected variants are the point: a healthy worker with a Service that has no endpoint is not a closed incident.
 
 ## The six checks
 
-| Fault | Check | Passes when |
-|---|---|---|
-| worker-oom | `no_oomkilled_in_window` | no worker pod carries `lastState.terminated.reason: OOMKilled`, and none appears during the window |
-| worker-oom | `restart_count_not_increasing` | 0 restarts at the start and at the end, on the same pod UID |
-| worker-oom | `processing_evidence` | at least 2 lines `processed batch of <BATCH_SIZE> items`, with the batch size read from the Deployment |
-| frontend-selector | `service_has_endpoints` | the frontend EndpointSlice has at least one address |
-| frontend-selector | `endpoints_ready` | at least one address has `conditions.ready: true` |
-| frontend-selector | `http_expected_response` | 3 requests through the Service return 200 and `items` equals `["kettle","mug","teapot"]` |
-
-A check that passes on the baseline is a weak check, and the verdict reports it instead of counting it as detection.
+Three read the worker (no `OOMKilled`, no restart or pod replacement between captures, two processed batches at the Deployment's batch size) and three read the Service (an address, a ready address, three 200s with the expected items). A check that passes on the baseline is reported as weak.
 
 ## Provenance
 
-Every fixture is a LIVE capture from `aurora-lab` commit `4edcd9dfbc48cbd9ca8ea031e429832cf72842d0`, taken on 2026-11-16 between `01:03:39Z` and `01:39:46Z`. Each snapshot carries `lab_commit`, `variant`, `captured_at` and `provenance: LIVE`. A snapshot missing any of them becomes INCONCLUSIVE, never a positive. Every result is labelled `LIVE` or `SNAPSHOT`: `LIVE` means the capture came from the cluster, `SNAPSHOT` means it replays a committed fixture. `RECORDED` would be a stored trace replayed the same way, and this repository does not produce that mode. `contracts/PROVENANCE.md` maps every fixture, fix and check to a path and a line, and `contracts/DECISIONS.md` records the choices that are ours. `make verify` produced the same six verdicts against the lab on 2026-11-16 at `02:07:34Z`, with 0 execution errors.
+Every fixture is a LIVE capture from `aurora-lab` at `4edcd9df` on 2026-11-16, with `lab_commit`, `variant`, `captured_at` and `provenance: LIVE`; one missing field makes it INCONCLUSIVE. Results are `LIVE` (from the cluster) or `SNAPSHOT` (replaying a fixture); `RECORDED` is not produced. `contracts/PROVENANCE.md` maps every value to a path and a line, and `make verify` reproduced the same six verdicts with 0 execution errors.
 
 ## Controls
 
-`tests/test_controls.py` runs the four: N1 to N3 are rejected, so false acceptance is 0 of 3; P1 is accepted, so false rejection is 0 of 1; C1 mutates the baseline observation once per check and flips 6 of 6, leaving 0 of 6 weak checks; C2 repeats the baseline and the full fix from a reset, 3 of 3, and the same per-check statuses come back.
+`tests/test_controls.py` runs the four. N1 to N3 are rejected, so false acceptance is 0 of 3; P1 is accepted, so false rejection is 0 of 1; C1 mutates the baseline once per check and flips 6 of 6, leaving 0 of 6 weak checks; C2 repeats the baseline and the full fix from a reset, 3 of 3, with the same per-check statuses.
 
 ## What it does not do
 
@@ -80,18 +68,18 @@ Every fixture is a LIVE capture from `aurora-lab` commit `4edcd9dfbc48cbd9ca8ea0
 
 ## Limitations
 
-- One scenario, one contract. `REMEDIATION_VERIFIER_CONTRACT` points the same code at another contract, and `contracts/scenario_12.yaml` is the only one frozen here.
+- One scenario, one contract. `REMEDIATION_VERIFIER_CONTRACT` points the same code at another contract.
 - LIVE ran on kind v1.37.0 with Docker 29.9.3 on 2026-11-16. Another cluster may pace rollouts and restarts differently.
-- The repeatability control uses N=3 on the baseline and on the full fix. That is a repeat, not a statistical sample.
+- The verifier assumes exclusive use of the lab cluster. Two runs on the same kind cluster interfere, and a concurrent capture can reset it mid-window.
+- The repeatability control is N=3, a repeat and not a statistical sample.
 - The HTTP check runs inside the cluster through `kubectl exec deployment/loadgen`, so it needs that pod.
 
 ## Next step
 
-The step after this repository is in Aurora: attach the report to a remediation pull request, with the conditions that hold, the ones that fail and the evidence for each, as an advisor that never blocks the merge. The success criterion is a reviewer who decides in under five minutes without rerunning the lab, with every claim in the report backed by a check and a source. A second scenario is then a new contract file, because the contract, the checks and the report already take a scenario as data.
+The step after this repository is in Aurora: attach the report to a remediation pull request, with the conditions that hold, the ones that fail and the evidence for each, as an advisor that never blocks the merge. The success criterion is a reviewer who decides in under five minutes without rerunning the lab, with every claim backed by a check and a source. A second scenario is a new contract file, because the checks and the report take a scenario as data.
 
 ## Sources
 
-- Contract `contracts/scenario_12.yaml`, schema `contracts/schema.json`, audit `contracts/AUDIT.md`.
-- Scenario at `4edcd9df`: `https://github.com/Arvo-AI/aurora-lab/tree/4edcd9dfbc48cbd9ca8ea031e429832cf72842d0/scenarios/12-two-faults-oom-and-selector`
-- Alert `scenarios/12-two-faults-oom-and-selector/scenario.yaml#L3`; accepted fixes `#L17-L18`; the 244MiB measurement `scenarios/12-two-faults-oom-and-selector/README.md#L160`; the worker log line `app/shop.yaml#L73`; the HTTP route `app/shop.yaml#L256-L257`.
+- Contract `contracts/scenario_12.yaml`, schema `contracts/schema.json`, provenance `contracts/PROVENANCE.md`, decisions `contracts/DECISIONS.md`, audit `contracts/AUDIT.md`.
+- Scenario, alert and fixes at `4edcd9df`: `https://github.com/Arvo-AI/aurora-lab/tree/4edcd9dfbc48cbd9ca8ea031e429832cf72842d0/scenarios/12-two-faults-oom-and-selector` (`scenario.yaml#L3`, `#L17-L18`); the 244MiB measurement `scenarios/12-two-faults-oom-and-selector/README.md#L160`; the worker log line `app/shop.yaml#L73`; the HTTP route `app/shop.yaml#L256-L257`.
 - Fork base `kpnaranj/aurora` at `12c67cffd45c6b0b8c5da1d2e160a945e2936f49`.
