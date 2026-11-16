@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.25] - 2026-11-16
+
 ### Changed
 - Investigations: an RCA that stops before it finishes (time limit, stall
   check, an error, or a worker that died) no longer fails with nothing to
@@ -18,6 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to PagerDuty, incident.io or ServiceNow or routing to team channels; those
   wait for a finished report. The incident page no longer marks a quiet investigation as an error
   on its own; it keeps checking while it runs.
+- GitHub App: the webhook secret set in an env var now takes precedence over
+  the secrets backend (it used to be a fallback). If both are set, make sure
+  the env value is current before upgrading.
+- MCP servers start with an allowlisted environment plus their own
+  credentials instead of a copy of the server's, so they no longer receive
+  server secrets.
 
 ### Added
 - Investigations: an RCA that stopped before it finished can be continued from
@@ -25,6 +33,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in the same session with everything gathered so far and a fresh time budget,
   then updates the report and the card in place. Up to three continuations per
   incident.
+- GitHub App: the private key and webhook secret can be set as env vars
+  (`GITHUB_APP_PRIVATE_KEY`, `GITHUB_APP_WEBHOOK_SECRET`) instead of the
+  secrets backend; when set, they are used and the backend is not called.
+  In Helm, set them under `secrets.backend`.
+- Monitor: a Chat history tab for auditing every chat and tool call in the
+  organization, with search, filters, failure categories (permission, blocked,
+  not connected, ...) and a read-only transcript. Admins can always use it;
+  editors only when "Chat history audit" allows it in Organization settings.
 - RabbitMQ: connect more than one broker. Each broker is its own account,
   keyed by its management host and port, with an optional name. The connector
   page lists every broker and can remove one at a time. Agent tools take
@@ -42,6 +58,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `page_size` is reported. Connector access
   can grant each broker to a role or team on its own. An existing single
   connection keeps working with no action needed.
+- Prediscovery no longer re-runs on every token refresh or credential re-save;
+  it runs when a connector is newly connected or reconnected.
 
 ## [1.5.24] - 2026-11-12
 
