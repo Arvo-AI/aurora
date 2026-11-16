@@ -666,18 +666,18 @@ secrets:
     MEMGRAPH_USER: ""
     MEMGRAPH_PASSWORD: ""
 
-  # --- LLM API Keys (secret-llm.yaml) ---
-  # Mounted by: chatbot, celery-worker, celery-beat
   onboarding:
     # Setup-email secrets. Mounted only into the API server and the Celery
     # worker, the two services that send or sign setup emails.
     # existingSecret: ""
-    ONBOARDING_UNSUBSCRIBE_SECRET: ""   # Signs unsubscribe links (defaults to FLASK_SECRET_KEY)
+    ONBOARDING_UNSUBSCRIBE_SECRET: ""   # Signs unsubscribe links; required for setup emails
     ONBOARDING_TEAM_WEBHOOK_URL: ""     # Slack incoming webhook; posts signup emails and progress, so keep it internal
     ONBOARDING_GRAPH_TENANT_ID: ""      # Send setup emails via Microsoft 365 (Entra app with Mail.Send)
     ONBOARDING_GRAPH_CLIENT_ID: ""
     ONBOARDING_GRAPH_CLIENT_SECRET: ""
 
+  # --- LLM API Keys (secret-llm.yaml) ---
+  # Mounted by: chatbot, celery-worker, celery-beat
   llm:
     # Use a pre-existing Kubernetes Secret instead of chart-managed secrets.
     # When set, the chart will not create secret-llm and all pods will reference

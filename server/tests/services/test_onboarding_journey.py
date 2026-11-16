@@ -246,3 +246,11 @@ def test_checkin_waits_when_a_tool_is_saved_but_nothing_checks_out():
     assert due_email(s, at(hours=23)) is None
     s.parts_done = ["cloud"]
     assert due_email(s, at(hours=23)) == Due("checkin")
+
+
+def test_checkin_waits_when_a_missing_part_only_failed_its_check():
+    # Code checks out, but the alert tool's check timed out: it may well be connected.
+    s = state(sent={"welcome": at(minutes=4)}, parts_done=["code"], parts_unknown=["alerts"])
+    assert due_email(s, at(hours=23)) is None
+    s.parts_unknown = ["code"]  # the failed one is connected through another tool
+    assert due_email(s, at(hours=23)) == Due("checkin")

@@ -21,16 +21,18 @@ export interface SetupJourney {
   first_name: string | null
   // Whose team the guide is on ("Aurora" unless a self-hosted install says otherwise).
   team: string
+  // The account is in its first weeks, when the in-app setup companion shows.
+  recent: boolean
 }
 
-const EMPTY: SetupJourney = { guide: null, via: null, first_name: null, team: "Aurora" }
+const EMPTY: SetupJourney = { guide: null, via: null, first_name: null, team: "Aurora", recent: false }
 
 async function load(): Promise<SetupJourney> {
   try {
     const r = await fetch("/api/onboarding/journey", { cache: "no-store" })
     if (!r.ok) return EMPTY
     const d = await r.json()
-    return { guide: d?.guide ?? null, via: d?.via ?? null, first_name: d?.first_name ?? null, team: d?.team || "Aurora" }
+    return { guide: d?.guide ?? null, via: d?.via ?? null, first_name: d?.first_name ?? null, team: d?.team || "Aurora", recent: d?.recent === true }
   } catch {
     return EMPTY
   }

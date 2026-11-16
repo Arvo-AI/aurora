@@ -48,6 +48,8 @@ class JourneyState:
     # Credentials are stored for some tool, whatever the live check said. A
     # check can fail for a tool connected minutes ago and never seen working.
     has_stored: bool = False
+    # Parts with a tool whose check failed this time: unknown, not missing.
+    parts_unknown: list[str] = field(default_factory=list)
     unsubscribed: bool = False
 
 
@@ -73,6 +75,9 @@ def _followup_due(s: JourneyState, age: timedelta) -> Due | None:
         # would say "nothing is connected", which may be wrong. Wait for a
         # clean check; the window is days long.
         if s.has_stored and not s.parts_done:
+            return None
+        # Same when a part the check-in would call missing just failed its check.
+        if set(s.parts_unknown) - set(s.parts_done):
             return None
         return Due("checkin")
     # Nudges assume nothing was ever connected; a check that fails for a

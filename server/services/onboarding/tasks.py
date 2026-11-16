@@ -26,6 +26,12 @@ def evaluate_journey_task(user_id: str) -> str | None:
         return None
 
 
+@celery_app.task(name="services.onboarding.tasks.ping_team_task", ignore_result=True)
+def ping_team_task(text: str) -> None:
+    from services.onboarding.sender import post_team
+    post_team(text)
+
+
 @celery_app.task(name="services.onboarding.tasks.sweep_journeys")
 def sweep_journeys() -> int:
     from services.onboarding.journey import active_journeys, evaluate

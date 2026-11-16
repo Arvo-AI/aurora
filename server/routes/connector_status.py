@@ -1052,7 +1052,8 @@ def _check_all_connectors(
             return provider, checker(creds)
         except Exception as exc:
             logger.warning("[STATUS] %s check raised: %s", provider, exc)
-            return provider, {"connected": False}
+            # check_failed: unknown rather than disconnected (setup emails use it).
+            return provider, {"connected": False, "check_failed": True}
 
     providers.setdefault("onprem", user_id)
     providers.setdefault("kubectl", user_id)
@@ -1073,7 +1074,7 @@ def _check_all_connectors(
             except Exception as exc:
                 prov = futures[future]
                 logger.warning("[STATUS] %s check timed out: %s", prov, exc)
-                results[prov] = {"connected": False}
+                results[prov] = {"connected": False, "check_failed": True}
 
     # CloudBees OC/PAT (cloudbees_oc), FM (cloudbees_fm), and the standalone
     # controller fleet (cloudbees_fleet) are stored as separate providers but

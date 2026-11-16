@@ -6,6 +6,8 @@ Tables (created in utils/db/db_utils.py):
 * ``onboarding_journeys``: one row per user. Rows made lazily for existing
   users (so the app can show them a guide) never get emails.
 * ``onboarding_emails``: one row per email sent, unique per (user, kind).
+  The row is written before the email goes out, so a crash at the wrong
+  moment can lose an email but never sends one twice.
 """
 
 from __future__ import annotations
@@ -34,7 +36,7 @@ def _skip_domains() -> set[str]:
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    return datetime.now(timezone.utc)
 
 
 def _first_name(name: str | None) -> str | None:
@@ -45,7 +47,12 @@ def _first_name(name: str | None) -> str | None:
 
 
 def _assign_guide(cur) -> str | None:
-    cur.execute("SELECT guide_key, COUNT(*) FROM onboarding_journeys WHERE guide_key IS NOT NULL GROUP BY guide_key")
+    # Balance on the accounts guides actually look after (the ones that get
+    # emails), not everyone who has opened the app.
+    cur.execute(
+        """SELECT guide_key, COUNT(*) FROM onboarding_journeys
+            WHERE guide_key IS NOT NULL AND emails_enabled GROUP BY guide_key"""
+    )
     g = guide_mod.pick(dict(cur.fetchall()))
     return g.key if g else None
 
@@ -96,15 +103,16 @@ def journey_for_app(user_id: str) -> dict:
     """
     with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
         cur.execute(
-            """SELECT u.name, u.org_id, u.github_user_id, u.slack_team_id, j.via, j.guide_key
+            """SELECT u.name, u.org_id, u.github_user_id, u.slack_team_id, j.via, j.guide_key,
+                      COALESCE(u.created_at > NOW() - (%s * INTERVAL '1 day'), FALSE)
                  FROM users u LEFT JOIN onboarding_journeys j ON j.user_id = u.id
                 WHERE u.id = %s""",
-            (user_id,),
+            (schedule.JOURNEY_LENGTH.days, user_id),
         )
         row = cur.fetchone()
         if not row:
-            return {"guide": None, "via": None, "first_name": None, "team": guide_mod.team_name()}
-        name, org_id, gh_id, slack_team, via, guide_key = row
+            return {"guide": None, "via": None, "first_name": None, "team": guide_mod.team_name(), "recent": False}
+        name, org_id, gh_id, slack_team, via, guide_key, recent = row
         via = via or _via_from_user(gh_id, slack_team)
         if guide_mod.load_guides() and not guide_mod.by_key(guide_key):
             guide_key = _assign_guide(cur)
@@ -116,8 +124,9 @@ def journey_for_app(user_id: str) -> dict:
             )
             conn.commit()
     guide = guide_mod.by_key(guide_key)
+    # recent: still in the first weeks, when the in-app setup companion shows.
     return {"guide": guide.public() if guide else None, "via": via, "first_name": _first_name(name),
-            "team": guide_mod.team_name()}
+            "team": guide_mod.team_name(), "recent": bool(recent)}
 
 
 def unsubscribe(user_id: str) -> None:
@@ -155,8 +164,15 @@ def journeys_in_org(org_id: str) -> list[str]:
         return [r[0] for r in cur.fetchall()]
 
 
-def _connected_providers(user_id: str, org_id: str) -> frozenset[str] | None:
-    """Live connector checks, as the Connectors page does. None if they failed."""
+@dataclass(frozen=True)
+class _Checked:
+    connected: frozenset[str]
+    # Tools whose own check failed or timed out: unknown, not disconnected.
+    unknown: frozenset[str]
+
+
+def _connected_providers(user_id: str, org_id: str) -> _Checked | None:
+    """Live connector checks, as the Connectors page does. None if they all failed."""
     try:
         from routes.connector_status import _check_all_connectors
         from routes.slack.slack_onboarding import _github_app_ready
@@ -164,7 +180,11 @@ def _connected_providers(user_id: str, org_id: str) -> frozenset[str] | None:
     except Exception:
         logger.warning("[ONBOARDING] connector check failed for user_hash=%s", hash_for_log(user_id), exc_info=True)
         return None
-    return frozenset(p for p, s in results.items() if s.get("connected") and p in ALL_PROVIDERS)
+    ours = {p: st for p, st in results.items() if p in ALL_PROVIDERS}
+    return _Checked(
+        connected=frozenset(p for p, st in ours.items() if st.get("connected")),
+        unknown=frozenset(p for p, st in ours.items() if st.get("check_failed")),
+    )
 
 
 @dataclass
@@ -243,8 +263,32 @@ def _note_new_connections(r: _Row, providers: frozenset[str], sent: dict) -> Non
             r.pending_since = r.pending_since or _now()
 
 
-def _send_due(cur, user_id: str, r: _Row, providers: frozenset[str], state: schedule.JourneyState) -> str | None:
-    from services.onboarding.sender import ping_team, send, unsubscribe_url
+def _journey_org(user_id: str) -> str | None:
+    with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT org_id FROM onboarding_journeys WHERE user_id = %s AND emails_enabled", (user_id,))
+        row = cur.fetchone()
+        return row[0] if row else None
+
+
+@dataclass
+class _Claim:
+    kind: str
+    kinds: list[str]
+    to: str
+    guide: guide_mod.Guide
+    subject: str
+    text: str
+    html: str
+    unsubscribe_url: str
+
+
+def _claim_due(cur, user_id: str, r: _Row, providers: frozenset[str], state: schedule.JourneyState) -> _Claim | None:
+    """Pick the email that is due and record it as sent, before sending.
+
+    Committed with the rest of the journey update, so a crash between here
+    and the provider loses this email instead of sending it twice.
+    """
+    from services.onboarding.sender import unsubscribe_url
     due = schedule.due_email(state, _now())
     if not due:
         return None
@@ -258,41 +302,64 @@ def _send_due(cur, user_id: str, r: _Row, providers: frozenset[str], state: sche
         unsubscribe_url=unsubscribe_url(user_id),
     )
     msg = compose(due.kind, ctx, due.parts)
-    if not send(r.email, r.guide, msg.subject, msg.text, msg.html, ctx.unsubscribe_url):
-        return None
     kinds = [f"connected:{p}" for p in due.parts] if due.kind == "connected" else [due.kind]
-    for k in kinds:
-        cur.execute(
-            """INSERT INTO onboarding_emails (user_id, kind, subject)
-               VALUES (%s, %s, %s) ON CONFLICT (user_id, kind) DO NOTHING""",
-            (user_id, k, msg.subject[:255]),
-        )
-    if due.kind == "connected":
-        r.pending = [p for p in r.pending if p not in due.parts]
-        r.pending_since = r.pending_since if r.pending else None
-    ping_team(f"Sent \"{msg.subject}\" to {r.email} from {r.guide.first_name}.")
-    return due.kind
+    cur.execute(
+        """INSERT INTO onboarding_emails (user_id, kind, subject)
+           SELECT %s, k, %s FROM unnest(%s::text[]) AS k
+           ON CONFLICT (user_id, kind) DO NOTHING RETURNING kind""",
+        (user_id, msg.subject[:255], kinds),
+    )
+    if len(cur.fetchall()) != len(kinds):
+        return None  # another run already recorded it
+    return _Claim(due.kind, kinds, r.email, r.guide, msg.subject, msg.text, msg.html, ctx.unsubscribe_url)
+
+
+def _release(user_id: str, kinds: list[str]) -> None:
+    """The provider refused the email: drop the claim so a later run tries again."""
+    with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM onboarding_emails WHERE user_id = %s AND kind = ANY(%s)", (user_id, kinds))
+        conn.commit()
 
 
 def evaluate(user_id: str) -> str | None:
     """Look at one journey, note new connections, send whatever is due.
 
     Returns the kind of email sent, if any. Safe to run twice at once: the
-    row lock serializes it and onboarding_emails is unique per kind.
+    row lock serializes the decision and onboarding_emails is unique per
+    kind. The live checks and the send both happen outside the lock.
     """
-    from services.onboarding.sender import emails_enabled
+    from services.onboarding.sender import emails_enabled, ping_team, send
+    from utils.auth.stateless_auth import set_rls_context
     if not emails_enabled():
         return None
+    org_id = _journey_org(user_id)
+    if not org_id:
+        return None
+    checked = _connected_providers(user_id, org_id)
 
     with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+        # The stored-credential tables are row-level secured, so _has_stored
+        # sees nothing without this outside a request. It commits, so it goes
+        # before the lock.
+        if not set_rls_context(cur, conn, user_id, org_id=org_id, log_prefix="[ONBOARDING]"):
+            return None
         r = _load_locked(cur, user_id)
-        providers = _connected_providers(user_id, r.org_id) if r else None
-        if r is None or providers is None:
+        if r is None:
             conn.rollback()
             return None
-
         sent = _sent(cur, user_id)
-        _note_new_connections(r, providers, sent)
+        # A part announced by an earlier run that stopped before clearing it.
+        r.pending = [p for p in r.pending if f"connected:{p}" not in sent]
+        r.pending_since = r.pending_since if r.pending else None
+        if checked is None:
+            # Nothing is known about connections, but the welcome doesn't need them.
+            if "welcome" in sent:
+                conn.rollback()
+                return None
+            providers, unknown = frozenset(r.known), ALL_PROVIDERS
+        else:
+            providers, unknown = checked.connected, checked.unknown
+            _note_new_connections(r, providers, sent)
         ever = providers | r.known
         state = schedule.JourneyState(
             enrolled_at=r.created_at,
@@ -303,9 +370,10 @@ def evaluate(user_id: str) -> str | None:
             pending_parts=r.pending,
             pending_since=r.pending_since,
             has_stored=_has_stored(cur, r.org_id),
+            parts_unknown=[p for p in dict.fromkeys(part_of(x) for x in sorted(unknown)) if p],
             unsubscribed=r.unsubscribed,
         )
-        kind = _send_due(cur, user_id, r, providers, state)
+        claim = _claim_due(cur, user_id, r, providers, state)
         cur.execute(
             """UPDATE onboarding_journeys
                   SET known_connectors = %s, pending_parts = %s, pending_since = %s, last_checked_at = NOW()
@@ -313,4 +381,11 @@ def evaluate(user_id: str) -> str | None:
             (sorted(ever), r.pending, r.pending_since, user_id),
         )
         conn.commit()
-    return kind
+
+    if claim is None:
+        return None
+    if not send(claim.to, claim.guide, claim.subject, claim.text, claim.html, claim.unsubscribe_url):
+        _release(user_id, claim.kinds)
+        return None
+    ping_team(f"Sent \"{claim.subject}\" to {claim.to} from {claim.guide.first_name}.")
+    return claim.kind

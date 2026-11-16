@@ -21,6 +21,7 @@ import GuideAvatar from "@/components/onboarding/GuideAvatar"
 const GREEN = "#2eb67d"
 const EASE = [0.22, 1, 0.36, 1] as const
 const MIN_KEY = "aurora_setup_companion_min"
+const HIDE_KEY = "aurora_setup_companion_hidden"
 const NOTICE_MS = 10_000
 const CARD = "w-[min(340px,calc(100vw-2.5rem))] rounded-2xl border border-white/10 bg-[#0d0f10]/95 shadow-[0_24px_60px_-20px_rgba(0,0,0,0.9)] backdrop-blur-xl"
 
@@ -29,6 +30,12 @@ function readMin(): boolean {
 }
 function writeMin(v: boolean) {
   try { if (v) localStorage.setItem(MIN_KEY, "1"); else localStorage.removeItem(MIN_KEY) } catch { /* per-browser nicety only */ }
+}
+function readHidden(): boolean {
+  try { return localStorage.getItem(HIDE_KEY) === "1" } catch { return false }
+}
+function writeHidden() {
+  try { localStorage.setItem(HIDE_KEY, "1") } catch { /* per-browser nicety only */ }
 }
 function cameFromSetup(): boolean {
   try { return Boolean(sessionStorage.getItem(SETUP_RETURN_KEY)) } catch { return false }
@@ -167,9 +174,9 @@ function GuideLinks({ guide }: Readonly<{ guide: SetupGuide | null }>) {
   )
 }
 
-function CompanionPanel({ panelRef, connected, guide, allDone, canConnect, reduce, onClose, onShrink }: Readonly<{
+function CompanionPanel({ panelRef, connected, guide, allDone, canConnect, reduce, onClose, onShrink, onHide }: Readonly<{
   panelRef: RefObject<HTMLDivElement>; connected: ReadonlySet<string>; guide: SetupGuide | null
-  allDone: boolean; canConnect: boolean; reduce: boolean; onClose: () => void; onShrink: () => void
+  allDone: boolean; canConnect: boolean; reduce: boolean; onClose: () => void; onShrink: () => void; onHide: () => void
 }>) {
   const { done, total } = progress(connected)
   return (
@@ -224,15 +231,24 @@ function CompanionPanel({ panelRef, connected, guide, allDone, canConnect, reduc
         )}
         <GuideLinks guide={guide} />
       </div>
-      {!allDone && (
+      <div className="flex border-t border-white/[0.06] text-xs text-white/35">
+        {!allDone && (
+          <button
+            type="button"
+            onClick={onShrink}
+            className="flex-1 rounded-bl-2xl py-2 transition-colors hover:text-white/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-white/60 focus-visible:text-white/80"
+          >
+            Make this smaller
+          </button>
+        )}
         <button
           type="button"
-          onClick={onShrink}
-          className="w-full rounded-b-2xl border-t border-white/[0.06] py-2 text-xs text-white/35 transition-colors hover:text-white/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-white/60 focus-visible:text-white/80"
+          onClick={onHide}
+          className={`flex-1 py-2 transition-colors hover:text-white/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-white/60 focus-visible:text-white/80 ${allDone ? "rounded-b-2xl" : "rounded-br-2xl border-l border-white/[0.06]"}`}
         >
-          Make this smaller
+          Don&apos;t show again
         </button>
-      )}
+      </div>
     </motion.div>
   )
 }
@@ -242,10 +258,17 @@ export default function SetupCompanion() {
   const reduce = useReducedMotion() ?? false
   const { data: session, status } = useSession()
   const signedIn = status === "authenticated"
+  const journey = useSetupJourney()
+  const [hidden, setHidden] = useState(true)
+  useEffect(() => { setHidden(readHidden()) }, [])
+  const isViewer = session?.user?.role === ROLE_VIEWER
+  const onSetupPage = Boolean(pathname?.startsWith("/onboarding"))
+  // Only new accounts that can connect tools get it, and never on the setup
+  // page itself: each status call runs live checks against every provider.
+  const active = signedIn && journey?.recent === true && !isViewer && !onSetupPage && !hidden
   // Once the whole stack is connected there is nothing left to watch for.
   const [settled, setSettled] = useState(false)
-  const { connected } = useConnectedSet(signedIn && !settled ? 30_000 : null)
-  const journey = useSetupJourney()
+  const { connected } = useConnectedSet(!settled ? 30_000 : null, active)
   const [open, setOpen] = useState(false)
   const [min, setMin] = useState(false)
   const { notice, clear } = useConnectNotice(connected)
@@ -261,14 +284,12 @@ export default function SetupCompanion() {
   const { done, total, next } = progress(set)
   const allDone = next === null
   const guide = journey?.guide ?? null
-  const isViewer = session?.user?.role === ROLE_VIEWER
   useEffect(() => { setSettled(allDone) }, [allDone])
 
-  if (!signedIn || connected === null || journey === null) return null
-  if (pathname?.startsWith("/onboarding")) return null
+  if (!active || connected === null || journey === null) return null
   // Without a guide there is nothing to offer once setup is over, except the
   // notice for the connection that finished it.
-  if (!guide && (isViewer || allDone) && !notice) return null
+  if (!guide && allDone && !notice) return null
 
   const label = allDone ? "Need a hand?" : `Setup ${done} of ${total}`
   const showPill = Boolean(guide) || !allDone
@@ -290,6 +311,7 @@ export default function SetupCompanion() {
             reduce={reduce}
             onClose={close}
             onShrink={() => { setOpen(false); setMin(true); writeMin(true); buttonRef.current?.focus() }}
+            onHide={() => { setOpen(false); setHidden(true); writeHidden() }}
           />
         )}
       </AnimatePresence>

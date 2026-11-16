@@ -77,7 +77,8 @@ def is_public_https(url: str) -> bool:
 
 
 def _unsubscribe_secret() -> bytes:
-    return (os.getenv("ONBOARDING_UNSUBSCRIBE_SECRET") or os.getenv("FLASK_SECRET_KEY") or "").encode()
+    # Its own key: rotating the session key mustn't break every link already sent.
+    return os.getenv("ONBOARDING_UNSUBSCRIBE_SECRET", "").encode()
 
 
 def unsubscribe_token(user_id: str) -> str:
@@ -198,10 +199,29 @@ def send(to_email: str, guide: Guide, subject: str, text: str, html_body: str, u
     return _send_smtp(_message(to_email, from_name, from_addr, guide, subject, text, html_body, unsub_url, bcc))
 
 
-def ping_team(text: str) -> None:
-    """One line in the team's Slack, so a person can follow up by hand."""
+def _team_webhook() -> str:
     url = os.getenv("ONBOARDING_TEAM_WEBHOOK_URL", "")
-    if not url.startswith("https://"):
+    return url if url.startswith("https://") else ""
+
+
+def ping_team(text: str) -> None:
+    """One line in the team's Slack, so a person can follow up by hand.
+
+    Posted from a Celery task: signup requests and the journey sweep don't
+    wait on Slack. Never raises.
+    """
+    if not _team_webhook():
+        return
+    try:
+        from services.onboarding.tasks import ping_team_task
+        ping_team_task.delay(text)
+    except Exception:
+        logger.warning("[ONBOARDING] could not queue the team ping", exc_info=True)
+
+
+def post_team(text: str) -> None:
+    url = _team_webhook()
+    if not url:
         return
     try:
         requests.post(url, json={"text": text}, timeout=5)

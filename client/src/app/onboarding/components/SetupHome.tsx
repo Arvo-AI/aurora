@@ -71,6 +71,16 @@ function useInitiallyLit(connected: Set<string> | null) {
   return lit
 }
 
+function useStalled(ready: boolean, ms: number) {
+  const [stalled, setStalled] = useState(false)
+  useEffect(() => {
+    if (ready) return
+    const t = globalThis.setTimeout(() => setStalled(true), ms)
+    return () => globalThis.clearTimeout(t)
+  }, [ready, ms])
+  return stalled
+}
+
 function useLeave(connected: ReadonlySet<string> | null) {
   const [leaving, setLeaving] = useState(false)
   const leave = async () => {
@@ -161,6 +171,8 @@ export default function SetupHome({ via: viaProp }: Readonly<{ via?: string }>) 
     animate: ready ? { opacity: 1, y: 0 } : { opacity: 0, y: 8 },
     transition: reduce ? { duration: 0 } : { delay: step * 0.04, duration: 0.55, ease: EASE },
   })
+  // A status call that hangs mustn't leave the page without a way out.
+  const stalled = useStalled(ready, 4000)
 
   return (
     <main className="h-full overflow-y-auto">
@@ -169,6 +181,7 @@ export default function SetupHome({ via: viaProp }: Readonly<{ via?: string }>) 
           {!allDone && (
             <motion.button
               {...reveal(0)}
+              animate={ready || stalled ? { opacity: 1, y: 0 } : { opacity: 0, y: 8 }}
               type="button"
               onClick={leave}
               disabled={leaving}
