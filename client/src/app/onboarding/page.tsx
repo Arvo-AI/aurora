@@ -5,6 +5,7 @@ import { connectorRegistry } from "@/components/connectors/ConnectorRegistry"
 import ProgressBar from "./components/ProgressBar"
 import ConnectorTile from "./components/ConnectorTile"
 import Image from "next/image"
+import Link from "next/link"
 import { useState, useMemo } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 
@@ -166,6 +167,10 @@ export default function OnboardingPage() {
                 infrastructure, detects anomalies, runs root cause analysis, and helps
                 your team resolve incidents faster — automatically.
               </p>
+              <Link href="/onboarding/diagnose" className="block rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-5 transition hover:bg-emerald-500/15">
+                <span className="block text-sm font-semibold text-emerald-300">Try Aurora on a failed build →</span>
+                <span className="mt-2 block text-xs leading-5 text-zinc-300">Paste a CI log and get a diagnosis with evidence. No connections needed. You can also start with a sample.</span>
+              </Link>
               <p className="text-[#888] text-xs leading-relaxed">
                 Let&apos;s connect your tools so Aurora can start working for your team
                  — you can always change things later.
