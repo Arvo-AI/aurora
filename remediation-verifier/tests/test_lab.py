@@ -18,7 +18,7 @@ import pytest
 from simulated_cluster import FULL_STEPS, SimulatedCluster
 from simulated_session import CAPTURED_AT, RecordingSleep
 from verifier.contract import load_contract
-from verifier.kubectl import Kubectl, LiveError, parse_wget, probe_in_cluster
+from verifier.kubectl import Kubectl, LiveError, RolloutTimeout, parse_wget, probe_in_cluster
 from verifier.lab import Lab, LiveSession, endpoint_addresses, fix_step_args
 from verifier.observations import MODE_LIVE
 
@@ -346,6 +346,48 @@ def test_the_rollout_wait_uses_the_contract_deployment_and_timeout(
     assert recorder.text_calls == [
         ["-n", "shop", "rollout", "status", "deployment/worker", "--timeout=120s"]
     ]
+
+
+def test_a_rollout_deadline_is_pacing_and_not_a_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    error = LiveError(
+        "kubectl -n shop rollout status deployment/worker exited 1: "
+        "error: timed out waiting for the condition"
+    )
+    kubectl = ProbeKubectl(error=error)
+    monkeypatch.setattr(Lab, "kubectl", lambda self, timeout_s=10.0: kubectl)
+    session = LiveSession(load_contract(), Lab(Path("/lab")))
+    with pytest.raises(RolloutTimeout, match="did not finish in 30s"):
+        session.wait_rollout(30)
+
+
+def test_a_rollout_that_fails_for_another_reason_still_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    error = LiveError("kubectl -n shop rollout status deployment/worker exited 1: Forbidden")
+    kubectl = ProbeKubectl(error=error)
+    monkeypatch.setattr(Lab, "kubectl", lambda self, timeout_s=10.0: kubectl)
+    session = LiveSession(load_contract(), Lab(Path("/lab")))
+    with pytest.raises(LiveError) as caught:
+        session.wait_rollout(30)
+    assert not isinstance(caught.value, RolloutTimeout)
+
+
+def test_the_rollout_wait_gets_its_own_command_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[float] = []
+    kubectl = ProbeKubectl()
+
+    def builder(self: Lab, timeout_s: float = 10.0) -> ProbeKubectl:
+        seen.append(timeout_s)
+        return kubectl
+
+    monkeypatch.setattr(Lab, "kubectl", builder)
+    session = LiveSession(load_contract(), Lab(Path("/lab")))
+    session.wait_rollout(30)
+    assert seen == [10.0, 35.0]
 
 
 def test_a_fix_step_runs_as_kubectl_arguments(monkeypatch: pytest.MonkeyPatch) -> None:

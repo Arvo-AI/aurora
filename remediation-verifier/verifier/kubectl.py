@@ -33,6 +33,15 @@ class LiveError(RuntimeError):
     """A kubectl command or an HTTP probe could not be executed."""
 
 
+class RolloutTimeout(LiveError):
+    """The rollout did not finish before its budget.
+
+    A fix that never touches the worker leaves it crash-looping, so the
+    rollout never finishes. That is a state for the checks to read, not a
+    failure to look, and it is why this type exists apart from `LiveError`.
+    """
+
+
 @dataclass(frozen=True)
 class Kubectl:
     """Small subprocess wrapper. No Kubernetes client, only the binary.

@@ -15,6 +15,7 @@ declared check.
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
@@ -29,7 +30,7 @@ from verifier.decision import (
     decide_reproduction,
     execution_error,
 )
-from verifier.kubectl import LiveError
+from verifier.kubectl import LiveError, RolloutTimeout
 from verifier.model import (
     CheckResult,
     Contract,
@@ -44,6 +45,8 @@ from verifier.report import Run
 BASELINE_VARIANT = "baseline"
 REMEDIATION = "remediation"
 NOT_CAPTURED = "not captured"
+
+LOGGER = logging.getLogger(__name__)
 
 
 class RunnerError(RuntimeError):
@@ -61,16 +64,18 @@ class Plan:
     240s for the deployments and a fault wait of up to 240s (lab.sh#L60-L83).
     The settle it sleeps afterwards is zero: the verifier's own window settles.
 
-    The rollout uses the 120s the plan sets for a single replica, which covers
-    an image pull on a cold node. The endpoint wait is a pacing step, not a
-    check: five seconds is longer than the controller needs to fill a slice,
-    and if it is still empty the window runs anyway and the two endpoint checks
-    decide on the end capture; the poll is one second for the same reason.
+    The rollout waits 30s for a single replica. That covers a pod that has to
+    be scheduled and started in this lab, where the images are already on the
+    node; a fix that never touches the worker keeps it crash-looping and the
+    budget elapses, which the end capture then decides. The endpoint wait is a
+    pacing step for the same reason: five seconds is longer than the controller
+    needs to fill a slice, and if it is still empty the window runs anyway and
+    the two endpoint checks decide on the end capture; the poll is one second.
     """
 
     break_timeout_s: float = 720.0
     fix_timeout_s: float = 60.0
-    rollout_timeout_s: float = 120.0
+    rollout_timeout_s: float = 30.0
     endpoints_timeout_s: float = 5.0
     endpoint_poll_s: float = 1.0
     variant_timeout_s: float = 900.0
@@ -183,7 +188,10 @@ class Runner:
             with timeline.phase("fix"):
                 self._session.apply_fix(fix.steps, self._plan.fix_timeout_s)
             with timeline.phase("rollout"):
-                self._session.wait_rollout(self._plan.rollout_timeout_s)
+                try:
+                    self._session.wait_rollout(self._plan.rollout_timeout_s)
+                except RolloutTimeout as error:
+                    LOGGER.info("%s; the end capture decides", error)
             with timeline.phase("endpoints"):
                 self._session.wait_endpoints(
                     self._plan.endpoints_timeout_s, self._plan.endpoint_poll_s

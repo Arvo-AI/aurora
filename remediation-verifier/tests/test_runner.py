@@ -16,6 +16,7 @@ from verifier.decision import (
     EXECUTION_ERROR,
     INCONCLUSIVE,
     NOT_CONFIRMED,
+    REJECTED,
     VERIFIED_WITHIN_CONTRACT,
 )
 from verifier.model import ContractError
@@ -49,7 +50,7 @@ def test_a_remediation_fixes_after_the_pre_fix_capture_and_before_the_waits() ->
         ("break", 720.0),
         ("capture", "full"),
         ("fix", simulation.contract.oracle.fixes["full"].steps),
-        ("rollout", 120.0),
+        ("rollout", 30.0),
         ("endpoints", (5.0, 1.0)),
     ]
     assert calls[8:10] == [("capture", "full"), ("capture", "full")]
@@ -79,7 +80,7 @@ def test_a_baseline_that_does_not_reproduce_blocks_every_positive() -> None:
 
 
 def test_a_failed_rollout_becomes_an_execution_error_and_the_table_continues() -> None:
-    simulation = simulate("rollout_timeout")
+    simulation = simulate("rollout_failure")
     assert len(simulation.attempts) == len(VARIANTS)
     assert simulation.attempt("baseline").verdict.reproduction_status == CONFIRMED
     for name in VARIANTS[1:]:
@@ -87,6 +88,16 @@ def test_a_failed_rollout_becomes_an_execution_error_and_the_table_continues() -
         assert verdict.status == EXECUTION_ERROR
         assert verdict.results == ()
         assert verdict.reason.startswith("rollout failed:")
+
+
+def test_a_rollout_that_runs_out_of_budget_still_reaches_a_verdict() -> None:
+    """The wait paces the sequence; the end capture is what decides."""
+    simulation = simulate("rollout_timeout")
+    assert len(simulation.attempts) == len(VARIANTS)
+    statuses = {name: simulation.attempt(name).verdict.status for name in VARIANTS[1:]}
+    assert statuses["full"] == VERIFIED_WITHIN_CONTRACT
+    assert statuses["noop"] == REJECTED
+    assert simulation.attempt("noop").verdict.reproduction_status == CONFIRMED
 
 
 def test_a_variant_that_exceeds_its_budget_stops_before_the_next_phase() -> None:
@@ -168,5 +179,5 @@ def test_a_simulated_capture_never_carries_the_live_label() -> None:
 
 
 def test_a_variant_that_never_captured_has_no_capture_date() -> None:
-    simulation = simulate("rollout_timeout", variants=["noop"])
+    simulation = simulate("rollout_failure", variants=["noop"])
     assert simulation.attempt("noop").captured_at == NOT_CAPTURED

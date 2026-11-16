@@ -111,14 +111,17 @@ def test_a_verified_run_carries_evidence_for_every_check() -> None:
     assert all(result.evidence for result in attempt.verdict.results)
 
 
-def test_a_rollout_that_times_out_never_produces_a_positive() -> None:
+def test_a_rollout_timeout_is_not_a_seventh_check() -> None:
+    """The wait paces the sequence; the end capture and the six checks decide."""
     simulation = simulate("rollout_timeout")
-    statuses = {attempt.verdict.status for attempt in simulation.attempts}
-    assert VERIFIED_WITHIN_CONTRACT not in statuses
-    for name in ("full", "partial_worker_only", "partial_frontend_only", "noop"):
-        verdict = simulation.attempt(name).verdict
-        assert verdict.status == EXECUTION_ERROR
-        assert verdict.results == ()
+    statuses = {attempt.variant: attempt.verdict.status for attempt in simulation.attempts}
+    assert EXECUTION_ERROR not in statuses.values()
+    assert statuses["full"] == VERIFIED_WITHIN_CONTRACT
+    assert statuses["partial_worker_only"] == REJECTED
+    assert statuses["partial_frontend_only"] == REJECTED
+    assert statuses["noop"] == REJECTED
+    assert all(result.status == PASS for result in simulation.attempt("full").verdict.results)
+    assert all(result.evidence for result in simulation.attempt("full").verdict.results)
 
 
 def test_an_empty_slice_is_rejected_and_not_an_execution_error() -> None:

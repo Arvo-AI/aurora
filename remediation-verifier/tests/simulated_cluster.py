@@ -17,7 +17,8 @@ The scenarios name the failure modes worth pinning:
 | `stale_pod` | Fix worked, the OOMKilled pod is still terminating |
 | `flapping` | Fix applied, the worker restarts during the window |
 | `unready_endpoints` | Address appears but never reports ready |
-| `rollout_timeout` | `kubectl rollout status` never returns success |
+| `rollout_timeout` | `kubectl rollout status` runs out of budget; the checks decide |
+| `rollout_failure` | `kubectl rollout status` is refused, which is an execution error |
 | `no_endpoints` | The slice stays empty until the wait gives up |
 """
 
@@ -28,7 +29,7 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from verifier.kubectl import LiveError
+from verifier.kubectl import LiveError, RolloutTimeout
 
 HEALTHY_ADDRESS = ("10.244.0.11", True)
 MEMORY_LIMIT = re.compile(r"--limits=memory=(\d+)Mi")
@@ -94,7 +95,9 @@ class SimulatedCluster:
 
     def wait_rollout(self, timeout_s: float) -> None:
         if self.scenario == "rollout_timeout":
-            raise LiveError("error: timed out waiting for the condition")
+            raise RolloutTimeout(f"the worker rollout did not finish in {timeout_s:g}s")
+        if self.scenario == "rollout_failure":
+            raise LiveError("kubectl rollout status exited 1: Forbidden")
 
     def wait_endpoints(self, timeout_s: float, poll_s: float) -> bool:
         return bool(self.endpoints)

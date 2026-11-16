@@ -30,6 +30,7 @@ from verifier.kubectl import (
     Kubectl,
     LiveError,
     ProbeFn,
+    RolloutTimeout,
 )
 from verifier.live import fault_with, from_live
 from verifier.model import Contract, Observations
@@ -40,6 +41,11 @@ LOGGER = logging.getLogger(__name__)
 DEFAULT_CLUSTER = "aurora-lab"
 KUBECONFIG_NAME = ".kubeconfig"
 CONTEXT_PREFIX = "kind-"
+
+# A rollout gets one margin on top of its budget, so kubectl reports the
+# deadline itself ("timed out waiting for the condition") instead of being
+# killed by the wrapper at the same instant.
+ROLLOUT_MARGIN_S = 5.0
 
 # Only what a client needs to run. `KUBECONFIG` is replaced, never inherited.
 PASSED_ENV_KEYS = ("PATH", "HOME", "LANG", "SYSTEMROOT", "TMPDIR")
@@ -153,19 +159,35 @@ class LiveSession:
             self._kubectl.text(fix_step_args(step))
 
     def wait_rollout(self, timeout_s: float) -> None:
+        """Wait for the worker rollout, and let a slow one become evidence.
+
+        `kubectl rollout status` is pacing, not a precondition, for the same
+        reason `wait_endpoints` is: a fix that never touches the worker leaves
+        it crash-looping, the rollout never finishes, and the worker checks
+        decide what that means. The wait therefore runs kubectl with a command
+        timeout one margin above the rollout budget, so kubectl prints its own
+        deadline; only that deadline is a `RolloutTimeout`. Any other kubectl
+        failure still raises, because only then did the verifier fail to look.
+        """
         deployment = self._worker.deployment
         if not deployment:
             raise LiveError("the worker fault declares no deployment to roll out")
-        self._kubectl.text(
-            [
-                "-n",
-                self._worker.namespace,
-                "rollout",
-                "status",
-                f"deployment/{deployment}",
-                f"--timeout={math.ceil(timeout_s)}s",
-            ]
-        )
+        kubectl = self._lab.kubectl(timeout_s=timeout_s + ROLLOUT_MARGIN_S)
+        try:
+            kubectl.text(
+                [
+                    "-n",
+                    self._worker.namespace,
+                    "rollout",
+                    "status",
+                    f"deployment/{deployment}",
+                    f"--timeout={math.ceil(timeout_s)}s",
+                ]
+            )
+        except LiveError as error:
+            if "timed out" not in str(error):
+                raise
+            raise RolloutTimeout(f"the worker rollout did not finish in {timeout_s:g}s") from error
 
     def wait_endpoints(self, timeout_s: float, poll_s: float) -> bool:
         """Wait for a non-empty slice. Readiness is a check, not a precondition.
