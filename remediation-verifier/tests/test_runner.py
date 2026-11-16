@@ -21,7 +21,14 @@ from verifier.decision import (
 from verifier.model import ContractError
 from verifier.runner import NOT_CAPTURED, Plan, Runner, attempts_to_runs
 
-VARIANTS = ("baseline", "full", "partial_worker_only", "partial_frontend_only", "noop")
+VARIANTS = (
+    "baseline",
+    "full",
+    "p1_raise_limit",
+    "partial_worker_only",
+    "partial_frontend_only",
+    "noop",
+)
 
 
 def test_the_baseline_breaks_then_captures_both_ends_of_the_window() -> None:

@@ -37,8 +37,15 @@ ORACLE_TERMS = ("tier", "selector", "BATCH_SIZE", "OOMKilled", "kettle", "mug", 
 ORACLE_PATTERN = re.compile("|".join(re.escape(term) for term in ORACLE_TERMS), re.IGNORECASE)
 
 FAULT_NAMES = {"worker-oom", "frontend-selector"}
-FIX_IDS = ["full", "partial_worker_only", "partial_frontend_only", "noop"]
-VARIANT_NAMES = {"baseline", "full", "partial_worker_only", "partial_frontend_only", "noop"}
+FIX_IDS = ["full", "p1_raise_limit", "partial_worker_only", "partial_frontend_only", "noop"]
+VARIANT_NAMES = {
+    "baseline",
+    "full",
+    "p1_raise_limit",
+    "partial_worker_only",
+    "partial_frontend_only",
+    "noop",
+}
 
 
 def assert_no_oracle_words(view: dict[str, Any]) -> None:
@@ -132,7 +139,7 @@ class TestOracleView:
         assert set(faults) == FAULT_NAMES
         assert sum(len(fault["checks"]) for fault in faults.values()) == 6
 
-    def test_the_oracle_view_carries_four_fixes_and_five_variants(self, contract: Contract) -> None:
+    def test_the_oracle_view_carries_five_fixes_and_six_variants(self, contract: Contract) -> None:
         oracle = oracle_view(contract)
         assert oracle["baseline"]["expected_faults"] == ["worker-oom", "frontend-selector"]
         assert [fix["id"] for fix in oracle["accepted_fixes"]] == FIX_IDS

@@ -97,6 +97,11 @@ oracle_view:
       steps:
         - kubectl -n shop patch svc frontend --type=json -p='[{"op":"remove","path":"/spec/selector/tier"}]'
         - kubectl -n shop set env deploy/worker BATCH_SIZE=500
+    - id: p1_raise_limit
+      source: scenarios/12-two-faults-oom-and-selector/scenario.yaml#L17-L18, scenarios/12-two-faults-oom-and-selector/README.md#L160, scenarios/12-two-faults-oom-and-selector/README.md#L183
+      steps:
+        - kubectl -n shop patch svc frontend --type=json -p='[{"op":"remove","path":"/spec/selector/tier"}]'
+        - kubectl -n shop set resources deployment/worker --limits=memory=384Mi --requests=memory=64Mi
     - id: partial_worker_only
       source: scenarios/12-two-faults-oom-and-selector/break.sh#L1 inverse
       steps:
@@ -116,6 +121,9 @@ oracle_view:
     full:
       kind: remediation
       fix: full
+    p1_raise_limit:
+      kind: remediation
+      fix: p1_raise_limit
     partial_worker_only:
       kind: remediation
       fix: partial_worker_only

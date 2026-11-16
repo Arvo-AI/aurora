@@ -24,12 +24,14 @@ The scenarios name the failure modes worth pinning:
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
 from verifier.kubectl import LiveError
 
 HEALTHY_ADDRESS = ("10.244.0.11", True)
+MEMORY_LIMIT = re.compile(r"--limits=memory=(\d+)Mi")
 
 FULL_STEPS = (
     "kubectl -n shop patch svc frontend --type=json "
@@ -50,6 +52,7 @@ class SimulatedCluster:
 
     def reset_state(self) -> None:
         self.batch_size = 500
+        self.memory_limit_mib = 192
         self.selector_tier = False
         self.worker_uid = "worker-w1"
         self.worker_restarts = 0
@@ -83,6 +86,10 @@ class SimulatedCluster:
             self.batch_size = 500
         if any("remove" in step and "tier" in step for step in steps):
             self.selector_tier = False
+        for step in steps:
+            match = MEMORY_LIMIT.search(step)
+            if match:
+                self.memory_limit_mib = int(match.group(1))
         self._settle()
 
     def wait_rollout(self, timeout_s: float) -> None:
@@ -232,7 +239,7 @@ class SimulatedCluster:
 
     def _settle(self) -> None:
         """Recompute the state the applied commands leave behind."""
-        if self.batch_size == 2500:
+        if self._worker_oom():
             self.worker_reason = "OOMKilled"
             self.worker_waiting = "CrashLoopBackOff"
             self.worker_restarts = 7
@@ -252,8 +259,16 @@ class SimulatedCluster:
             self.http_status = 200
         self._apply_knob()
 
+    def _worker_oom(self) -> bool:
+        """A batch of 100KiB items against the current limit.
+
+        500 items is about 49MiB and 2500 is about 244MiB, the figure the
+        runbook measures (`scenarios/12-two-faults-oom-and-selector/README.md#L160`).
+        """
+        return self.batch_size * 100 / 1024 > self.memory_limit_mib
+
     def _apply_knob(self) -> None:
-        healthy = self.batch_size == 500 and not self.selector_tier
+        healthy = not self._worker_oom() and not self.selector_tier
         if not healthy:
             return
         if self.scenario == "stale_pod":

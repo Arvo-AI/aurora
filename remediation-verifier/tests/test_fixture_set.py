@@ -21,18 +21,25 @@ from verifier.snapshots import fixture_path, render_table, runs_of, verify
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "snapshots"
 INCOMPLETE = Path(__file__).resolve().parent / "fixtures" / "snapshots" / "missing-pods.json"
-VARIANTS = (
-    "baseline",
-    "full",
-    "partial_worker_only",
-    "partial_frontend_only",
-    "noop",
-)
+CONTRACT = load_contract()
+VARIANTS = tuple(CONTRACT.oracle.variants)
+EXPECTED = {
+    "baseline": None,
+    "full": VERIFIED_WITHIN_CONTRACT,
+    "p1_raise_limit": VERIFIED_WITHIN_CONTRACT,
+    "partial_worker_only": REJECTED,
+    "partial_frontend_only": REJECTED,
+    "noop": REJECTED,
+}
+
+
+def test_the_expected_verdicts_cover_every_variant() -> None:
+    assert tuple(EXPECTED) == VARIANTS
 
 
 def test_the_set_holds_one_complete_fixture_per_variant() -> None:
     assert sorted(path.stem for path in FIXTURES.glob("*.json")) == sorted(VARIANTS)
-    contract = load_contract()
+    contract = CONTRACT
     for name in VARIANTS:
         observations = from_snapshot(fixture_path(FIXTURES, name))
         assert observations.is_complete, observations.missing_metadata
@@ -42,22 +49,24 @@ def test_the_set_holds_one_complete_fixture_per_variant() -> None:
 
 
 def test_the_set_reaches_the_verdicts_the_contract_promises() -> None:
-    attempts = verify(load_contract(), FIXTURES)
+    attempts = verify(CONTRACT, FIXTURES)
     assert [attempt.variant for attempt in attempts] == list(VARIANTS)
     assert attempts[0].verdict.reproduction_status == CONFIRMED
-    assert attempts[1].verdict.status == VERIFIED_WITHIN_CONTRACT
-    assert [attempt.verdict.status for attempt in attempts[2:]] == [REJECTED] * 3
+    for attempt in attempts:
+        expected = EXPECTED[attempt.variant]
+        if expected is not None:
+            assert attempt.verdict.status == expected, attempt.variant
 
 
 def test_every_fixture_supports_all_six_checks_with_evidence() -> None:
-    for attempt in verify(load_contract(), FIXTURES):
+    for attempt in verify(CONTRACT, FIXTURES):
         assert len(attempt.verdict.results) == 6
         for result in attempt.verdict.results:
             assert result.evidence, f"{attempt.variant}/{result.id} has no evidence"
 
 
 def test_the_table_names_the_two_parts_of_the_table() -> None:
-    text = render_table(runs_of(verify(load_contract(), FIXTURES)))
+    text = render_table(runs_of(verify(CONTRACT, FIXTURES)))
     for name in VARIANTS:
         assert name in text
     assert "0/6 pass" in text
@@ -65,7 +74,7 @@ def test_the_table_names_the_two_parts_of_the_table() -> None:
     assert "baseline: CONFIRMED" in text
 
 
-def test_the_committed_set_reaches_five_verdicts_without_a_process(
+def test_the_committed_set_reaches_every_verdict_without_a_process(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Same negative test as the simulated set, over the committed documents.
@@ -78,7 +87,7 @@ def test_the_committed_set_reaches_five_verdicts_without_a_process(
         raise AssertionError("the snapshot set started a subprocess")
 
     monkeypatch.setattr(subprocess, "run", forbidden)
-    assert len(verify(load_contract(), FIXTURES)) == 5
+    assert len(verify(CONTRACT, FIXTURES)) == len(VARIANTS)
     monkeypatch.undo()
     assert subprocess.run is original
 

@@ -42,13 +42,14 @@ def five(tmp_path: Path) -> Path:
     return fixtures_from(tmp_path / "fixtures", simulate())
 
 
-def test_the_five_fixtures_reach_the_live_verdicts(five: Path) -> None:
+def test_the_six_fixtures_reach_the_live_verdicts(five: Path) -> None:
     simulation = simulate()
     contract = simulation.contract
     attempts = verify(contract, five)
     assert [attempt.variant for attempt in attempts] == [
         "baseline",
         "full",
+        "p1_raise_limit",
         "partial_worker_only",
         "partial_frontend_only",
         "noop",
@@ -58,8 +59,11 @@ def test_the_five_fixtures_reach_the_live_verdicts(five: Path) -> None:
         assert attempt.verdict.status == live.status
         assert attempt.verdict.reproduction_status == live.reproduction_status
     assert attempts[0].verdict.reproduction_status == CONFIRMED
-    assert attempts[1].verdict.status == VERIFIED_WITHIN_CONTRACT
-    assert [attempt.verdict.status for attempt in attempts[2:]] == [REJECTED] * 3
+    assert [attempt.verdict.status for attempt in attempts[1:3]] == [
+        VERIFIED_WITHIN_CONTRACT,
+        VERIFIED_WITHIN_CONTRACT,
+    ]
+    assert [attempt.verdict.status for attempt in attempts[3:]] == [REJECTED] * 3
 
 
 def test_every_snapshot_verdict_says_snapshot_and_keeps_the_live_provenance(five: Path) -> None:
@@ -147,7 +151,7 @@ def test_snapshot_mode_reaches_five_verdicts_without_starting_a_process(
         raise AssertionError("snapshot mode started a subprocess")
 
     monkeypatch.setattr(subprocess, "run", forbidden)
-    assert len(verify(load_contract(), five)) == 5
+    assert len(verify(load_contract(), five)) == 6
     monkeypatch.undo()
     assert subprocess.run is original
 
@@ -164,12 +168,12 @@ def test_the_table_shows_every_variant_and_the_failing_checks(five: Path) -> Non
         "checks",
         "failing",
     ]
-    assert len(lines) == 10
+    assert len(lines) == 11
     assert "SNAPSHOT" in text
     assert "VERIFIED_WITHIN_CONTRACT" in text
     assert "no_oomkilled_in_window" in text
     assert "baseline: CONFIRMED" in text
-    assert "remediations: 4 runs, 1 verified, 3 rejected, 0 inconclusive" in text
+    assert "remediations: 5 runs, 2 verified, 3 rejected, 0 inconclusive" in text
 
 
 def test_a_baseline_row_counts_the_checks_it_failed(five: Path) -> None:

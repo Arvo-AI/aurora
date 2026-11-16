@@ -217,8 +217,14 @@ class TestChecks:
 
 
 class TestFixesAndVariants:
-    def test_the_four_fixes_are_frozen(self, fixes: dict[str, Any]) -> None:
-        assert list(fixes) == ["full", "partial_worker_only", "partial_frontend_only", "noop"]
+    def test_the_five_fixes_are_frozen(self, fixes: dict[str, Any]) -> None:
+        assert list(fixes) == [
+            "full",
+            "p1_raise_limit",
+            "partial_worker_only",
+            "partial_frontend_only",
+            "noop",
+        ]
 
     def test_every_fix_declares_where_it_comes_from(self, fixes: dict[str, Any]) -> None:
         for identifier, fix in fixes.items():
@@ -237,6 +243,15 @@ class TestFixesAndVariants:
         assert "/spec/selector/tier" in steps[0]
         assert steps[1] == "kubectl -n shop set env deploy/worker BATCH_SIZE=500"
 
+    def test_the_alternative_fix_raises_the_limit_and_keeps_the_batch_size(
+        self, fixes: dict[str, Any]
+    ) -> None:
+        steps = fixes["p1_raise_limit"]["steps"]
+        assert steps[0] == fixes["full"]["steps"][0]
+        assert "--limits=memory=384Mi" in steps[1]
+        assert "--requests=memory=64Mi" in steps[1]
+        assert "BATCH_SIZE" not in steps[1]
+
     def test_no_fix_reintroduces_the_injected_batch_size(self, fixes: dict[str, Any]) -> None:
         for fix in fixes.values():
             assert all("BATCH_SIZE=2500" not in step for step in fix["steps"])
@@ -246,13 +261,14 @@ class TestFixesAndVariants:
         assert fixes["partial_frontend_only"]["steps"] == [full[0]]
         assert fixes["partial_worker_only"]["steps"] == [full[1]]
 
-    def test_five_variants_point_at_the_frozen_fixes(
+    def test_six_variants_point_at_the_frozen_fixes(
         self, oracle: dict[str, Any], fixes: dict[str, Any]
     ) -> None:
         variants = oracle["variants"]
         assert list(variants) == [
             "baseline",
             "full",
+            "p1_raise_limit",
             "partial_worker_only",
             "partial_frontend_only",
             "noop",

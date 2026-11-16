@@ -110,11 +110,12 @@
         },
         "variants": {
           "type": "object",
-          "required": ["baseline", "full", "partial_worker_only", "partial_frontend_only", "noop"],
+          "required": ["baseline", "full", "p1_raise_limit", "partial_worker_only", "partial_frontend_only", "noop"],
           "additionalProperties": false,
           "properties": {
             "baseline": {"$ref": "#/$defs/variant"},
             "full": {"$ref": "#/$defs/variant"},
+            "p1_raise_limit": {"$ref": "#/$defs/variant"},
             "partial_worker_only": {"$ref": "#/$defs/variant"},
             "partial_frontend_only": {"$ref": "#/$defs/variant"},
             "noop": {"$ref": "#/$defs/variant"}

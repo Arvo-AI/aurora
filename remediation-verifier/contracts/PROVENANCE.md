@@ -67,6 +67,7 @@ Two rules apply to every row below. A value with no row is not used. A quote is 
 | Fix | Path | Anchor | Why this is the fix |
 |---|---|---|---|
 | `full` | `scenarios/12-two-faults-oom-and-selector/scenario.yaml` and `scenarios/12-two-faults-oom-and-selector/README.md` | `#L17-L18`, `#L164`, `#L170`, `#L180` | The scenario allows reverting `BATCH_SIZE` and removing the selector key. The runbook fixes the user-facing fault first (`#L164`), removes the key with a JSON patch because a strategic merge keeps it (`#L170`), then reverts the variable with the verb that changed it (`#L180`). |
+| `p1_raise_limit` | `scenarios/12-two-faults-oom-and-selector/scenario.yaml` and `scenarios/12-two-faults-oom-and-selector/README.md` | `#L17-L18`, `#L160`, `#L183` | The scenario also accepts raising the memory limit with the reason stated. The runbook measures about 244MiB at `BATCH_SIZE=2500` (`#L160`) and asks for a limit above it (`#L183`). The step sets 384Mi and keeps the 64Mi request, so scheduling does not change (D59). |
 | `partial_worker_only` | `scenarios/12-two-faults-oom-and-selector/break.sh` | `#L1` | The inverse of the first injected change: the same verb, back to 500. |
 | `partial_frontend_only` | `scenarios/12-two-faults-oom-and-selector/break.sh` | `#L2` | The inverse of the second injected change: the key the patch added is removed. |
 | `noop` | none | none | Deliberate absence of remediation (D6). No path exists because nothing changed. |
@@ -93,6 +94,7 @@ One LIVE capture on 2026-11-16 with `python -m verifier --mode capture` against 
 |---|---|---|---|---|
 | `fixtures/snapshots/baseline.json` | baseline | `2026-11-16T01:03:39Z` | CONFIRMED, six FAIL | both faults are present after `break` |
 | `fixtures/snapshots/full.json` | full | `2026-11-16T01:05:53Z` | VERIFIED_WITHIN_CONTRACT | both fixes leave six PASS |
+| `fixtures/snapshots/p1_raise_limit.json` | p1_raise_limit | `2026-11-16T01:39:46Z` | VERIFIED_WITHIN_CONTRACT | raising the limit keeps `BATCH_SIZE=2500`, and the worker logs 12 lines of 2500 items |
 | `fixtures/snapshots/partial_worker_only.json` | partial_worker_only | `2026-11-16T01:08:16Z` | REJECTED | the Service still has no endpoints |
 | `fixtures/snapshots/partial_frontend_only.json` | partial_frontend_only | `2026-11-16T01:10:34Z` | REJECTED | the worker still OOMKills |
 | `fixtures/snapshots/noop.json` | noop | `2026-11-16T01:12:58Z` | REJECTED | nothing changed, six FAIL |

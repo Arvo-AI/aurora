@@ -57,7 +57,7 @@ def test_snapshot_mode_writes_both_reports_and_prints_the_table(
     document = json.loads((out / "report.json").read_text(encoding="utf-8"))
     assert document["mode"] == "SNAPSHOT"
     assert document["advisory"] is True
-    assert len(document["variants"]) == 5
+    assert len(document["variants"]) == 6
 
 
 def test_a_rejected_fix_still_exits_zero(
@@ -193,10 +193,11 @@ def test_a_crash_returns_three_and_does_not_look_like_a_verdict(
 def test_write_snapshots_writes_one_file_per_captured_variant(tmp_path: Path) -> None:
     simulation = simulate()
     written = cli._write_snapshots(simulation.attempts, tmp_path)
-    assert len(written) == 5
+    assert len(written) == 6
     assert {path.name for path in written} == {
         "baseline.json",
         "full.json",
+        "p1_raise_limit.json",
         "partial_worker_only.json",
         "partial_frontend_only.json",
         "noop.json",
