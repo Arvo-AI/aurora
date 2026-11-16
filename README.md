@@ -84,7 +84,7 @@ Open http://localhost:3000. The first account you create is the admin.
 <summary>Vault token (one-time, after the first start)</summary>
 
 ```bash
-docker logs vault-init 2>&1 | grep "Root Token:"
+docker logs aurora-vault-init 2>&1 | grep "Root Token:"
 echo "VAULT_TOKEN=hvs.your-token-here" >> .env
 make down && make prod-prebuilt
 ```
@@ -115,7 +115,7 @@ It is also published as `oci://ghcr.io/arvo-ai/charts/aurora-oss`. See the [Kube
 
 Aurora starts in read-only mode. The default command policy allows observability commands (`get`, `describe`, `logs`, `top` and their cloud equivalents) and blocks anything that changes state. Admins can widen or narrow that per organization.
 
-On Kubernetes, commands run in terminal pods in an isolated namespace with a default-deny NetworkPolicy, not on your control plane. Every command is checked against 37 SigmaHQ threat signatures before it runs, and every chat turn passes a prompt-injection check (NeMo input rail). Roles are Admin, Editor and Viewer, enforced in the API and the UI. Registration is closed after the first user; everyone else is invited.
+With the Helm chart, commands run in terminal pods in an isolated namespace with a default-deny NetworkPolicy, not on your control plane. Clusters connected by an uploaded kubeconfig are queried from the Aurora server itself, without that pod isolation. Every command is checked against 37 SigmaHQ threat signatures before it runs, and every chat turn passes a prompt-injection check (NeMo input rail). Roles are Admin, Editor and Viewer, enforced in the API and the UI. Registration is closed after the first user; everyone else is invited.
 
 Your incident data stays on your infrastructure. Secrets live in Vault or AWS Secrets Manager. LLM calls go straight from your deployment to the provider you configured, and there is no telemetry back to Arvo AI.
 
