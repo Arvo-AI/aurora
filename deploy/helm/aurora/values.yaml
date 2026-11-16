@@ -459,6 +459,24 @@ config:
   RECURRENCE_AGENT_TIMEOUT_SECONDS: "120"
   # Model for the recurrence agent. Empty = falls back to MAIN_MODEL.
   RECURRENCE_AGENT_MODEL: ""
+  # --- RCA model routing ---
+  # Before each alert-triggered RCA, SQL-only lookups classify the incident:
+  # repeat (a prior incident with the same alert has a completed main-model
+  # RCA), simple (severity in RCA_ROUTING_SIMPLE_SEVERITIES) or hard. repeat and
+  # simple run on RCA_ROUTING_CHEAP_MODEL; hard and RCA_ROUTING_MAIN_SEVERITIES
+  # stay on RCA_MODEL. Stored per incident in incidents.rca_route/rca_model.
+  # off | shadow (classify + record, always RCA_MODEL) | live (route).
+  RCA_MODEL_ROUTING_MODE: "off"
+  # Cheaper model for repeat/simple RCAs. Empty in live mode = behaves like shadow.
+  RCA_ROUTING_CHEAP_MODEL: ""
+  # Comma-separated severities treated as simple.
+  RCA_ROUTING_SIMPLE_SEVERITIES: "low"
+  # Comma-separated severities that always use RCA_MODEL, even for repeats.
+  RCA_ROUTING_MAIN_SEVERITIES: "critical"
+  # Lookback (hours) for a prior RCA with the same alert title/service. 0 disables.
+  RCA_ROUTING_REPEAT_LOOKBACK_HOURS: "168"
+  # Minimum rule-correlator score for its hint to count as a repeat (0-1).
+  RCA_ROUTING_REPEAT_MIN_SCORE: "0.75"
   # Yes/no model for Jira automatic RCA. Empty = falls back to the resolved RCA_MODEL.
   JIRA_RCA_JUDGE_MODEL: ""
 
