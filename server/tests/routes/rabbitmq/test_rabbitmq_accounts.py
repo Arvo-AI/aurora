@@ -4,9 +4,11 @@ The account id is the management host:port. That is the scope connector access
 grants, so a team can be allowed one broker and refused the other.
 """
 
+import contextlib
 import json
 import sys
 import types
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -221,7 +223,7 @@ def test_sync_writes_one_connection_per_broker_and_retires_the_rest(monkeypatch)
 
 
 @pytest.fixture
-def routes(monkeypatch):
+def routes(monkeypatch, no_lock):
     pytest.importorskip("flask")
     from routes.rabbitmq import rabbitmq_routes as module
 
@@ -953,3 +955,81 @@ def test_an_empty_online_list_is_kept():
     summary = summarize_queue({"name": "q", "type": "quorum", "members": ["a", "b", "c"], "online": []})
     assert summary["online"] == []
     assert "leader" not in summarize_queue({"name": "q", "leader": ""})
+
+
+# --- ordering and concurrency ------------------------------------------------
+
+
+def test_connect_checks_the_grant_before_calling_the_broker(monkeypatch, routes):
+    _grant_only(monkeypatch, routes, "10.0.0.1:15672")
+    probed = []
+    monkeypatch.setattr(routes.RabbitMQClient, "whoami", lambda self: probed.append(self.url) or {})
+    monkeypatch.setattr(routes, "list_rabbitmq_accounts", lambda user_id, raise_on_error=False: [
+        _broker("10.0.0.1:15672"), _broker("10.0.0.2:15672"),
+    ])
+
+    with _app().test_request_context("/rabbitmq/connect", method="POST", json={
+        "url": "http://10.0.0.2:15672", "username": "monitor", "password": "wrong",
+    }):
+        _body, status = _call(routes.connect)
+
+    assert status == 403
+    assert probed == []
+
+
+def test_connect_and_disconnect_return_409_while_another_change_holds_the_lock(monkeypatch, routes):
+    _fake_broker_calls(monkeypatch, routes)
+    monkeypatch.setattr(routes, "list_rabbitmq_accounts", lambda user_id, raise_on_error=False: [_broker("10.0.0.1:15672")])
+
+    @contextlib.contextmanager
+    def busy(user_id):
+        raise routes.RabbitMQBusyError("busy")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(routes, "accounts_lock", busy)
+
+    with _app().test_request_context("/rabbitmq/connect", method="POST", json={
+        "url": "http://10.0.0.2:15672", "username": "monitor", "password": "pw",
+    }):
+        _body, connect_status = _call(routes.connect)
+    with _app().test_request_context("/rabbitmq/disconnect?account=10.0.0.1:15672", method="DELETE"):
+        _body, disconnect_status = _call(routes.disconnect)
+
+    assert connect_status == 409
+    assert disconnect_status == 409
+
+
+class _FakeLock:
+    held = set()
+
+    def __init__(self, name):
+        self.name = name
+
+    def acquire(self):
+        if self.name in _FakeLock.held:
+            return False
+        _FakeLock.held.add(self.name)
+        return True
+
+    def release(self):
+        _FakeLock.held.discard(self.name)
+
+
+def test_accounts_lock_serializes_changes_per_org(monkeypatch):
+    import utils.cache.redis_client as redis_client
+
+    accounts_mod = sys.modules[account_allowed.__module__]
+    fake = MagicMock()
+    fake.lock.side_effect = lambda name, **kwargs: _FakeLock(name)
+    monkeypatch.setattr(redis_client, "get_redis_client", lambda: fake)
+    monkeypatch.setattr(accounts_mod, "_lock_scope", lambda user_id: "org-1")
+    _FakeLock.held.clear()
+
+    with accounts_mod.accounts_lock("user-a"):
+        with pytest.raises(accounts_mod.RabbitMQBusyError):
+            with accounts_mod.accounts_lock("user-b"):
+                pass
+    # Released after the first change, so the next one proceeds.
+    with accounts_mod.accounts_lock("user-b"):
+        pass
+    assert fake.lock.call_args.args[0] == "rabbitmq:accounts:org-1"

@@ -10,6 +10,8 @@ from chat.backend.agent.tools.mcp_tools import clear_credentials_cache
 from utils.auth.rbac_decorators import require_permission
 from utils.log_sanitizer import hash_for_log, sanitize
 from utils.rabbitmq_accounts import (
+    RabbitMQBusyError,
+    accounts_lock,
     account_allowed,
     account_id_for_url,
     account_summary,
@@ -31,6 +33,7 @@ rabbitmq_bp = Blueprint("rabbitmq", __name__)
 _VALIDATION_FAILED = "Failed to validate RabbitMQ connection"
 # Fail a dead broker fast so it does not hold the page while the others answer.
 _STATUS_TIMEOUT = 4
+_BUSY = "Another change to RabbitMQ connections is in progress. Try again in a moment."
 _NOT_GRANTED = "Your role or team was not granted this RabbitMQ broker. Ask an admin to change it on the Access tab."
 
 
@@ -200,6 +203,21 @@ def _stored_payload(user_id: str, accounts: list, validated_id: Optional[str] = 
     return _payload(summaries)
 
 
+def _connect_denied(user_id: str, account_id: str):
+    """403 when this would replace a broker the caller was not granted, else None.
+
+    Adding a broker the org does not have yet needs no grant: there is none to check.
+    """
+    try:
+        existing = list_rabbitmq_accounts(user_id, raise_on_error=True)
+    except Exception:
+        logger.exception("[RABBITMQ] Failed to load existing brokers for user %s", hash_for_log(user_id))
+        return jsonify({"error": "Failed to load existing RabbitMQ connections"}), 500
+    if any(a["account_id"] == account_id for a in existing) and not account_allowed(user_id, account_id):
+        return jsonify({"error": _NOT_GRANTED, "code": "CONNECTOR_DENIED"}), 403
+    return None
+
+
 @rabbitmq_bp.route("/connect", methods=["POST"])
 @require_permission("connectors", "write")
 def connect(user_id):
@@ -216,6 +234,18 @@ def connect(user_id):
         logger.warning("[RABBITMQ] Rejected connection details")
         return jsonify({"error": "Invalid RabbitMQ connection details"}), 400
 
+    account_id = account_id_for_url(client.url)
+    if not account_id:
+        client.close()
+        return jsonify({"error": "Invalid RabbitMQ connection details"}), 400
+
+    # Check the grant before touching the broker: a caller who may not manage
+    # this broker must not be able to probe it with guessed credentials.
+    denied = _connect_denied(user_id, account_id)
+    if denied is not None:
+        client.close()
+        return denied
+
     logger.info("[RABBITMQ] Connecting user %s to %s", hash_for_log(user_id), sanitize(client.url))
 
     try:
@@ -228,10 +258,6 @@ def connect(user_id):
         return jsonify({"error": _public_connect_error(exc.kind, vhost=vhost, username=client.username)}), 400
     finally:
         client.close()
-
-    account_id = account_id_for_url(client.url)
-    if not account_id:
-        return jsonify({"error": "Invalid RabbitMQ connection details"}), 400
 
     incoming = {
         "account_id": account_id,
@@ -246,29 +272,33 @@ def connect(user_id):
         "validated_at": datetime.now(timezone.utc).isoformat(),
     }
 
-    # A Vault error looks like "nothing stored". Saving then would drop the other brokers.
+    # Read, change and write the list as one step, so a concurrent connect or
+    # disconnect cannot overwrite this one.
     try:
-        existing = list_rabbitmq_accounts(user_id, raise_on_error=True)
-    except Exception:
-        logger.exception("[RABBITMQ] Failed to load existing brokers for user %s", hash_for_log(user_id))
-        return jsonify({"error": "Failed to load existing RabbitMQ connections"}), 500
+        with accounts_lock(user_id):
+            # A Vault error looks like "nothing stored". Saving then would drop the other brokers.
+            try:
+                existing = list_rabbitmq_accounts(user_id, raise_on_error=True)
+            except Exception:
+                logger.exception("[RABBITMQ] Failed to load existing brokers for user %s", hash_for_log(user_id))
+                return jsonify({"error": "Failed to load existing RabbitMQ connections"}), 500
 
-    # Replacing a broker rewrites its credentials for the whole org. Only a caller
-    # granted that broker may do it. A new broker has no grant yet, so anyone with
-    # connector write access may add one.
-    if any(a["account_id"] == account_id for a in existing) and not account_allowed(user_id, account_id):
-        return jsonify({"error": _NOT_GRANTED, "code": "CONNECTOR_DENIED"}), 403
+            # Re-checked under the lock: the broker may have been added since the first check.
+            if any(a["account_id"] == account_id for a in existing) and not account_allowed(user_id, account_id):
+                return jsonify({"error": _NOT_GRANTED, "code": "CONNECTOR_DENIED"}), 403
 
-    if name_conflict(existing, name, account_id):
-        return jsonify({"error": "Another RabbitMQ connection already uses that name"}), 409
+            if name_conflict(existing, name, account_id):
+                return jsonify({"error": "Another RabbitMQ connection already uses that name"}), 409
 
-    accounts, replaced = upsert_account(existing, incoming)
+            accounts, replaced = upsert_account(existing, incoming)
 
-    try:
-        store_rabbitmq_accounts(user_id, accounts, schedule_prediscovery=True)
-    except Exception:
-        logger.exception("[RABBITMQ] Failed to store credentials")
-        return jsonify({"error": "Failed to store RabbitMQ credentials"}), 500
+            try:
+                store_rabbitmq_accounts(user_id, accounts, schedule_prediscovery=True)
+            except Exception:
+                logger.exception("[RABBITMQ] Failed to store credentials")
+                return jsonify({"error": "Failed to store RabbitMQ credentials"}), 500
+    except RabbitMQBusyError:
+        return jsonify({"error": _BUSY}), 409
 
     logger.info(
         "[RABBITMQ] Stored brokers for user %s (count=%d, replaced=%s)",
@@ -360,6 +390,15 @@ def disconnect(user_id):
 
 def _disconnect(user_id, selector: Optional[str]):
     """Remove one broker, or every broker when none is named."""
+    # Read, change and write the list as one step, so a concurrent connect is not lost.
+    try:
+        with accounts_lock(user_id):
+            return _disconnect_locked(user_id, selector)
+    except RabbitMQBusyError:
+        return jsonify({"error": _BUSY}), 409
+
+
+def _disconnect_locked(user_id, selector: Optional[str]):
     try:
         # A failed read is not "no brokers" — that path deletes every broker.
         accounts = list_rabbitmq_accounts(user_id, raise_on_error=True)

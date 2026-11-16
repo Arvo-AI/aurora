@@ -8,7 +8,8 @@ A pre-multi-broker Vault blob is read as one broker, so existing connections kee
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from contextlib import contextmanager
+from typing import Any, Dict, Iterator, List, Optional
 from urllib.parse import urlparse
 
 from utils.log_sanitizer import hash_for_log
@@ -313,3 +314,52 @@ def retire_rabbitmq_connections(user_id: str) -> None:
         account_id = row.get("account_id")
         if account_id and not delete_connection_secret(user_id, PROVIDER, account_id):
             raise RuntimeError("failed to retire rabbitmq connection")
+
+
+# Long enough for a connect's Vault write and row sync, short enough that a
+# crashed worker does not block the org's next change for long.
+_LOCK_TTL_SECONDS = 30
+_LOCK_WAIT_SECONDS = 10
+
+
+class RabbitMQBusyError(Exception):
+    """Another change to this org's broker list is in progress."""
+
+
+def _lock_scope(user_id: str) -> str:
+    # The broker list is one secret per org, so changes are serialized per org.
+    from utils.db.org_scope import resolve_org
+
+    return resolve_org(user_id) or f"user:{user_id}"
+
+
+@contextmanager
+def accounts_lock(user_id: str) -> Iterator[None]:
+    """Hold one lock across reading, changing and writing this org's broker list.
+
+    Connect and disconnect both read the whole list and write it back. Without
+    this, one of two concurrent changes silently overwrites the other.
+    """
+    from utils.cache.redis_client import get_redis_client
+
+    client = get_redis_client()
+    if client is None:
+        # Redis also runs Celery, so this is an outage, not a normal setup.
+        logger.warning("RabbitMQ broker list changed without a lock: Redis unavailable")
+        yield
+        return
+    lock = client.lock(
+        f"rabbitmq:accounts:{_lock_scope(user_id)}",
+        timeout=_LOCK_TTL_SECONDS,
+        blocking_timeout=_LOCK_WAIT_SECONDS,
+    )
+    if not lock.acquire():
+        raise RabbitMQBusyError("another RabbitMQ connection change is in progress")
+    try:
+        yield
+    finally:
+        try:
+            lock.release()
+        # Expired under a slow write: the next change already owns it, nothing to undo.
+        except Exception:
+            logger.warning("RabbitMQ broker list lock was already released")
