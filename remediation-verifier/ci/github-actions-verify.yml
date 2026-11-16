@@ -7,7 +7,8 @@
 #
 # Properties that matter: read-only token, no secrets, every action pinned by
 # full SHA, an explicit `ref` so a push to `ci` still checks out the candidate
-# branch, and a timeout on the only job.
+# branch, a timeout on the only job, and the report bundle uploaded even when a
+# gate fails, because a failed run is the one whose evidence a reviewer wants.
 
 name: remediation-verifier
 
@@ -51,3 +52,13 @@ jobs:
         run: make -C remediation-verifier typecheck
       - name: Tests
         run: make -C remediation-verifier test
+      - name: Snapshot verdicts
+        run: make -C remediation-verifier verify-snapshot
+      - name: Upload the evidence bundle
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: remediation-verifier-report
+          path: remediation-verifier/out
+          if-no-files-found: warn
+          retention-days: 14
