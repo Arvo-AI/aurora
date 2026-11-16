@@ -25,92 +25,18 @@ from services.correlation import apply_correlation_outcome
 logger = logging.getLogger(__name__)
 
 
-def _is_resolved_alert(payload: Dict[str, Any]) -> bool:
-    """If state is ok, all individual alerts in the webhook are resolved."""
-    state = (payload.get("state") or "").lower()
-    status = (payload.get("status") or "").lower()
-    return state == "ok" or status == "resolved"
+# Shared by webhook processing and the credential-free preview endpoint.
+from services.grafana_alert_preview import (
+    _is_resolved_alert,
+    _extract_severity,
+    _extract_service,
+    _merge_alert_into_payload,
+)
 
 
 def _should_trigger_background_chat(user_id: str, payload: Dict[str, Any]) -> bool:
-    """Determine if a background chat should be triggered for this alert.
-
-    Args:
-        user_id: The user ID receiving the alert
-        payload: The Grafana alert payload
-
-    Returns:
-        True if a background chat should be triggered
-    """
+    """Existing helper retained for compatibility with webhook processing."""
     return not _is_resolved_alert(payload)
-
-
-def _extract_severity(payload: Dict[str, Any]) -> str:
-    """Extract severity from Grafana alert payload.
-
-    Grafana states are: alerting, ok, pending, no_data, paused
-    Severity should come from labels (e.g., severity: critical).
-
-    If no severity label exists, map state to severity:
-    - alerting: critical (active alert)
-    - ok: low (resolved)
-    - pending: high (about to fire)
-    - no_data/paused: unknown
-    """
-    # Check for severity in labels first
-    labels = payload.get("commonLabels", {}) or payload.get("labels", {})
-    if "severity" in labels:
-        severity = str(labels["severity"]).lower()
-        if severity in ("critical", "high", "medium", "low"):
-            return severity
-
-    # Map state to severity as fallback
-    state = (payload.get("state") or payload.get("status") or "").lower()
-    if state == "alerting":
-        return "critical"
-    elif state == "pending":
-        return "high"
-    elif state == "ok":
-        return "low"
-
-    return "unknown"
-
-
-def _extract_service(payload: Dict[str, Any]) -> str:
-    """Extract service name from Grafana payload."""
-    # Try to get from labels
-    labels = payload.get("commonLabels", {}) or payload.get("labels", {})
-    service = (
-        labels.get("service") or labels.get("job") or labels.get("alertname", "unknown")
-    )
-    return str(service)[:255]  # Truncate to fit DB column
-
-
-def _merge_alert_into_payload(payload: Dict[str, Any], alert: Dict[str, Any]) -> Dict[str, Any]:
-    """Overlay a single alert's fields onto the webhook envelope so existing helpers
-    (which expect a webhook-shaped dict) can process each alert individually."""
-    merged = dict(payload)
-    merged["fingerprint"] = alert.get("fingerprint")
-    merged["ruleUID"] = alert.get("ruleUID") or alert.get("ruleUid")
-    if alert.get("labels"):
-        merged["commonLabels"] = {**merged.get("commonLabels", {}), **alert["labels"]}
-    if alert.get("annotations"):
-        merged["commonAnnotations"] = {**merged.get("commonAnnotations", {}), **alert["annotations"]}
-    if alert.get("values"):
-        merged["values"] = alert["values"]
-    for key in ("dashboardURL", "panelURL", "silenceURL", "imageURL", "generatorURL"):
-        if alert.get(key):
-            merged[key] = alert[key]
-    merged["status"] = alert.get("status") or merged.get("status")
-    if alert.get("state") is not None:
-        merged["state"] = alert["state"]
-    elif (alert.get("status") or "").lower() == "resolved":
-        merged["state"] = "ok"
-    elif (alert.get("status") or "").lower() == "firing":
-        merged["state"] = "alerting"
-    else:
-        merged["state"] = None
-    return merged
 
 
 def _format_alert_summary(payload: Dict[str, Any]) -> str:

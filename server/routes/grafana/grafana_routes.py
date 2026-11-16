@@ -9,6 +9,7 @@ from utils.web.public_url import external_backend_url
 from utils.log_sanitizer import sanitize
 from utils.auth.token_management import store_tokens_in_db
 from utils.auth.rbac_decorators import require_permission
+from utils.web.limiter_ext import limiter
 from utils.auth.stateless_auth import get_org_id_from_request, validate_user_exists, set_rls_context
 
 logger = logging.getLogger(__name__)
@@ -141,6 +142,94 @@ def alert_webhook(user_id: str):
     process_grafana_alert.delay(payload, metadata, user_id, skip_rca=skip_rca)
 
     return jsonify({"received": True})
+
+
+@grafana_bp.route("/alerts/preview", methods=["POST"])
+@require_permission("incidents", "read")
+def preview_alert(user_id):
+    """Preview pasted Grafana JSON; no connector, database write, or RCA needed."""
+    from services.grafana_alert_preview import preview_grafana_alert
+
+    if request.content_length is not None and request.content_length > 256_000:
+        return jsonify({"error": "Payload too large (256 KB maximum)."}), 413
+    body = request.get_json(silent=True)
+    # Backward-compatible: accept either the original raw Grafana payload,
+    # or {"grafana_alert": <Grafana payload>, "error_log": <pasted text>}.
+    if isinstance(body, dict) and "grafana_alert" in body:
+        payload = body["grafana_alert"]
+        error_log = body.get("error_log", "")
+    else:
+        payload = body
+        error_log = ""
+    try:
+        result = preview_grafana_alert(payload, error_log=error_log)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify(result), 200
+
+
+@grafana_bp.route("/alerts/preview/analyze", methods=["POST"])
+@limiter.limit("5 per hour")
+@require_permission("chat", "write")
+def analyze_pasted_alert(user_id):
+    """Opt-in, read-only AI analysis of pasted alert + log evidence.
+
+    Does not create an incident, connect Grafana, or execute RCA actions.
+    The result is delivered asynchronously in the existing chat session UI.
+    """
+    from services.grafana_alert_preview import preview_grafana_alert
+    from services.grafana_preview_analysis import build_preview_analysis_prompt
+    from utils.auth.stateless_auth import get_org_id_from_request
+    from utils.auth.viewer_run import viewer_may_run
+
+    org_id = get_org_id_from_request()
+    if org_id and not viewer_may_run(user_id, org_id):
+        return jsonify({"error": "Chat isn't enabled for viewers in this organization."}), 403
+    if request.content_length is not None and request.content_length > 256_000:
+        return jsonify({"error": "Payload too large (256 KB maximum)."}), 413
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict) or body.get("confirm_analysis") is not True:
+        return jsonify({"error": "Set confirm_analysis to true to start read-only AI analysis."}), 400
+    if "grafana_alert" not in body:
+        return jsonify({"error": "'grafana_alert' is required."}), 400
+    try:
+        preview = preview_grafana_alert(body["grafana_alert"], error_log=body.get("error_log", ""))
+        prompt, rail_text = build_preview_analysis_prompt(preview, body.get("alert_index", 0))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    # Import lazily so the pure preview remains usable without Celery or DB.
+    from chat.background.task import create_background_chat_session, run_background_chat
+    index = body.get("alert_index", 0)
+    selected = preview["previews"][index]
+    metadata = {"source": "pasted_grafana_preview", "mode": "ask", "alert_index": index}
+    try:
+        session_id = create_background_chat_session(
+            user_id=user_id,
+            title=f"Alert preview: {selected['title']}"[:100],
+            trigger_metadata=metadata,
+        )
+        task = run_background_chat.delay(
+            user_id=user_id,
+            session_id=session_id,
+            initial_message=prompt,
+            trigger_metadata=metadata,
+            provider_preference=None,
+            incident_id=None,  # Important: do NOT start the RCA incident workflow.
+            send_notifications=False,
+            mode="ask",  # Aurora's read-only agent mode.
+            rail_text=rail_text,
+        )
+    except Exception:
+        logger.exception("[GRAFANA] Could not schedule pasted-alert analysis")
+        return jsonify({"error": "Failed to start analysis; please retry."}), 503
+    return jsonify({
+        "session_id": session_id,
+        "task_id": str(task.id),
+        "status": "queued",
+        "mode": "ask",
+        "note": "First-pass analysis from unverified pasted evidence; not a verified RCA.",
+    }), 202
 
 
 @grafana_bp.route("/alerts", methods=["GET"])
