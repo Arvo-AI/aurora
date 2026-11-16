@@ -74,9 +74,21 @@ assert deny_same_uid_proc_access()
 master = os.getpid()
 pid = os.fork()
 if pid == 0:
-    cmd = "cat /proc/%d/environ /proc/$PPID/environ >/dev/null 2>&1 && echo READABLE || echo DENIED" % master
-    out = subprocess.run(["sh", "-c", cmd], capture_output=True, text=True, env={"PATH": os.environ["PATH"]})
-    sys.stdout.write(out.stdout); sys.stdout.flush()
+    # Each read is checked on its own: a PermissionError for both, nothing else.
+    probe = (
+        "import sys\\n"
+        "try:\\n"
+        "    open('/proc/%s/environ', 'rb').read()\\n"
+        "    print('READABLE')\\n"
+        "except PermissionError:\\n"
+        "    print('DENIED')\\n"
+    )
+    results = []
+    for target in (master, os.getpid()):
+        out = subprocess.run([sys.executable, "-c", probe % target], capture_output=True, text=True,
+                             env={"PATH": os.environ["PATH"]})
+        results.append(out.stdout.strip() or "ERROR:" + out.stderr.strip()[-200:])
+    sys.stdout.write(",".join(results)); sys.stdout.flush()
     os._exit(0)
 os.waitpid(pid, 0)
 """
@@ -86,13 +98,35 @@ os.waitpid(pid, 0)
         pytest.skip("CAP_SYS_PTRACE is held")
     out = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,
                          cwd=subprocess_env.__file__.rsplit("/utils/", 1)[0])
-    assert out.stdout.strip() == "DENIED", out.stderr
+    assert out.stdout.strip() == "DENIED,DENIED", out.stderr
 
 
 def test_celery_master_sets_the_flag_before_forking():
+    from unittest.mock import Mock
+
     import celery_config
 
-    if getattr(celery_config, "worker_init", None) is None:
+    signal = getattr(celery_config, "worker_init", None)
+    # tests/conftest.py stubs celery with a MagicMock when it isn't installed.
+    if signal is None or isinstance(signal, Mock):
         pytest.skip("celery is stubbed in this environment")
     receivers = [r[1]() for r in celery_config.worker_init.receivers]
     assert celery_config._deny_proc_access in receivers
+
+
+def test_mcp_base_env_drops_npm_credentials(monkeypatch):
+    monkeypatch.setattr(subprocess_env.os, "environ", {
+        "NPM_CONFIG_REGISTRY": "https://npm.internal",
+        "npm_config_cache": "/tmp/npm",
+        "NPM_CONFIG__AUTH": "secret",
+        "NPM_CONFIG__AUTHTOKEN": "secret",
+        "npm_config__authtoken": "secret",
+        "GITHUB_READ_ONLY": "1",
+        "AWS_ENDPOINT_URL_S3": "https://s3.internal",
+    })
+    assert mcp_base_env() == {
+        "NPM_CONFIG_REGISTRY": "https://npm.internal",
+        "npm_config_cache": "/tmp/npm",
+        "GITHUB_READ_ONLY": "1",
+        "AWS_ENDPOINT_URL_S3": "https://s3.internal",
+    }

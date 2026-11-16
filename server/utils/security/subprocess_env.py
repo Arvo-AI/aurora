@@ -30,9 +30,20 @@ _MCP_SAFE_ENV_KEYS = frozenset({
     "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
     # botocore ignores REQUESTS_CA_BUNDLE; custom endpoints / CAs need these.
     "AWS_CA_BUNDLE", "AWS_STS_REGIONAL_ENDPOINTS",
+    # Operator switch honoured by the GitHub MCP server.
+    "GITHUB_READ_ONLY",
 })
-# npm registry/cache settings (npx servers on air-gapped installs) and AWS endpoint overrides.
-_MCP_SAFE_ENV_PREFIXES = ("NPM_CONFIG_", "npm_config_", "AWS_ENDPOINT_URL")
+# npm registry, cache, CA and proxy settings for npx servers on air-gapped
+# installs. Only these: other npm config (``_auth``, ``_authToken``, ...) can
+# carry credentials.
+_NPM_SAFE_SETTINGS = ("REGISTRY", "CACHE", "CAFILE", "STRICT_SSL", "PROXY", "HTTPS_PROXY", "NOPROXY")
+_MCP_SAFE_ENV_KEYS = _MCP_SAFE_ENV_KEYS | frozenset(
+    f"{prefix}{name}"
+    for name in _NPM_SAFE_SETTINGS
+    for prefix, name in (("NPM_CONFIG_", name), ("npm_config_", name.lower()))
+)
+# AWS endpoint overrides (AWS_ENDPOINT_URL, AWS_ENDPOINT_URL_<SERVICE>).
+_MCP_SAFE_ENV_PREFIXES = ("AWS_ENDPOINT_URL",)
 
 _PR_SET_DUMPABLE = 4
 _dumpable_lock = threading.Lock()
