@@ -1,0 +1,60 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "remediation-verifier"
+version = "0.1.0"
+description = "Advisory remediation verification against the full incident contract (aurora-lab scenario 12)."
+requires-python = ">=3.11"
+dependencies = ["PyYAML>=6,<7"]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8,<10",
+  "ruff>=0.6,<1",
+  "mypy>=1.11,<3",
+]
+
+[project.scripts]
+remediation-verifier = "verifier.cli:main"
+
+[tool.setuptools]
+packages = ["verifier"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["verifier", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "UP", "B", "SIM", "RUF", "C90"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.isort]
+known-first-party = ["verifier"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+show_error_codes = true
+files = ["verifier"]
+
+# PyYAML ships no type stubs. The loader is the only module that imports it,
+# and it narrows the result to a dict before anything else reads it.
+[[tool.mypy.overrides]]
+module = ["yaml"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-ra --strict-markers --strict-config"

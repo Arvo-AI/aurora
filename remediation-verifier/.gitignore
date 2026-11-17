@@ -1,0 +1,19 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+build/
+dist/
+out/
+.cache/
+*.tgz
+.env
+.kubeconfig*
+
+# Local agent tooling, never committed
+.agents/
+skills-lock.json
+.codegraph/

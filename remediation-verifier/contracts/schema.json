@@ -1,0 +1,212 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Remediation verifier incident contract",
+  "description": "Fields the verifier reads from contracts/scenario_12.yaml. The test suite validates the frozen file against this schema before any check runs.",
+  "type": "object",
+  "required": ["scenario", "title", "source", "agent_view", "oracle_view"],
+  "additionalProperties": false,
+  "properties": {
+    "scenario": {
+      "type": "string",
+      "pattern": "^[0-9]{2}-[a-z0-9-]+$"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source": {
+      "type": "object",
+      "required": ["repo", "url", "commit", "commit_date", "read_on", "fork_repo", "fork_commit", "files"],
+      "additionalProperties": false,
+      "properties": {
+        "repo": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+        },
+        "url": {
+          "type": "string",
+          "pattern": "^https://github\\.com/"
+        },
+        "commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "commit_date": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+        },
+        "read_on": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        },
+        "fork_repo": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+        },
+        "fork_commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "files": {
+          "type": "object",
+          "required": ["scenario", "break", "check", "runbook", "app"],
+          "additionalProperties": false,
+          "properties": {
+            "scenario": {"type": "string", "pattern": "^scenarios/"},
+            "break": {"type": "string", "pattern": "^scenarios/"},
+            "check": {"type": "string", "pattern": "^scenarios/"},
+            "runbook": {"type": "string", "pattern": "^scenarios/"},
+            "app": {"type": "string", "pattern": "^app/"}
+          }
+        }
+      }
+    },
+    "agent_view": {
+      "type": "object",
+      "required": ["alert"],
+      "additionalProperties": false,
+      "properties": {
+        "alert": {"type": "string", "minLength": 20}
+      }
+    },
+    "oracle_view": {
+      "type": "object",
+      "required": ["observation", "baseline", "faults", "accepted_fixes", "variants"],
+      "additionalProperties": false,
+      "properties": {
+        "observation": {
+          "type": "object",
+          "required": ["window_seconds"],
+          "additionalProperties": false,
+          "properties": {
+            "window_seconds": {"type": "integer", "minimum": 1}
+          }
+        },
+        "baseline": {
+          "type": "object",
+          "required": ["expected_faults"],
+          "additionalProperties": false,
+          "properties": {
+            "expected_faults": {
+              "type": "array",
+              "minItems": 1,
+              "items": {"type": "string", "enum": ["worker-oom", "frontend-selector"]}
+            }
+          }
+        },
+        "faults": {
+          "type": "object",
+          "required": ["worker-oom", "frontend-selector"],
+          "additionalProperties": false,
+          "properties": {
+            "worker-oom": {"$ref": "#/$defs/fault"},
+            "frontend-selector": {"$ref": "#/$defs/fault"}
+          }
+        },
+        "accepted_fixes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/fix"}
+        },
+        "variants": {
+          "type": "object",
+          "required": ["baseline", "full", "p1_raise_limit", "partial_worker_only", "partial_frontend_only", "noop"],
+          "additionalProperties": false,
+          "properties": {
+            "baseline": {"$ref": "#/$defs/variant"},
+            "full": {"$ref": "#/$defs/variant"},
+            "p1_raise_limit": {"$ref": "#/$defs/variant"},
+            "partial_worker_only": {"$ref": "#/$defs/variant"},
+            "partial_frontend_only": {"$ref": "#/$defs/variant"},
+            "noop": {"$ref": "#/$defs/variant"}
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "fault": {
+      "type": "object",
+      "required": ["namespace", "checks"],
+      "additionalProperties": false,
+      "properties": {
+        "namespace": {"type": "string", "minLength": 1},
+        "deployment": {"type": "string", "minLength": 1},
+        "container": {"type": "string", "minLength": 1},
+        "selector": {"type": "string", "minLength": 1},
+        "service": {"type": "string", "minLength": 1},
+        "endpoint_slice_selector": {"type": "string", "minLength": 1},
+        "selector_expected": {"type": "string", "minLength": 1},
+        "http_route": {"type": "string", "pattern": "^http://[^ ]+/[^ ]+$"},
+        "http_method": {"type": "string", "enum": ["GET"]},
+        "expected_status": {"type": "integer", "minimum": 100},
+        "expected_json": {
+          "type": "object",
+          "required": ["items"],
+          "additionalProperties": false,
+          "properties": {
+            "items": {
+              "type": "array",
+              "minItems": 1,
+              "items": {"type": "string"}
+            }
+          }
+        },
+        "requests": {"type": "integer", "minimum": 1},
+        "request_interval_seconds": {"type": "number", "minimum": 0},
+        "request_timeout_seconds": {"type": "number", "minimum": 1},
+        "checks": {
+          "type": "array",
+          "minItems": 3,
+          "items": {"$ref": "#/$defs/check"}
+        }
+      }
+    },
+    "check": {
+      "type": "object",
+      "required": ["id", "type", "source"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "enum": [
+            "no_oomkilled_in_window",
+            "restart_count_not_increasing",
+            "processing_evidence",
+            "service_has_endpoints",
+            "endpoints_ready",
+            "http_expected_response"
+          ]
+        },
+        "type": {"type": "string", "enum": ["k8s", "logs", "http"]},
+        "source": {"type": "string", "pattern": "^(scenarios|app)/.+#L[0-9]+"},
+        "container": {"type": "string", "minLength": 1},
+        "pattern": {"type": "string", "minLength": 1},
+        "batch_size_source": {"type": "string", "minLength": 1},
+        "min_occurrences": {"type": "integer", "minimum": 1}
+      }
+    },
+    "fix": {
+      "type": "object",
+      "required": ["id", "source", "steps"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z0-9_]+$"},
+        "source": {"type": "string", "minLength": 1},
+        "steps": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "variant": {
+      "type": "object",
+      "required": ["kind", "fix"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {"type": "string", "enum": ["reproduction", "remediation"]},
+        "fix": {"type": ["string", "null"]}
+      }
+    }
+  }
+}

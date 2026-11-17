@@ -1,0 +1,133 @@
+{
+  "endpoints": [
+    {
+      "addresses": [
+        {
+          "address": "10.244.2.175",
+          "ready": true
+        },
+        {
+          "address": "10.244.1.100",
+          "ready": true
+        }
+      ],
+      "name": "frontend-lzbrp"
+    }
+  ],
+  "http": [
+    {
+      "body": "{\"items\": [\"kettle\", \"mug\", \"teapot\"]}",
+      "duration_seconds": 0.223,
+      "error": null,
+      "route": "http://frontend.shop.svc.cluster.local/api/items",
+      "status": 200
+    },
+    {
+      "body": "{\"items\": [\"kettle\", \"mug\", \"teapot\"]}",
+      "duration_seconds": 0.285,
+      "error": null,
+      "route": "http://frontend.shop.svc.cluster.local/api/items",
+      "status": 200
+    },
+    {
+      "body": "{\"items\": [\"kettle\", \"mug\", \"teapot\"]}",
+      "duration_seconds": 0.21,
+      "error": null,
+      "route": "http://frontend.shop.svc.cluster.local/api/items",
+      "status": 200
+    }
+  ],
+  "logs": {
+    "loadgen": [
+      "2026-11-16T02:52:46Z GET /api/items -> 200",
+      "2026-11-16T02:52:48Z GET /api/items -> 200",
+      "2026-11-16T02:52:50Z GET /api/items -> 200",
+      "2026-11-16T02:52:52Z GET /api/items -> 200",
+      "2026-11-16T02:52:54Z GET /api/items -> 200",
+      "2026-11-16T02:52:56Z GET /api/items -> 200",
+      "2026-11-16T02:52:58Z GET /api/items -> 200",
+      "2026-11-16T02:53:00Z GET /api/items -> 200",
+      "2026-11-16T02:53:02Z GET /api/items -> 200",
+      "2026-11-16T02:53:04Z GET /api/items -> 200",
+      "2026-11-16T02:53:06Z GET /api/items -> 200",
+      "2026-11-16T02:53:08Z GET /api/items -> 200",
+      "2026-11-16T02:53:10Z GET /api/items -> 200",
+      "2026-11-16T02:53:12Z GET /api/items -> 200",
+      "2026-11-16T02:53:14Z GET /api/items -> 200",
+      "2026-11-16T02:53:16Z GET /api/items -> 200",
+      "2026-11-16T02:53:18Z GET /api/items -> 200",
+      "2026-11-16T02:53:20Z GET /api/items -> 200",
+      "2026-11-16T02:53:22Z GET /api/items -> 200",
+      "2026-11-16T02:53:24Z GET /api/items -> 200",
+      "2026-11-16T02:53:26Z GET /api/items -> 200",
+      "2026-11-16T02:53:28Z GET /api/items -> 200",
+      "2026-11-16T02:53:30Z GET /api/items -> 200",
+      "2026-11-16T02:53:32Z GET /api/items -> 200",
+      "2026-11-16T02:53:34Z GET /api/items -> 200",
+      "2026-11-16T02:53:36Z GET /api/items -> 200",
+      "2026-11-16T02:53:38Z GET /api/items -> 200",
+      "2026-11-16T02:53:40Z GET /api/items -> 200",
+      "2026-11-16T02:53:42Z GET /api/items -> 200",
+      "2026-11-16T02:53:44Z GET /api/items -> 200"
+    ],
+    "worker": [
+      "processed batch of 500 items",
+      "processed batch of 500 items",
+      "processed batch of 500 items",
+      "processed batch of 500 items",
+      "processed batch of 500 items",
+      "processed batch of 500 items",
+      "processed batch of 500 items",
+      "processed batch of 500 items",
+      "processed batch of 500 items",
+      "processed batch of 500 items",
+      "processed batch of 500 items",
+      "processed batch of 500 items"
+    ]
+  },
+  "meta": {
+    "captured_at": "2026-11-16T02:53:39Z",
+    "lab_commit": "4edcd9dfbc48cbd9ca8ea031e429832cf72842d0",
+    "mode": "LIVE",
+    "provenance": "LIVE",
+    "variant": "full"
+  },
+  "pods": [
+    {
+      "containers": [
+        {
+          "last_exit_code": null,
+          "last_terminated_reason": null,
+          "name": "worker",
+          "ready": true,
+          "restart_count": 0,
+          "waiting_reason": null
+        }
+      ],
+      "last_exit_code": null,
+      "last_terminated_reason": null,
+      "name": "worker-6cf88d4b58-wtdsb",
+      "phase": "Running",
+      "ready": true,
+      "restart_count": 0,
+      "terminating": false,
+      "uid": "9a9a1837-6cfd-4aac-801a-dfa476b0cf09",
+      "waiting_reason": null
+    }
+  ],
+  "services": [
+    {
+      "cluster_ip": "10.96.102.160",
+      "name": "frontend",
+      "ports": [
+        80
+      ],
+      "selector": {
+        "app": "frontend"
+      }
+    }
+  ],
+  "worker": {
+    "batch_size": 500
+  }
+}

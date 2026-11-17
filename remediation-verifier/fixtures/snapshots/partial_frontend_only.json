@@ -1,0 +1,121 @@
+{
+  "endpoints": [
+    {
+      "addresses": [
+        {
+          "address": "10.244.2.50",
+          "ready": true
+        },
+        {
+          "address": "10.244.1.32",
+          "ready": true
+        }
+      ],
+      "name": "frontend-km5mb"
+    }
+  ],
+  "http": [
+    {
+      "body": "{\"items\": [\"kettle\", \"mug\", \"teapot\"]}",
+      "duration_seconds": 0.244,
+      "error": null,
+      "route": "http://frontend.shop.svc.cluster.local/api/items",
+      "status": 200
+    },
+    {
+      "body": "{\"items\": [\"kettle\", \"mug\", \"teapot\"]}",
+      "duration_seconds": 0.215,
+      "error": null,
+      "route": "http://frontend.shop.svc.cluster.local/api/items",
+      "status": 200
+    },
+    {
+      "body": "{\"items\": [\"kettle\", \"mug\", \"teapot\"]}",
+      "duration_seconds": 0.421,
+      "error": null,
+      "route": "http://frontend.shop.svc.cluster.local/api/items",
+      "status": 200
+    }
+  ],
+  "logs": {
+    "loadgen": [
+      "2026-11-16T01:09:41Z GET /api/items -> 200",
+      "2026-11-16T01:09:43Z GET /api/items -> 200",
+      "2026-11-16T01:09:45Z GET /api/items -> 200",
+      "2026-11-16T01:09:47Z GET /api/items -> 200",
+      "2026-11-16T01:09:49Z GET /api/items -> 200",
+      "2026-11-16T01:09:51Z GET /api/items -> 200",
+      "2026-11-16T01:09:53Z GET /api/items -> 200",
+      "2026-11-16T01:09:55Z GET /api/items -> 200",
+      "2026-11-16T01:09:57Z GET /api/items -> 200",
+      "2026-11-16T01:09:59Z GET /api/items -> 200",
+      "2026-11-16T01:10:01Z GET /api/items -> 200",
+      "2026-11-16T01:10:03Z GET /api/items -> 200",
+      "2026-11-16T01:10:05Z GET /api/items -> 200",
+      "2026-11-16T01:10:07Z GET /api/items -> 200",
+      "2026-11-16T01:10:09Z GET /api/items -> 200",
+      "2026-11-16T01:10:11Z GET /api/items -> 200",
+      "2026-11-16T01:10:13Z GET /api/items -> 200",
+      "2026-11-16T01:10:15Z GET /api/items -> 200",
+      "2026-11-16T01:10:17Z GET /api/items -> 200",
+      "2026-11-16T01:10:19Z GET /api/items -> 200",
+      "2026-11-16T01:10:21Z GET /api/items -> 200",
+      "2026-11-16T01:10:23Z GET /api/items -> 200",
+      "2026-11-16T01:10:25Z GET /api/items -> 200",
+      "2026-11-16T01:10:27Z GET /api/items -> 200",
+      "2026-11-16T01:10:29Z GET /api/items -> 200",
+      "2026-11-16T01:10:31Z GET /api/items -> 200",
+      "2026-11-16T01:10:33Z GET /api/items -> 200",
+      "2026-11-16T01:10:35Z GET /api/items -> 200",
+      "2026-11-16T01:10:37Z GET /api/items -> 200"
+    ],
+    "worker": [
+      "worker started, batch size 2500"
+    ]
+  },
+  "meta": {
+    "captured_at": "2026-11-16T01:10:34Z",
+    "lab_commit": "4edcd9dfbc48cbd9ca8ea031e429832cf72842d0",
+    "mode": "LIVE",
+    "provenance": "LIVE",
+    "variant": "partial_frontend_only"
+  },
+  "pods": [
+    {
+      "containers": [
+        {
+          "last_exit_code": 137,
+          "last_terminated_reason": "OOMKilled",
+          "name": "worker",
+          "ready": false,
+          "restart_count": 3,
+          "waiting_reason": null
+        }
+      ],
+      "last_exit_code": 137,
+      "last_terminated_reason": "OOMKilled",
+      "name": "worker-86f68b9bf6-dqh5n",
+      "phase": "Running",
+      "ready": false,
+      "restart_count": 3,
+      "terminating": false,
+      "uid": "b304adb4-9150-4107-a387-c3c9ad50c757",
+      "waiting_reason": null
+    }
+  ],
+  "services": [
+    {
+      "cluster_ip": "10.96.135.156",
+      "name": "frontend",
+      "ports": [
+        80
+      ],
+      "selector": {
+        "app": "frontend"
+      }
+    }
+  ],
+  "worker": {
+    "batch_size": 2500
+  }
+}
