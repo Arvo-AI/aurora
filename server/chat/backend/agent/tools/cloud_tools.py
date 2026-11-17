@@ -1102,6 +1102,9 @@ def get_cloud_tools():
     is_rca_context = _is_background_rca(state_context, is_background)
     _action_id = getattr(state_context, 'trigger_action_id', None) if state_context else None
     _incident_id = getattr(state_context, 'incident_id', None) if state_context else None
+    _has_chat_evidence = bool(state_context) and not is_background and any(
+        a.get('is_server_path') for a in (getattr(state_context, 'attachments', None) or [])
+    )
     capture_tag = "capture" if tool_capture else "nocapture"
     # hpa_vpa is part of the key for the same reason postmortem is: it changes
     # which tools are returned, so sharing a cache entry across contexts would
@@ -1117,7 +1120,7 @@ def get_cloud_tools():
     from utils.auth.connector_access import access_for
     access = access_for(user_id)
 
-    cache_key = f"{user_id}:{capture_tag}:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}:hpa_vpa={is_hpa_vpa_action}:is_rca_ctx={is_rca_context}:pr_review={is_pr_review}:action_id={_action_id}:incident={_incident_id}:mcp={mcp_fingerprint(user_id)}:access={access.revision()}:rabbitmq={int(rabbitmq_connected)}"
+    cache_key = f"{user_id}:{capture_tag}:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}:hpa_vpa={is_hpa_vpa_action}:is_rca_ctx={is_rca_context}:pr_review={is_pr_review}:action_id={_action_id}:incident={_incident_id}:mcp={mcp_fingerprint(user_id)}:access={access.revision()}...:rabbitmq={int(rabbitmq_connected)}:evidence={int(_has_chat_evidence)}"
     
     current_time = time.time()
     if (
@@ -3358,8 +3361,7 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
 
     # Add uploaded-evidence reader for incidents created from uploaded files
     rca_source = (getattr(state_context, 'rca_context', None) or {}).get('source') if state_context else None
-    chat_attachments = (getattr(state_context, 'attachments', None) or []) if state_context else []
-    has_chat_evidence = not is_background and any(a.get('is_server_path') for a in chat_attachments)
+    has_chat_evidence = _has_chat_evidence
     if (incident_id and is_background and rca_source == "upload") or has_chat_evidence:
         try:
             from .uploaded_evidence_tool import read_uploaded_file, ReadUploadedFileArgs, READ_UPLOADED_FILE_DESCRIPTION

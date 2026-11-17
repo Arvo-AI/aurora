@@ -303,7 +303,7 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
     
     const hasEvidence = evidenceFiles.length > 0;
     const messageText = (finalMessage || input).trim() || (hasEvidence ? 'Investigate the attached files.' : '');
-    const sent = await handleSend(messageText, chatWebSocket, undefined, (rcaActive || hasEvidence) ? { triggerRca: true } : undefined);
+    const sent = await handleSend(messageText, chatWebSocket, undefined, rcaActive ? { triggerRca: true } : undefined);
     if (sent) {
       setInput("");
       setImages([]);
