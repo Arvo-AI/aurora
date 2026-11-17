@@ -1,0 +1,66 @@
+name: Prometheus Alert Validation
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'server/services/alert_validation.py'
+      - 'server/chat/backend/agent/tools/prometheus_alert_tool.py'
+      - 'server/chat/backend/agent/tools/cloud_tools.py'
+      - 'server/services/actions/alert_gap_action.py'
+      - 'server/tests/services/test_alert_validation.py'
+      - 'server/tests/chat/test_prometheus_alert_tool.py'
+      - 'examples/tested-alerts/**'
+      - 'scripts/demo_tested_alerts.py'
+      - 'server/Dockerfile'
+      - '.github/workflows/alert-validation.yml'
+  push:
+    paths:
+      - 'server/services/alert_validation.py'
+      - 'server/chat/backend/agent/tools/prometheus_alert_tool.py'
+      - 'server/chat/backend/agent/tools/cloud_tools.py'
+      - 'server/services/actions/alert_gap_action.py'
+      - 'server/tests/services/test_alert_validation.py'
+      - 'server/tests/chat/test_prometheus_alert_tool.py'
+      - 'examples/tested-alerts/**'
+      - 'scripts/demo_tested_alerts.py'
+      - 'server/Dockerfile'
+      - '.github/workflows/alert-validation.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test-alert-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+
+      - name: Install focused test dependencies
+        run: >-
+          python -m pip install --only-binary :all: pytest==9.0.3 PyYAML==6.0.1 pydantic==2.13.3 langchain-core==1.6.13
+
+      - name: Install the same promtool used by Aurora
+        shell: bash
+        run: |
+          set -euo pipefail
+          promtool_image='prom/prometheus:v3.5.0@sha256:63805ebb8d2b3920190daf1cb14a60871b16fd38bed42b857a3182bc621f4996'
+          promtool_container=$(docker create "$promtool_image")
+          trap 'docker rm -f "$promtool_container" >/dev/null' EXIT
+          docker cp "$promtool_container:/bin/promtool" "$RUNNER_TEMP/promtool"
+          sudo install -m 0755 "$RUNNER_TEMP/promtool" /usr/local/bin/promtool
+          promtool --version
+
+      - name: Run validation and tool tests with real promtool
+        working-directory: server
+        run: python -m pytest tests/services/test_alert_validation.py tests/chat/test_prometheus_alert_tool.py -v
+
+      - name: Demonstrate missed, noisy, and corrected proposals
+        run: python scripts/demo_tested_alerts.py
