@@ -692,3 +692,104 @@ def test_diagnostic_ssh_is_read_only(is_read_only, command):
 ])
 def test_ssh_writes_and_interactive_sessions_are_blocked(is_read_only, command):
     assert is_read_only(command) is False, command
+
+
+# ---------------------------------------------------------------------------
+# A text filter is only a filter while its arguments keep it one. `awk`, `sed`,
+# `sort`, `rg` and friends are allowed downstream of a read because they read
+# stdin and print, but each can also run a program or write a file through an
+# argument, and none of those has a write verb for the checks above to see.
+# Ask mode is what every background RCA runs in, so a log line or alert body
+# that steers the agent into one of these must not get a write or an exec.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("command", [
+    # sed: `e` runs a command, `w` writes a file, `r` reads one, -i edits in place.
+    "kubectl get pods | sed '1e touch /tmp/pwned'",
+    "kubectl get pods | sed -n '1e id'",
+    "kubectl get pods | sed -ne '1e id'",
+    "kubectl get pods | sed --expression='1e id'",
+    "kubectl get pods | sed '/x/!e id'",
+    "kubectl get pods | sed 's/a/b/e'",
+    "kubectl get pods | sed 's/a/b/w /tmp/out'",
+    "kubectl get pods | sed -n 'w /tmp/out'",
+    "kubectl get pods | sed -n '1r /etc/shadow'",
+    "kubectl get pods | sed -i s/a/b/ /etc/hosts",
+    "kubectl get pods | sed -ni p /tmp/f",
+    "kubectl get pods | sed --in-place s/a/b/ /tmp/f",
+    "kubectl get pods | sed -f /tmp/script.sed",
+    "kubectl get pods | FOO=1 sed '1e id'",
+    "kubectl get pods | /bin/sed '1e id'",
+    # awk: system(), pipes to and from a command, redirection, program files.
+    "kubectl get pods | awk 'BEGIN{system(\"touch /tmp/pwned\")}'",
+    "kubectl get pods | gawk 'BEGIN { system (\"id\") }'",
+    "kubectl get pods | awk '{print | \"sh\"}'",
+    "kubectl get pods | awk '{\"id\" | getline x; print x}'",
+    "kubectl get pods | awk '{print > \"/tmp/out\"}'",
+    "kubectl get pods | awk '{printf \"%s\", $1 >> \"/tmp/out\"}'",
+    "kubectl get pods | awk '{print $1 \\\n > \"/tmp/out\"}'",
+    "kubectl get pods | awk 'BEGIN{print ENVIRON[\"AWS_SECRET_ACCESS_KEY\"]}'",
+    "kubectl get pods | awk -f /tmp/prog.awk",
+    "kubectl get pods | gawk -i inplace '{print}' /tmp/f",
+    # sort: -o writes, --compress-program runs a program. getopt_long accepts
+    # any unambiguous prefix and a short bundle can hide the letter.
+    "kubectl get pods | sort -o /tmp/out",
+    "kubectl get pods | sort -o/tmp/out",
+    "kubectl get pods | sort -uo /tmp/out",
+    "kubectl get pods | sort --output=/tmp/out",
+    "kubectl get pods | sort --outp=/tmp/out",
+    "kubectl get pods | sort --o=/tmp/out",
+    "kubectl get pods | sort --compress-program=sh",
+    "kubectl get pods | sort --compress-prog=sh",
+    # Other filters with a write or exec argument.
+    "kubectl get pods | rg --pre sh x",
+    "kubectl get pods | rg --hostname-bin=sh x",
+    "kubectl get pods | less -o /tmp/log",
+    "kubectl get pods | less -O /tmp/log",
+    "kubectl get pods | yq -i . /tmp/f",
+    "kubectl get pods | yq --inplace . /tmp/f",
+    "kubectl get pods | uniq /dev/stdin /tmp/out",
+    "kubectl get pods | uniq - /tmp/out",
+    # The same filters behind ssh, where the remote command is checked per segment.
+    "ssh deploy@10.0.0.5 'cat /var/log/syslog | sort --outp=/tmp/out'",
+    "ssh deploy@10.0.0.5 'cat /var/log/syslog | sed 1e\\ id'",
+])
+def test_text_filter_arguments_cannot_write_or_exec(is_read_only, command):
+    assert is_read_only(command) is False, command
+
+
+# The filters above stay usable for what RCA actually does with them.
+@pytest.mark.parametrize("command", [
+    "kubectl get pods | awk '{print $2}'",
+    "kubectl get pods | awk -F: '{print $1}'",
+    "kubectl get pods | awk '/ERROR|FATAL/'",
+    "kubectl get pods | awk '$3 > 100'",
+    "kubectl get pods | awk '{ if ($1 > 5) print $1 }'",
+    "kubectl get pods | awk '{s+=$3} END {print s}'",
+    "kubectl get pods | awk -v n=3 'NR>n{print $1}'",
+    "kubectl get pods | awk 'NR>1 && $3==\"Running\"{print $1}'",
+    "kubectl get pods | sed 's/foo/bar/g'",
+    "kubectl get pods | sed -n '1,10p'",
+    "kubectl get pods | sed -n '/error/p'",
+    "kubectl get pods | sed -E 's/[0-9]+/N/g'",
+    "kubectl get pods | sed '/^$/d'",
+    "kubectl get pods | sed -n 5p",
+    "kubectl get pods | sed -e 's/a/b/' -e 's/c/d/'",
+    "kubectl get pods | sed 's#/var/log#X#'",
+    "kubectl get pods | sort -k2 -n -r",
+    "kubectl get pods | sort -t, -k1",
+    "kubectl get pods | sort -rn | head -20",
+    "kubectl logs pod-x | rg -i error",
+    "kubectl logs pod-x | uniq -c",
+    "kubectl get pods | less",
+    "kubectl get pods -o json | yq '.items[].metadata.name'",
+    "ssh deploy@10.0.0.5 'cat /var/log/syslog | sort | uniq -c'",
+])
+def test_text_filters_with_ordinary_arguments_stay_read_only(is_read_only, command):
+    assert is_read_only(command) is True, command
+
+
+def test_filter_argument_rejection_names_the_token():
+    assert describe_rejection("kubectl get pods | sort --outp=/tmp/out") == (
+        "'--outp=/tmp/out' makes sort write a file or run a program")
+    assert describe_rejection("kubectl get pods | sed -i s/a/b/ f") == (
+        "sed option '-i' can run code or write files")
