@@ -166,6 +166,7 @@ celery_app.conf.update(
         'tasks.github_webhook_tasks',
         'tasks.bitbucket_webhook_tasks',
         'tasks.change_gating',
+        'tasks.verify_fix',
         'routes.bitbucket.bitbucket_selection',
         'routes.github.github_repo_metadata',
         'routes.slack.slack_channel_metadata',
