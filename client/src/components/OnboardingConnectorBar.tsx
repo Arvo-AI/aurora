@@ -2,7 +2,7 @@
 
 import { useSearchParams } from "next/navigation"
 import { connectorRegistry } from "@/components/connectors/ConnectorRegistry"
-import { ChevronRight, ChevronUp } from "lucide-react"
+import { CheckCircle2, ChevronRight, ChevronUp, Circle } from "lucide-react"
 import { Suspense, useEffect, useState } from "react"
 
 const ONBOARDING_QUEUE_KEY = "aurora_onboarding_queue"
@@ -10,6 +10,10 @@ const ONBOARDING_QUEUE_KEY = "aurora_onboarding_queue"
 interface OnboardingQueueState {
   queue: string[]
   current: number
+}
+
+interface ConnectorStatusResponse {
+  connectors: Record<string, { connected?: boolean }>
 }
 
 function getConnectorUrl(id: string, queue: string[], index: number): string {
@@ -40,6 +44,8 @@ function OnboardingConnectorBarInner() {
   const searchParams = useSearchParams()
   const [state, setState] = useState<OnboardingQueueState | null>(null)
   const [expanded, setExpanded] = useState(true)
+  const [connectorStatuses, setConnectorStatuses] = useState<Record<string, boolean>>({})
+  const [isLoadingStatuses, setIsLoadingStatuses] = useState(true)
 
   const urlOnboarding = searchParams.get("onboarding") === "1"
   const urlQueue = (searchParams.get("queue")?.split(",") || []).filter(Boolean)
@@ -67,12 +73,42 @@ function OnboardingConnectorBarInner() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  useEffect(() => {
+    const loadConnectorStatuses = async () => {
+      try {
+        const response = await fetch("/api/connectors/status", {
+          credentials: "include",
+        })
+
+        if (!response.ok) return
+
+        const data: ConnectorStatusResponse = await response.json()
+        const statuses: Record<string, boolean> = {}
+
+        for (const [id, status] of Object.entries(data.connectors || {})) {
+          statuses[id] = status.connected === true
+        }
+
+        setConnectorStatuses(statuses)
+      } catch (error) {
+        console.error("Failed to load connector statuses:", error)
+      } finally {
+        setIsLoadingStatuses(false)
+      }
+    }
+
+    loadConnectorStatuses()
+  }, [])
+
   if (!state || state.queue.length === 0) return null
 
   const { queue, current } = state
   const currentConnector = connectorRegistry.get(queue[current])
   const isLast = current >= queue.length - 1
   const nextConnector = isLast ? null : connectorRegistry.get(queue[current + 1])
+
+  const connectedCount = queue.filter((id) => connectorStatuses[id] === true).length
+  const currentIsConnected = connectorStatuses[queue[current]] === true
 
   const handleNext = () => {
     if (isLast) {
@@ -109,10 +145,40 @@ function OnboardingConnectorBarInner() {
                 style={{ width: `${((current + 1) / queue.length) * 100}%` }}
               />
             </div>
-            <span className="text-sm text-white/70 truncate">
-              Setting up <span className="text-white font-medium">{currentConnector?.name || queue[current]}</span>
-              <span className="text-white/40 ml-1">({current + 1}/{queue.length})</span>
-            </span>
+
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-white/70 truncate">
+                  Setting up{" "}
+                  <span className="text-white font-medium">
+                    {currentConnector?.name || queue[current]}
+                  </span>
+                  <span className="text-white/40 ml-1">
+                    ({current + 1}/{queue.length})
+                  </span>
+                </span>
+
+                {!isLoadingStatuses && (
+                  currentIsConnected ? (
+                    <span className="flex items-center gap-1 text-xs text-emerald-400 whitespace-nowrap">
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      Connected
+                    </span>
+                  ) : (
+                    <span className="flex items-center gap-1 text-xs text-white/50 whitespace-nowrap">
+                      <Circle className="w-3 h-3" />
+                      Setup needed
+                    </span>
+                  )
+                )}
+              </div>
+
+              {!isLoadingStatuses && (
+                <p className="text-xs text-white/40 mt-0.5">
+                  {connectedCount} of {queue.length} selected connections ready
+                </p>
+              )}
+            </div>
           </div>
 
           <div className="flex items-center gap-1 flex-shrink-0">
@@ -124,6 +190,7 @@ function OnboardingConnectorBarInner() {
                 Back
               </button>
             )}
+
             {!isLast && (
               <button
                 onClick={handleDismiss}
@@ -139,9 +206,12 @@ function OnboardingConnectorBarInner() {
               onClick={handleNext}
               className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium rounded-lg transition-colors"
             >
-              {isLast ? "Finish Setup" : `Next: ${nextConnector?.name || queue[current + 1]}`}
+              {isLast
+                ? "Finish Setup"
+                : `Next: ${nextConnector?.name || queue[current + 1]}`}
               <ChevronRight className="w-4 h-4" />
             </button>
+
             <button
               onClick={() => setExpanded(false)}
               className="ml-1 p-1 text-white/30 hover:text-white/60 transition-colors"
@@ -161,9 +231,17 @@ function OnboardingConnectorBarInner() {
               style={{ width: `${((current + 1) / queue.length) * 100}%` }}
             />
           </div>
+
           <span className="text-xs text-white/70">
             Setup {current + 1}/{queue.length}
           </span>
+
+          {!isLoadingStatuses && (
+            <span className="text-xs text-emerald-400">
+              {connectedCount}/{queue.length} connected
+            </span>
+          )}
+
           <ChevronUp className="w-3 h-3 text-white/40" />
         </button>
       )}

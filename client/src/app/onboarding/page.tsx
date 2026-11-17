@@ -58,6 +58,7 @@ export default function OnboardingPage() {
     const selectedIds = skip ? [] : getSelectedConnectors()
     const controller = new AbortController()
     const timeoutId = globalThis.setTimeout(() => controller.abort(), 15_000)
+
     try {
       const res = await fetch("/api/onboarding/complete", {
         method: "POST",
@@ -65,6 +66,7 @@ export default function OnboardingPage() {
         body: JSON.stringify({ selected_connectors: selectedIds }),
         signal: controller.signal,
       })
+
       if (!res.ok) {
         throw new Error(`Onboarding completion failed: ${res.status}`)
       }
@@ -112,23 +114,42 @@ export default function OnboardingPage() {
     }
   }
 
-  const monitoringConnectors = useMemo(() => connectorRegistry.getByCategory("Monitoring"), [])
-  const infraConnectors = useMemo(() => [
-    ...connectorRegistry.getByCategory("Infrastructure"),
-    ...connectorRegistry.getByCategory("Networking"),
-  ], [])
-  const alertingConnectors = useMemo(() => [
-    ...connectorRegistry.getByCategory("Incident Management"),
-    ...connectorRegistry.getByCategory("Monitoring"),
-  ], [])
-  const communicationConnectors = useMemo(() => [
-    ...connectorRegistry.getByCategory("Communication"),
-  ], [])
-  const devConnectors = useMemo(() => [
-    ...connectorRegistry.getByCategory("Development"),
-    ...connectorRegistry.getByCategory("CI/CD"),
-    ...connectorRegistry.getByCategory("Documentation"),
-  ], [])
+  const monitoringConnectors = useMemo(
+    () => connectorRegistry.getByCategory("Monitoring"),
+    []
+  )
+
+  const infraConnectors = useMemo(
+    () => [
+      ...connectorRegistry.getByCategory("Infrastructure"),
+      ...connectorRegistry.getByCategory("Networking"),
+    ],
+    []
+  )
+
+  const alertingConnectors = useMemo(
+    () => [
+      ...connectorRegistry.getByCategory("Incident Management"),
+      ...connectorRegistry.getByCategory("Monitoring"),
+    ],
+    []
+  )
+
+  const communicationConnectors = useMemo(
+    () => [
+      ...connectorRegistry.getByCategory("Communication"),
+    ],
+    []
+  )
+
+  const devConnectors = useMemo(
+    () => [
+      ...connectorRegistry.getByCategory("Development"),
+      ...connectorRegistry.getByCategory("CI/CD"),
+      ...connectorRegistry.getByCategory("Documentation"),
+    ],
+    []
+  )
 
   const selectedIds = getSelectedConnectors()
   const selectedConnectors = selectedIds
@@ -154,21 +175,30 @@ export default function OnboardingPage() {
           <div className="w-full flex-shrink-0 flex items-start justify-center px-6 pt-6 pb-24 overflow-y-auto hide-scrollbar">
             <div className="w-full max-w-[640px] space-y-8">
               <div className="flex items-center gap-4">
-                <Image src="/arvologo.png" alt="Aurora" width={48} height={48} className="rounded-xl" />
+                <Image
+                  src="/arvologo.png"
+                  alt="Aurora"
+                  width={48}
+                  height={48}
+                  className="rounded-xl"
+                />
                 <span className="text-white font-bold text-xl">Aurora</span>
               </div>
+
               <div>
                 <h1 className="text-3xl font-bold text-white">Incident response,</h1>
                 <h1 className="text-3xl font-bold text-[#3fa266]">automated.</h1>
               </div>
+
               <p className="text-[#ccc] text-sm leading-relaxed">
                 Aurora is your AI-powered incident response platform. It monitors your
                 infrastructure, detects anomalies, runs root cause analysis, and helps
                 your team resolve incidents faster — automatically.
               </p>
+
               <p className="text-[#888] text-xs leading-relaxed">
                 Let&apos;s connect your tools so Aurora can start working for your team
-                 — you can always change things later.
+                — you can always change things later.
               </p>
             </div>
           </div>
@@ -180,18 +210,34 @@ export default function OnboardingPage() {
                 <h2 className="text-xl font-semibold text-white">
                   Which alerting platforms should trigger Aurora?
                 </h2>
+
                 <p className="text-sm text-[#aaa] mt-1.5">
                   These tools deliver webhooks to Aurora when incidents occur. Aurora uses them to kick off root cause analysis automatically.
                 </p>
+
                 <div className="mt-3 rounded-lg bg-amber-500/15 border border-amber-500/40 px-4 py-3.5 flex items-start gap-3">
-                  <svg className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+                  <svg
+                    className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    strokeWidth={2}
+                    stroke="currentColor"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z"
+                    />
                   </svg>
+
                   <p className="text-sm text-amber-200/90 leading-relaxed">
-                    <span className="font-semibold text-amber-300">Important:</span> Without at least one alerting platform connected, Aurora won&apos;t receive alerts and cannot perform automated root cause analysis.
+                    <span className="font-semibold text-amber-300">Important:</span>{" "}
+                    Without at least one alerting platform connected, Aurora won&apos;t
+                    receive alerts and cannot perform automated root cause analysis.
                   </p>
                 </div>
               </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 {alertingConnectors.map((c) => (
                   <ConnectorTile
@@ -212,10 +258,12 @@ export default function OnboardingPage() {
                 <h2 className="text-xl font-semibold text-white">
                   Which monitoring tools does your team use?
                 </h2>
+
                 <p className="text-sm text-[#aaa] mt-1.5">
                   Aurora pulls alerts, metrics, and logs from your monitoring stack to power root cause analysis.
                 </p>
               </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 {monitoringConnectors.map((c) => (
                   <ConnectorTile
@@ -236,18 +284,34 @@ export default function OnboardingPage() {
                 <h2 className="text-xl font-semibold text-white">
                   Which cloud providers and infrastructure tools do you use?
                 </h2>
+
                 <p className="text-sm text-[#aaa] mt-1.5">
                   Connect your infrastructure so Aurora can investigate resources during incidents and correlate deployment changes.
                 </p>
+
                 <div className="mt-3 rounded-lg bg-amber-500/15 border border-amber-500/40 px-4 py-3.5 flex items-start gap-3">
-                  <svg className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+                  <svg
+                    className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    strokeWidth={2}
+                    stroke="currentColor"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z"
+                    />
                   </svg>
+
                   <p className="text-sm text-amber-200/90 leading-relaxed">
-                    <span className="font-semibold text-amber-300">Important:</span> Without at least one infrastructure connection, Aurora cannot access logs or investigate cloud resources during incidents.
+                    <span className="font-semibold text-amber-300">Important:</span>{" "}
+                    Without at least one infrastructure connection, Aurora cannot access
+                    logs or investigate cloud resources during incidents.
                   </p>
                 </div>
               </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 {infraConnectors.map((c) => (
                   <ConnectorTile
@@ -268,18 +332,34 @@ export default function OnboardingPage() {
                 <h2 className="text-xl font-semibold text-white">
                   Which development and documentation tools do you use?
                 </h2>
+
                 <p className="text-sm text-[#aaa] mt-1.5">
                   Aurora uses your repos, CI pipelines, and docs for richer context during root cause analysis.
                 </p>
+
                 <div className="mt-3 rounded-lg bg-amber-500/15 border border-amber-500/40 px-4 py-3.5 flex items-start gap-3">
-                  <svg className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+                  <svg
+                    className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    strokeWidth={2}
+                    stroke="currentColor"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z"
+                    />
                   </svg>
+
                   <p className="text-sm text-amber-200/90 leading-relaxed">
-                    <span className="font-semibold text-amber-300">Important:</span> Without a connected codebase, Aurora cannot correlate code changes with incidents or investigate recent deployments.
+                    <span className="font-semibold text-amber-300">Important:</span>{" "}
+                    Without a connected codebase, Aurora cannot correlate code changes
+                    with incidents or investigate recent deployments.
                   </p>
                 </div>
               </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 {devConnectors.map((c) => (
                   <ConnectorTile
@@ -300,10 +380,13 @@ export default function OnboardingPage() {
                 <h2 className="text-xl font-semibold text-white">
                   Where should Aurora send updates during incidents?
                 </h2>
+
                 <p className="text-sm text-[#aaa] mt-1.5">
-                  Communication channels let Aurora post status updates, RCA findings, and notifications to your team in real time.
+                  Communication channels let Aurora post status updates, RCA findings,
+                  and notifications to your team in real time.
                 </p>
               </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 {communicationConnectors.map((c) => (
                   <ConnectorTile
@@ -324,11 +407,13 @@ export default function OnboardingPage() {
                 <h2 className="text-xl font-semibold text-white">
                   We&apos;d love to connect with you.
                 </h2>
+
                 <p className="text-sm text-[#aaa] mt-1.5">
-                  Book a quick 15-minute call with our team. We&apos;ll help you get the most out of Aurora
-                  and answer any questions about your setup.
+                  Book a quick 15-minute call with our team. We&apos;ll help you get the
+                  most out of Aurora and answer any questions about your setup.
                 </p>
               </div>
+
               <a
                 href="https://cal.com/arvo-ai"
                 target="_blank"
@@ -337,6 +422,7 @@ export default function OnboardingPage() {
               >
                 Book a meeting &rarr;
               </a>
+
               <p className="text-xs text-[#666]">
                 No pressure — this is completely optional.
               </p>
@@ -348,15 +434,17 @@ export default function OnboardingPage() {
             <div className="w-full max-w-[640px] space-y-6">
               <div>
                 <h2 className="text-xl font-semibold text-white">
-                  {selectedConnectors.length > 0 ? "Great choices! Let's get them connected." : "Review your setup"}
+                  {selectedConnectors.length > 0
+                    ? "Review your selected connectors"
+                    : "Review your setup"}
                 </h2>
+
                 <p className="text-sm text-[#aaa] mt-1.5">
                   {selectedConnectors.length > 0
-                    ? "We'll walk you through configuring each connector. Most take under a minute."
+                    ? "These tools are selected, but they are not connected yet. Next, we'll walk you through configuring each connection."
                     : "You haven't selected any connectors yet. You can always add them later from Settings."}
                 </p>
               </div>
-
 
               {selectedConnectors.length > 0 ? (
                 <div className="space-y-2">
@@ -371,10 +459,15 @@ export default function OnboardingPage() {
                       <span className="flex-shrink-0 w-6 h-6 rounded-full bg-white/[0.08] flex items-center justify-center text-xs text-[#aaa] font-medium">
                         {idx + 1}
                       </span>
+
                       <div className="flex-1 min-w-0">
                         <p className="text-sm text-white font-medium">{c!.name}</p>
                         <p className="text-xs text-[#777]">{c!.category}</p>
                       </div>
+
+                      <span className="text-xs font-medium text-[#aaa] border border-white/[0.1] rounded-full px-2.5 py-1">
+                        Selected
+                      </span>
                     </motion.div>
                   ))}
                 </div>
@@ -397,50 +490,55 @@ export default function OnboardingPage() {
       <div className="fixed bottom-0 inset-x-0 z-20 bg-black/80 backdrop-blur-md border-t border-white/[0.06]">
         <div className="max-w-[640px] mx-auto px-6 py-5 flex flex-col gap-3 relative">
           {errorMessage && (
-            <div role="alert" aria-live="polite" className="rounded-lg bg-red-500/10 border border-red-500/20 px-4 py-3">
+            <div
+              role="alert"
+              aria-live="polite"
+              className="rounded-lg bg-red-500/10 border border-red-500/20 px-4 py-3"
+            >
               <p className="text-sm text-red-400">{errorMessage}</p>
             </div>
           )}
+
           <div className="flex items-center justify-between">
-          <div>
-            {step > 0 && (
-              <button
-                onClick={goBack}
-                className="px-4 py-2 text-sm text-[#aaa] border border-white/[0.12] rounded-lg hover:text-white hover:border-white/25 backdrop-blur-sm bg-black/20 transition-colors"
-              >
-                Back
-              </button>
-            )}
-          </div>
+            <div>
+              {step > 0 && (
+                <button
+                  onClick={goBack}
+                  className="px-4 py-2 text-sm text-[#aaa] border border-white/[0.12] rounded-lg hover:text-white hover:border-white/25 backdrop-blur-sm bg-black/20 transition-colors"
+                >
+                  Back
+                </button>
+              )}
+            </div>
 
-          {step < totalSteps - 1 && (
-            <button
-              onClick={() => handleFinishAttempt(true)}
-              disabled={isFinishing}
-              className="absolute left-1/2 -translate-x-1/2 px-3 py-2 text-xs text-[#666] hover:text-[#999] transition-colors disabled:opacity-50"
-            >
-              {isFinishing ? "Skipping..." : "Skip"}
-            </button>
-          )}
-
-          <div>
-            {step < totalSteps - 1 ? (
+            {step < totalSteps - 1 && (
               <button
-                onClick={goNext}
-                className="px-5 py-2.5 text-sm font-medium bg-white text-black rounded-lg hover:bg-white/90 active:scale-[0.97] transition-all"
-              >
-                Continue
-              </button>
-            ) : (
-              <button
-                onClick={() => handleFinishAttempt()}
+                onClick={() => handleFinishAttempt(true)}
                 disabled={isFinishing}
-                className="px-5 py-2.5 text-sm font-medium bg-white text-black rounded-lg hover:bg-white/90 active:scale-[0.97] transition-all disabled:opacity-50"
+                className="absolute left-1/2 -translate-x-1/2 px-3 py-2 text-xs text-[#666] hover:text-[#999] transition-colors disabled:opacity-50"
               >
-                {finishButtonLabel}
+                {isFinishing ? "Skipping..." : "Skip"}
               </button>
             )}
-          </div>
+
+            <div>
+              {step < totalSteps - 1 ? (
+                <button
+                  onClick={goNext}
+                  className="px-5 py-2.5 text-sm font-medium bg-white text-black rounded-lg hover:bg-white/90 active:scale-[0.97] transition-all"
+                >
+                  Continue
+                </button>
+              ) : (
+                <button
+                  onClick={() => handleFinishAttempt()}
+                  disabled={isFinishing}
+                  className="px-5 py-2.5 text-sm font-medium bg-white text-black rounded-lg hover:bg-white/90 active:scale-[0.97] transition-all disabled:opacity-50"
+                >
+                  {finishButtonLabel}
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -464,12 +562,26 @@ export default function OnboardingPage() {
             >
               <div className="flex items-start gap-3 mb-4">
                 <div className="flex-shrink-0 w-10 h-10 rounded-full bg-amber-500/10 flex items-center justify-center">
-                  <svg className="w-5 h-5 text-amber-400" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+                  <svg
+                    className="w-5 h-5 text-amber-400"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    strokeWidth={2}
+                    stroke="currentColor"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z"
+                    />
                   </svg>
                 </div>
+
                 <div>
-                  <h3 className="text-base font-semibold text-white">Missing platform connections</h3>
+                  <h3 className="text-base font-semibold text-white">
+                    Missing platform connections
+                  </h3>
+
                   <p className="text-sm text-[#aaa] mt-1">
                     You haven&apos;t selected any connectors for the following:
                   </p>
@@ -478,7 +590,10 @@ export default function OnboardingPage() {
 
               <div className="space-y-2 mb-5">
                 {missingCategories.map((cat) => (
-                  <div key={cat} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-amber-500/5 border border-amber-500/15">
+                  <div
+                    key={cat}
+                    className="flex items-center gap-2 px-3 py-2 rounded-lg bg-amber-500/5 border border-amber-500/15"
+                  >
                     <span className="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0" />
                     <span className="text-sm text-amber-200/90">{cat}</span>
                   </div>
@@ -487,9 +602,12 @@ export default function OnboardingPage() {
 
               <p className="text-xs text-[#888] mb-5 leading-relaxed">
                 Without these connections, Aurora&apos;s capabilities will be significantly limited.
-                {missingCategories.includes("Alerting Platform") && " Without an alerting platform, Aurora cannot receive incidents or trigger automated root cause analysis."}
-                {missingCategories.includes("Infrastructure") && " Without infrastructure access, Aurora cannot check logs or investigate cloud resources during incidents."}
-                {missingCategories.includes("Development Platform") && " Without a connected codebase, Aurora cannot correlate code changes with incidents."}
+                {missingCategories.includes("Alerting Platform") &&
+                  " Without an alerting platform, Aurora cannot receive incidents or trigger automated root cause analysis."}
+                {missingCategories.includes("Infrastructure") &&
+                  " Without infrastructure access, Aurora cannot check logs or investigate cloud resources during incidents."}
+                {missingCategories.includes("Development Platform") &&
+                  " Without a connected codebase, Aurora cannot correlate code changes with incidents."}
               </p>
 
               <div className="flex items-center gap-3">
@@ -499,6 +617,7 @@ export default function OnboardingPage() {
                 >
                   Go back &amp; connect
                 </button>
+
                 <button
                   onClick={() => {
                     setShowConfirmDialog(false)
