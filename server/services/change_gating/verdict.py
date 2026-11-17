@@ -414,6 +414,18 @@ def parse_verdict(text: Optional[str]) -> Optional[Dict[str, Any]]:
         return None
 
 
+def final_assistant_text(messages: Any) -> Optional[str]:
+    """Return the last bot/assistant message text from ``chat_sessions.messages``."""
+    if isinstance(messages, str):
+        messages = json.loads(messages)
+    if not isinstance(messages, list):
+        return None
+    for msg in reversed(messages):
+        if isinstance(msg, dict) and msg.get("sender") in ("bot", "assistant"):
+            return msg.get("text") or msg.get("content")
+    return None
+
+
 # ---------------------------------------------------------------------------
 # LLM fallback extraction
 # ---------------------------------------------------------------------------

@@ -2,6 +2,7 @@ import logging
 import os
 import re
 import time
+import uuid
 from typing import Dict, Optional, Any
 from dataclasses import dataclass
 import tiktoken
@@ -415,6 +416,35 @@ class LLMUsageTracker:
                 "cache_write_tokens": 0,
             }
 
+    @staticmethod
+    def _is_public_preview_session(cursor, session_id: Optional[str]) -> bool:
+        """True when ``session_id`` is a no-install PR preview (never metered).
+
+        Runs inside the caller's transaction, under a savepoint so a failed lookup
+        cannot roll back the usage row. Any doubt counts as a normal session.
+        """
+        if not session_id:
+            return False
+        try:
+            uuid.UUID(str(session_id))
+        except ValueError:
+            return False
+        from services.change_gating.public_github import is_public_preview
+
+        cursor.execute("SAVEPOINT preview_metering")
+        try:
+            cursor.execute(
+                "SELECT ui_state->'triggerMetadata' FROM chat_sessions WHERE id = %s",
+                (session_id,),
+            )
+            row = cursor.fetchone()
+        except Exception as exc:
+            cursor.execute("ROLLBACK TO SAVEPOINT preview_metering")
+            logger.warning("[LLMUsage:store] Preview lookup failed: %s", type(exc).__name__)
+            return False
+        cursor.execute("RELEASE SAVEPOINT preview_metering")
+        return bool(row) and is_public_preview(row[0])
+
     @classmethod
     def store_usage(cls, usage: LLMUsage) -> bool:
         """Store LLM usage data in the database"""
@@ -457,6 +487,7 @@ class LLMUsageTracker:
                         usage.cache_write_tokens,
                     ),
                 )
+                metered = not cls._is_public_preview_session(cursor, usage.session_id)
 
                 conn.commit()
                 logger.info(
@@ -475,6 +506,11 @@ class LLMUsageTracker:
 
                 # Report usage to marketplace metering (no-op unless hooks are configured).
                 # Implementations must be non-blocking (buffer + flush pattern).
+                # A public PR preview is free for the user: its usage stays in the table
+                # above for the operator, but is never metered to the user's org.
+                if not metered:
+                    logger.info("[LLMUsage:store] Not metering PR preview session %s", usage.session_id)
+                    return True
                 try:
                     from utils.hooks import get_hook
                     get_hook("report_usage")(usage.org_id, usage.estimated_cost, {
