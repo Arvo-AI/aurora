@@ -1,0 +1,10 @@
+2026-11-06T14:31:58Z INFO  checkout-api [req-8701] POST /v1/checkout 200 elapsed=142ms
+2026-11-06T14:34:10Z WARN  checkout-api [req-8763] POST /v1/checkout slow elapsed=6120ms
+2026-11-06T14:35:21Z WARN  checkout-api [req-8812] HikariPool-1 - Connection is not available, request timed out after 30000ms
+2026-11-06T14:35:22Z ERROR checkout-api [req-8813] java.sql.SQLTransientConnectionException: HikariPool-1 - Connection is not available, request timed out after 30000ms
+2026-11-06T14:35:40Z ERROR checkout-api [req-8820] java.sql.SQLTransientConnectionException: HikariPool-1 - Connection is not available, request timed out after 30000ms
+2026-11-06T14:36:05Z ERROR checkout-api [req-8901] 500 Internal Server Error on POST /v1/checkout elapsed=30210ms
+2026-11-06T14:36:31Z ERROR checkout-api [req-8922] 500 Internal Server Error on POST /v1/checkout elapsed=30088ms
+2026-11-06T14:37:02Z WARN  checkout-api [req-8950] HikariPool-1 - Connection is not available, request timed out after 30000ms
+2026-11-06T14:38:14Z ERROR checkout-api [req-9011] 500 Internal Server Error on POST /v1/checkout elapsed=30102ms
+2026-11-06T14:40:55Z INFO  checkout-api [health] GET /healthz 200 elapsed=3ms

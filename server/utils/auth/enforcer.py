@@ -49,6 +49,10 @@ _DEFAULT_POLICIES = [
     ("viewer", "*", "user_preferences", "write"),
     ("viewer", "*", "rca_emails", "read"),
     ("viewer", "*", "actions", "read"),
+    # A replay is read-only against a bundled evidence package, but running one
+    # spends model tokens, so it is granted at the same level as chat.
+    ("viewer", "*", "incident_replay", "read"),
+    ("viewer", "*", "incident_replay", "write"),
 
     # --- editor permissions (mutating operations) ---
     ("editor", "*", "connectors", "write"),
