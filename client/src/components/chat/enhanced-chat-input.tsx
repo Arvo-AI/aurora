@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useMemo, useRef, useState } from "react";
-import { Send, Loader2, Square, X } from "lucide-react";
+import { Send, Loader2, Square, X, Paperclip, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AutoResizeTextarea } from "@/components/ui/auto-resize-textarea";
 import ChatControls from "./chat-controls";
@@ -10,6 +10,12 @@ import SlashCommandMenu, { ActionItem, getFilteredActions } from "./SlashCommand
 export interface ImageAttachment {
   file: File;
   preview: string;
+}
+
+export interface EvidenceFile {
+  filename: string;
+  path: string;
+  size_bytes: number;
 }
 
 interface EnhancedChatInputProps {
@@ -32,6 +38,10 @@ interface EnhancedChatInputProps {
   onRemoveContext?: () => void;
   images?: ImageAttachment[];
   onImagesChange?: (images: ImageAttachment[]) => void;
+  evidenceFiles?: EvidenceFile[];
+  onEvidenceSelect?: (files: File[]) => void;
+  onRemoveEvidence?: (index: number) => void;
+  isUploadingEvidence?: boolean;
   actions?: ActionItem[];
   selectedAction?: ActionItem | null;
   onActionSelect?: (action: ActionItem | null) => void;
@@ -57,6 +67,10 @@ export default function EnhancedChatInput({
   onRemoveContext,
   images = [],
   onImagesChange,
+  evidenceFiles = [],
+  onEvidenceSelect,
+  onRemoveEvidence,
+  isUploadingEvidence = false,
   actions = [],
   selectedAction = null,
   onActionSelect,
@@ -64,6 +78,7 @@ export default function EnhancedChatInput({
   const [isDragOver, setIsDragOver] = useState(false);
   const [highlightedIndex, setHighlightedIndex] = useState(0);
   const menuDismissed = useRef(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { menuVisible, menuStage, filteredActions, menuItemCount } = useMemo(() => {
     if (menuDismissed.current) return { menuVisible: false, menuStage: 'command' as const, filteredActions: [] as ActionItem[], menuItemCount: 0 };
@@ -141,11 +156,11 @@ export default function EnhancedChatInput({
     if (handleMenuKey(e)) return;
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      if ((input.trim() || selectedAction) && !isSending && !disabled) {
+      if ((input.trim() || selectedAction || evidenceFiles.length > 0) && !isSending && !disabled) {
         onSend();
       }
     }
-  }, [input, isSending, disabled, onSend, selectedAction, handleMenuKey]);
+  }, [input, isSending, disabled, onSend, selectedAction, handleMenuKey, evidenceFiles]);
 
   const processImageFiles = useCallback((files: File[]) => {
     const imageFiles = files.filter(f => f.type.startsWith('image/'));
@@ -187,7 +202,10 @@ export default function EnhancedChatInput({
     setIsDragOver(false);
     const files = Array.from(e.dataTransfer.files);
     processImageFiles(files);
-  }, [processImageFiles]);
+    const evidence = files.filter(f => !f.type.startsWith('image/'));
+    if (evidence.length > 0) onEvidenceSelect?.(evidence);
+  }, [processImageFiles, onEvidenceSelect]);
+
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -263,6 +281,31 @@ export default function EnhancedChatInput({
           
           {/* Send/Cancel button */}
           <div className="absolute right-2 bottom-2 flex items-center space-x-2">
+            {onEvidenceSelect && (
+              <>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  accept=".log,.txt,.json,.yaml,.yml,.csv,.md,.out,.err,.trace,.gz"
+                  className="hidden"
+                  onChange={(e) => {
+                    onEvidenceSelect(Array.from(e.target.files ?? []));
+                    e.target.value = '';
+                  }}
+                />
+                <Button
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={isUploadingEvidence || isSending || disabled}
+                  className="rounded-full h-8 w-8 p-0 bg-transparent hover:bg-muted border-0 shadow-none text-muted-foreground hover:text-foreground"
+                  size="sm"
+                  aria-label="Attach incident files"
+                  title="Attach logs, alerts or CI output to investigate"
+                >
+                  {isUploadingEvidence ? <Loader2 className="h-4 w-4 animate-spin" /> : <Paperclip className="h-4 w-4" />}
+                </Button>
+              </>
+            )}
             {isSending && onCancel ? (
               <Button
                 onClick={onCancel}
@@ -274,7 +317,7 @@ export default function EnhancedChatInput({
             ) : (
               <Button
                 onClick={onSend}
-                disabled={!(input.trim() || selectedAction) || isSending || disabled}
+                disabled={!(input.trim() || selectedAction || evidenceFiles.length > 0) || isSending || disabled}
                 className="rounded-full h-8 w-8 p-0 bg-muted hover:bg-muted/80 border-0 shadow-none text-muted-foreground hover:text-foreground"
                 size="sm"
               >
@@ -304,6 +347,24 @@ export default function EnhancedChatInput({
                 >
                   <X className="h-3 w-3" />
                 </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Evidence file chips */}
+        {evidenceFiles.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {evidenceFiles.map((f, idx) => (
+              <div key={f.path} className="flex items-center gap-2 px-3 py-1.5 bg-orange-500/10 border border-orange-500/30 rounded-lg text-xs">
+                <FileText className="h-3 w-3 text-orange-400" />
+                <span className="text-orange-400 font-medium">{f.filename}</span>
+                <span className="text-muted-foreground">{Math.ceil(f.size_bytes / 1024)} KB</span>
+                {onRemoveEvidence && (
+                  <button onClick={() => onRemoveEvidence(idx)} className="text-orange-400 hover:text-orange-300" aria-label={`Remove ${f.filename}`}>
+                    <X className="h-3 w-3" />
+                  </button>
+                )}
               </div>
             ))}
           </div>

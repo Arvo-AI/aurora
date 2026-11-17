@@ -3356,6 +3356,24 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         except Exception as e:
             logging.warning(f"Failed to add get_alert_field tool: {e}")
 
+    # Add uploaded-evidence reader for incidents created from uploaded files
+    rca_source = (getattr(state_context, 'rca_context', None) or {}).get('source') if state_context else None
+    if incident_id and is_background and rca_source == "upload":
+        try:
+            from .uploaded_evidence_tool import read_uploaded_file, ReadUploadedFileArgs, READ_UPLOADED_FILE_DESCRIPTION
+            _ctx = with_forced_context(read_uploaded_file)
+            _notif = with_completion_notification(_ctx)
+            _final = wrap_func_with_capture(_notif, "read_uploaded_file") if tool_capture else _notif
+            tools.append(StructuredTool.from_function(
+                func=_final,
+                name="read_uploaded_file",
+                description=READ_UPLOADED_FILE_DESCRIPTION,
+                args_schema=ReadUploadedFileArgs,
+            ))
+            logging.info(f"Added read_uploaded_file tool for incident {incident_id}")
+        except Exception as e:
+            logging.warning(f"Failed to add read_uploaded_file tool: {e}")
+
     logging.info(f"Created {len(tools)} Aurora native tools")
     
     # Add real MCP tools if available

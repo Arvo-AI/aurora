@@ -8,10 +8,10 @@ import { apiGet, apiPost, apiRequest, type ApiError } from '@/lib/services/api-c
 // streaming thoughts, and copy-pasteable post-mortems
 // ============================================================================
 
-export type AlertSource = 'netdata' | 'datadog' | 'grafana' | 'prometheus' | 'pagerduty' | 'splunk' | 'elastic' | 'dynatrace' | 'coroot' | 'bigpanda' | 'servicenow' | 'cloudwatch' | 'chat';
+export type AlertSource = 'netdata' | 'datadog' | 'grafana' | 'prometheus' | 'pagerduty' | 'splunk' | 'elastic' | 'dynatrace' | 'coroot' | 'bigpanda' | 'servicenow' | 'cloudwatch' | 'chat' | 'upload';
 
 export function getSourceIconSrc(source: string): string | null {
-  if (source === 'chat') return null;
+  if (source === 'chat' || source === 'upload') return null;
   if (source === 'cloudwatch') return '/aws.ico';
   return `/${source}.svg`;
 }

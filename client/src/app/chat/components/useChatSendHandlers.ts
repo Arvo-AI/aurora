@@ -6,6 +6,7 @@ import { providerPreferencesService } from "@/lib/services/providerPreferences";
 import { useConnectedAccounts } from "@/hooks/useConnectedAccounts";
 import { Message } from "../types";
 import { AppRouterInstance } from "next/dist/shared/lib/app-router-context.shared-runtime";
+import type { EvidenceFile } from "@/components/chat/enhanced-chat-input";
 
 export type ChatWebSocket = {
   send: (payload: any) => boolean;
@@ -24,6 +25,7 @@ interface ChatSendHandlerParams {
   justCreatedSessionRef: MutableRefObject<string | null>;
   onSessionCreated?: (sessionId: string) => void;
   images?: Array<{file: File, preview: string}>;
+  evidenceFiles?: EvidenceFile[];
   availableActions?: { id: string; name: string }[];
   selectedAction?: { id: string; name: string } | null;
   clearSelectedAction?: () => void;
@@ -64,6 +66,7 @@ export function useChatSendHandlers({
   justCreatedSessionRef,
   onSessionCreated,
   images = [],
+  evidenceFiles = [],
   availableActions = [],
   selectedAction = null,
   clearSelectedAction,
@@ -277,6 +280,16 @@ export function useChatSendHandlers({
       })
     );
 
+    // Evidence files were stored by /api/incidents/evidence; send refs, not contents.
+    const evidenceAttachments = evidenceFiles.map(f => ({
+      file_type: 'text/plain',
+      filename: f.filename,
+      is_server_path: true,
+      server_path: f.path,
+      size_bytes: f.size_bytes,
+    }));
+    const allAttachments = [...attachments, ...evidenceAttachments];
+
     socket.send({
       type: 'message',
       query: trimmed,
@@ -285,7 +298,7 @@ export function useChatSendHandlers({
       model: selectedModel,
       mode: effectiveMode,
       provider_preference: finalProviders,
-      attachments: attachments.length > 0 ? attachments : undefined,
+      attachments: allAttachments.length > 0 ? allAttachments : undefined,
       ...(options?.triggerRca ? { trigger_rca: true } : {}),
       ui_state: {
         selectedModel,
@@ -298,7 +311,7 @@ export function useChatSendHandlers({
   }, [
     ensureSession, parseActionFromText, onNewMessage, selectedMode, selectedModel,
     selectedProviders, syncProvidersWithMode, toast, userId, isSending,
-    images, selectedAction, clearSelectedAction
+    images, evidenceFiles, selectedAction, clearSelectedAction
   ]);
 
   const initiateSend = useCallback(async (messageText: string, socket: ChatWebSocket, modeOverride?: string, options?: { triggerRca?: boolean }) => {

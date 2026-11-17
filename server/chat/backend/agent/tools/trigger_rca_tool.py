@@ -9,6 +9,7 @@ session (interactive chat, Slack, MCP, etc.).
 import json
 import logging
 import zlib
+import re
 from datetime import datetime
 from pydantic import BaseModel, Field
 
@@ -34,6 +35,34 @@ class TriggerRCAArgs(BaseModel):
         description="Inferred severity: critical, high, medium, or low",
     )
 
+# Paths the evidence route issues: incident_uploads/<32-hex batch>/<secure_filename>.
+_EVIDENCE_PATH_RE = re.compile(r"^incident_uploads/[0-9a-f]{32}/[A-Za-z0-9._-]{1,255}$")
+_MAX_EVIDENCE_FILES = 10
+
+def _evidence_from_state() -> list:
+    """Evidence files attached to the chat message that asked for this RCA.
+
+    The client sends these refs, so they're untrusted: only paths in the shape
+    the evidence route issues are accepted, and storage reads are scoped to
+    users/<user_id>/, so a forged path can't reach another user's files.
+    """
+    try:
+        from chat.backend.agent.tools.cloud_tools import get_state_context
+        state = get_state_context()
+    except Exception as e:
+        logger.warning(f"[TriggerRCA] Could not read attachments from state: {e}")
+        return []
+
+    evidence = []
+    for attachment in (getattr(state, "attachments", None) or [])[:_MAX_EVIDENCE_FILES]:
+        path = attachment.get("server_path") or ""
+        if attachment.get("is_server_path") and _EVIDENCE_PATH_RE.match(path):
+            evidence.append({
+                "filename": path.rsplit("/", 1)[1],
+                "path": path,
+                "size_bytes": int(attachment.get("size_bytes") or 0),
+            })
+    return evidence
 
 def trigger_rca(
     issue_description: str,
@@ -42,6 +71,8 @@ def trigger_rca(
     severity: str = "medium",
     user_id: str | None = None,
     session_id: str | None = None,
+    source_type: str = "chat",
+    uploaded_files: list | None = None,
     **kwargs,
 ) -> str:
     """
@@ -99,6 +130,11 @@ def trigger_rca(
             "error": "Rate limit check unavailable — please try again shortly."
         })
 
+    if uploaded_files is None:
+        uploaded_files = _evidence_from_state()
+    if uploaded_files:
+        source_type = "upload"
+
     incident_title = (title or f"User-reported: {issue_description[:80]}")[:200]
     severity = severity.lower() if severity else "medium"
     if severity not in ("critical", "high", "medium", "low"):
@@ -115,6 +151,7 @@ def trigger_rca(
         "service": service,
         "triggered_from_session": session_id,
         "triggered_at": timestamp_str,
+        "uploaded_files": uploaded_files or [],
     }
 
     from utils.auth.stateless_auth import get_org_id_for_user, set_rls_context
@@ -139,7 +176,7 @@ def trigger_rca(
                            alert_metadata = EXCLUDED.alert_metadata
                        RETURNING id""",
                     (
-                        user_id, org_id, "chat", source_alert_id, incident_title,
+                        user_id, org_id, source_type, source_alert_id, incident_title,
                         service or "unknown", severity, "investigating",
                         now, json.dumps(alert_metadata),
                     ),
@@ -163,7 +200,7 @@ def trigger_rca(
         from routes.incidents_sse import broadcast_incident_update_to_user_connections
         broadcast_incident_update_to_user_connections(
             user_id,
-            {"type": "incident_update", "incident_id": incident_id, "source": "chat"},
+            {"type": "incident_update", "incident_id": incident_id, "source": source_type},
             org_id=org_id,
         )
     except Exception as e:
@@ -172,7 +209,7 @@ def trigger_rca(
     try:
         from chat.background.summarization import generate_incident_summary
         generate_incident_summary.delay(
-            incident_id=incident_id, user_id=user_id, source_type="chat",
+            incident_id=incident_id, user_id=user_id, source_type=source_type,
             alert_title=incident_title, severity=severity,
             service=service or "unknown",
             raw_payload=alert_metadata, alert_metadata=alert_metadata,
@@ -188,7 +225,7 @@ def trigger_rca(
         )
         from chat.background.rca_prompt_builder import build_rca_prompt
 
-        trigger_metadata = {"source": "chat", "incident_id": incident_id}
+        trigger_metadata = {"source": source_type, "incident_id": incident_id}
         from utils.auth.connector_access import pinned_roles
         # The child task is a new process, so the guest pin does not follow it.
         if pinned_roles() is not None:
@@ -209,8 +246,14 @@ def trigger_rca(
             "severity": severity,
         }
 
+        if uploaded_files:
+            payload["uploaded_files"] = [
+                {"filename": f["filename"], "size_bytes": f["size_bytes"]}
+                for f in uploaded_files
+            ]
+
         rca_prompt, rail_text = build_rca_prompt(
-            "chat", incident_title, payload, user_id=user_id,
+            source_type, incident_title, payload, user_id=user_id,
         )
 
         task = run_background_chat.delay(
