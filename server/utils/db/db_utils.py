@@ -1671,6 +1671,45 @@ def initialize_tables():
                         ON hpa_vpa_recommendations(org_id, repo_full_name, pr_number)
                         WHERE pr_number IS NOT NULL AND status = 'proposed';
                 """,
+                # One row per CI run that booted a pull request and reported
+                # the result (tasks/verification.py). Keyed by the provider's
+                # run id and attempt so webhook redeliveries and task retries
+                # update the row instead of duplicating it.
+                #
+                # status values (VARCHAR + documented set, like the tables above):
+                #   passed -- the report passed AND the workflow run succeeded
+                #   failed -- anything else
+                # report holds the sanitised check list; uncovered_paths are the
+                # changed files the run did not exercise. comment_id is the PR
+                # comment Aurora posted for the run, NULL once it is replaced.
+                "verification_runs": """
+                    CREATE TABLE IF NOT EXISTS verification_runs (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        org_id VARCHAR(255) NOT NULL,
+                        user_id VARCHAR(255) NOT NULL,
+                        provider VARCHAR(20) NOT NULL DEFAULT 'github',
+                        repo_full_name VARCHAR(512) NOT NULL,
+                        pr_number INTEGER,
+                        head_sha VARCHAR(64) NOT NULL,
+                        run_id BIGINT NOT NULL,
+                        run_attempt INTEGER NOT NULL DEFAULT 1,
+                        run_url TEXT,
+                        status VARCHAR(16) NOT NULL,
+                        conclusion VARCHAR(32),
+                        report JSONB NOT NULL DEFAULT '{}'::jsonb,
+                        uncovered_paths JSONB NOT NULL DEFAULT '[]'::jsonb,
+                        modifies_verification BOOLEAN NOT NULL DEFAULT FALSE,
+                        comment_id BIGINT,
+                        created_at TIMESTAMPTZ DEFAULT NOW(),
+                        updated_at TIMESTAMPTZ DEFAULT NOW()
+                    );
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_verification_runs_run
+                        ON verification_runs(org_id, repo_full_name, run_id, run_attempt);
+                    CREATE INDEX IF NOT EXISTS idx_verification_runs_pr
+                        ON verification_runs(org_id, repo_full_name, pr_number, created_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_verification_runs_head
+                        ON verification_runs(org_id, repo_full_name, head_sha);
+                """,
             }
 
             # List of tables that should have RLS enabled and a policy applied.
@@ -1756,6 +1795,7 @@ def initialize_tables():
             rls_tables.append("artifact_versions")
             rls_tables.append("hpa_vpa_recommendations")
             rls_tables.append("recurrence_verdicts")
+            rls_tables.append("verification_runs")
 
 
             # Migration: Add rca_celery_task_id column to incidents table if it doesn't exist

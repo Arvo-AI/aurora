@@ -1130,7 +1130,139 @@ def _handle_workflow_run_event(
         _fmt_field(installation_id),
         delivery_id,
     )
+    _maybe_enqueue_verification_ingest(payload, action, delivery_id)
     _update_delivery_status(delivery_id, status="processed")
+
+
+def _maybe_enqueue_verification_ingest(
+    payload: dict[str, Any],
+    action: str | None,
+    delivery_id: str,
+) -> None:
+    """Enqueue ``ingest_verification_run`` when a workflow_run delivery qualifies.
+
+    Filter chain (each rejection logs ``verification: skipped reason=<x>``):
+    feature enabled → run completed → triggered by a pull request →
+    installation and run fields present → Redis dedupe → installation not
+    suspended and repo enrolled → ``ingest_verification_run.delay``.
+
+    This cannot tell whether the run is a verification run: that is decided by
+    the task, which looks for the ``aurora-verification`` artifact. Deciding it
+    here would need a GitHub API call inside the webhook dispatcher.
+
+    Enrollment reuses the Incident Prevention toggle (``change_gating_enabled``):
+    verification is the evidence half of the same feature, so it is on for
+    exactly the repos that already get a risk review.
+    """
+    repo = _safe_get(payload, "repository", "full_name")
+    run_id = _safe_get(payload, "workflow_run", "id")
+    head_sha = _safe_get(payload, "workflow_run", "head_sha")
+
+    def _skip(reason: str) -> None:
+        logger.info(
+            "verification: skipped reason=%s repo=%s workflow_run_id=%s delivery_id=%s",
+            reason,
+            _fmt_field(repo),
+            _fmt_field(run_id),
+            delivery_id,
+        )
+
+    from utils.flags.feature_flags import is_incident_prevention_enabled
+
+    if not is_incident_prevention_enabled():
+        _skip("feature_disabled")
+        return
+    if action != "completed":
+        _skip("not_completed")
+        return
+    if _safe_get(payload, "workflow_run", "event") != "pull_request":
+        _skip("not_pull_request_run")
+        return
+    installation_id = _extract_installation_id(payload)
+    if installation_id is None:
+        _skip("missing_installation")
+        return
+    if not repo or not head_sha or not isinstance(run_id, int) or isinstance(run_id, bool):
+        _skip("missing_run_fields")
+        return
+    run_attempt = _safe_get(payload, "workflow_run", "run_attempt")
+    if not isinstance(run_attempt, int) or isinstance(run_attempt, bool):
+        run_attempt = 1
+
+    # Present for same-repo pull requests, empty for forks (the task falls
+    # back to looking the commit up).
+    pull_requests = _safe_get(payload, "workflow_run", "pull_requests")
+    pr_numbers = [
+        pr.get("number")
+        for pr in (pull_requests if isinstance(pull_requests, list) else [])
+        if isinstance(pr, dict) and isinstance(pr.get("number"), int)
+    ]
+
+    # Dedupe redeliveries before any DB work. Redis being down is non-fatal:
+    # the task's database write is an upsert and it never comments twice.
+    from utils.cache.redis_client import get_redis_client
+
+    dedupe_key = f"verification:seen:{repo}:{run_id}:{run_attempt}"
+    redis_client = None
+    dedupe_claimed = False
+    try:
+        redis_client = get_redis_client()
+        if redis_client is not None:
+            if not redis_client.set(dedupe_key, delivery_id, nx=True, ex=3600):
+                _skip("duplicate_delivery")
+                return
+            dedupe_claimed = True
+    except Exception as exc:
+        logger.warning(
+            "verification: dedupe check failed (%s), proceeding delivery_id=%s",
+            type(exc).__name__,
+            delivery_id,
+        )
+
+    def _release_dedupe_key() -> None:
+        """Free the key when nothing was enqueued, so a redelivery is not lost."""
+        if dedupe_claimed and redis_client is not None:
+            try:
+                redis_client.delete(dedupe_key)
+            except Exception as exc:
+                logger.warning(
+                    "verification: dedupe key release failed (%s) delivery_id=%s",
+                    type(exc).__name__,
+                    delivery_id,
+                )
+
+    try:
+        status, owner_user_id = _resolve_change_gating_owner(installation_id, repo)
+        if status != "ok" or not owner_user_id:
+            _skip(status if status != "ok" else "not_enrolled")
+            _release_dedupe_key()
+            return
+
+        from tasks.verification import ingest_verification_run
+
+        ingest_verification_run.delay(
+            user_id=owner_user_id,
+            installation_id=installation_id,
+            repo_full_name=repo,
+            run_id=run_id,
+            run_attempt=run_attempt,
+            head_sha=head_sha,
+            conclusion=_safe_get(payload, "workflow_run", "conclusion"),
+            run_url=_safe_get(payload, "workflow_run", "html_url"),
+            pr_numbers=pr_numbers,
+            delivery_id=delivery_id,
+        )
+    except Exception:
+        _release_dedupe_key()
+        raise
+    logger.info(
+        "verification: enqueued repo=%s workflow_run_id=%s head_sha=%s user=%s delivery_id=%s",
+        _fmt_field(repo),
+        _fmt_field(run_id),
+        _fmt_field(head_sha),
+        owner_user_id,
+        delivery_id,
+    )
 
 
 def _handle_check_run_event(
