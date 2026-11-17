@@ -2,9 +2,10 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
-import { Zap, Clock, ChevronRight, Loader2, CheckCircle2, Link2, GitMerge, Plus, AlertTriangle } from 'lucide-react';
+import { Zap, Clock, ChevronRight, Loader2, CheckCircle2, Link2, GitMerge, Plus, AlertTriangle, ClipboardPaste } from 'lucide-react';
 import { Incident, incidentsService } from '@/lib/services/incidents';
 import { groupIncidents, IncidentGroup, isStalled } from '@/lib/incident-grouping';
 import IncidentGroupRow from './components/IncidentGroupRow';
@@ -13,6 +14,7 @@ import { connectorRegistry } from '@/components/connectors/ConnectorRegistry';
 import { useQuery } from '@/lib/query';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import {
   Dialog,
   DialogContent,
@@ -226,7 +228,12 @@ export default function IncidentsPage() {
             <Card>
               <CardContent className="py-12 text-center">
                 {!isConnectedToIncidentPlatform && !isLoadingAccounts ? (
-                  <ConnectPlatformCTA />
+                  <div className="space-y-8">
+                    <PasteAlertCTA />
+                    <div className="border-t border-border pt-8">
+                      <ConnectPlatformCTA />
+                    </div>
+                  </div>
                 ) : (
                   <>
                     <CheckCircle2 className="h-10 w-10 mx-auto text-green-500 mb-3" />
@@ -317,6 +324,121 @@ function DisconnectedBanner() {
       >
         Connect →
       </Link>
+    </div>
+  );
+}
+
+function PasteAlertCTA() {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [description, setDescription] = useState('');
+  const [title, setTitle] = useState('');
+  const [service, setService] = useState('');
+  const [severity, setSeverity] = useState('medium');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const trimmedDescription = description.trim();
+    if (!trimmedDescription) {
+      setError('Paste an alert or CI failure description to continue.');
+      return;
+    }
+
+    setError('');
+    setIsSubmitting(true);
+    try {
+      const response = await fetch('/api/incidents/trigger-rca', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          issue_description: trimmedDescription,
+          title: title.trim(),
+          service: service.trim(),
+          severity,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error || 'Unable to start the investigation.');
+      }
+      if (!data.incident_id) {
+        throw new Error('The investigation did not return an incident.');
+      }
+      router.push(`/incidents/${data.incident_id}`);
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : 'Unable to start the investigation.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <div>
+      <ClipboardPaste className="h-10 w-10 mx-auto text-primary mb-3" />
+      <p className="font-medium mb-1">Investigate an alert without connecting anything</p>
+      <p className="text-sm text-muted-foreground mb-4 max-w-md mx-auto">
+        Paste a CI failure, alert, or incident description and get an RCA in minutes.
+      </p>
+      <Button onClick={() => setOpen(true)}>
+        Try a pasted alert
+      </Button>
+
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Investigate a pasted alert</DialogTitle>
+            <DialogDescription>
+              No credentials or integrations are required. Include the error, symptoms, and any relevant logs.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <Textarea
+              value={description}
+              onChange={event => setDescription(event.target.value)}
+              placeholder="Example: GitHub Actions failed in the deploy job with..."
+              className="min-h-36"
+              maxLength={4000}
+              autoFocus
+            />
+            <div className="grid grid-cols-2 gap-3">
+              <Input
+                value={title}
+                onChange={event => setTitle(event.target.value)}
+                placeholder="Title (optional)"
+                maxLength={200}
+              />
+              <Input
+                value={service}
+                onChange={event => setService(event.target.value)}
+                placeholder="Service (optional)"
+                maxLength={200}
+              />
+            </div>
+            <select
+              value={severity}
+              onChange={event => setSeverity(event.target.value)}
+              className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+              aria-label="Severity"
+            >
+              <option value="low">Low severity</option>
+              <option value="medium">Medium severity</option>
+              <option value="high">High severity</option>
+              <option value="critical">Critical severity</option>
+            </select>
+            {error && <p className="text-sm text-destructive">{error}</p>}
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => setOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={isSubmitting || !description.trim()}>
+                {isSubmitting ? 'Starting…' : 'Start investigation'}
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
