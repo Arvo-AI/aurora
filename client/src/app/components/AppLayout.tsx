@@ -8,8 +8,9 @@ import { signOut } from "next-auth/react";
 import dynamic from "next/dynamic";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Gauge, LogOut, Plug, Settings, SquarePen, Workflow, Zap } from "lucide-react";
+import { Gauge, LogOut, Plug, SearchCheck, Settings, SquarePen, Workflow, Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useGitHubStatus } from "@/hooks/use-github-status";
 import {
   Tooltip,
   TooltipContent,
@@ -57,6 +58,7 @@ const SidebarStrip = ({
 }) => {
   const pathname = usePathname();
   const { user } = useUser();
+  const { isAuthenticated: githubAuthenticated } = useGitHubStatus();
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
 
@@ -85,6 +87,11 @@ const SidebarStrip = ({
     { href: "/actions", label: "Actions", icon: Workflow, active: pathname?.startsWith("/actions") },
     { href: "/monitor", label: "Monitor", icon: Gauge, active: pathname?.startsWith("/monitor") },
     { href: "/connectors", label: "Connectors", icon: Plug, active: pathname === "/connectors" },
+    // Startup Check needs a GitHub credential to scan anything, so it only
+    // exists in the nav once GitHub is authenticated.
+    ...(githubAuthenticated
+      ? [{ href: "/startup-check", label: "Startup Check", icon: SearchCheck, active: pathname?.startsWith("/startup-check") }]
+      : []),
   ];
 
   return (

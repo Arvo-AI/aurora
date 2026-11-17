@@ -131,6 +131,8 @@ celery_app.conf.update(
         "routes.slack.slack_onboarding.publish_home_task": {"queue": "high"},
         "routes.slack.slack_onboarding.send_welcome_dm_task": {"queue": "high"},
         "routes.teams.teams_channel_metadata.bulk_activate_channels_task": {"queue": "high"},
+        # Someone just clicked "Run check" and is watching the result arrive.
+        "routes.github.startup_check_routes.run_startup_check_task": {"queue": "high"},
     },
     # Explicitly include task modules from their new locations
     include=[
@@ -168,6 +170,7 @@ celery_app.conf.update(
         'tasks.change_gating',
         'routes.bitbucket.bitbucket_selection',
         'routes.github.github_repo_metadata',
+        'routes.github.startup_check_routes',
         'routes.slack.slack_channel_metadata',
         'routes.teams.teams_channel_metadata',
         'utils.repo_metadata',

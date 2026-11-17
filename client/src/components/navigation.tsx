@@ -2,12 +2,13 @@
 
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
-import { ChevronLeft, Settings, LogOut, User, Zap, Plug, Gauge, SquarePen, Workflow } from "lucide-react"
+import { ChevronLeft, Settings, LogOut, User, Zap, Plug, Gauge, SquarePen, Workflow, SearchCheck } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import ChatHistory from "@/components/ChatHistory"
 import { useState, useEffect, useRef } from "react"
 import { useUser } from "@/hooks/useAuthHooks"
+import { useGitHubStatus } from "@/hooks/use-github-status"
 import { signOut } from "next-auth/react"
 import {
   Tooltip,
@@ -47,6 +48,7 @@ export default function Navigation({
   const pathname = usePathname()
   const router = useRouter()
   const { user } = useUser()
+  const { isAuthenticated: githubAuthenticated } = useGitHubStatus()
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false)
   const userMenuRef = useRef<HTMLDivElement>(null)
 
@@ -241,6 +243,26 @@ export default function Navigation({
               </div>
             </Link>
           </li>
+
+          {/* Startup Check — needs a GitHub credential to scan anything */}
+          {githubAuthenticated && (
+            <li>
+              <Link
+                href="/startup-check"
+                className={cn(
+                  "w-full flex items-center justify-between px-2.5 py-1.5 rounded-md hover:bg-primary/10 transition-colors text-sm border border-transparent hover:border-border/50",
+                  pathname?.startsWith("/startup-check")
+                    ? "bg-card rounded-lg border border-border shadow-sm"
+                    : "text-muted-foreground"
+                )}
+              >
+                <div className="flex items-center">
+                  <SearchCheck size={16} />
+                  <span className="ml-2">Startup Check</span>
+                </div>
+              </Link>
+            </li>
+          )}
 
           {/* Chat History Section */}
           {(
