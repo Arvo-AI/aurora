@@ -87,7 +87,7 @@ export interface Alert {
   rawPayload: string;
   triggeredAt: string;
   title: string;
-  severity: 'critical' | 'high' | 'medium' | 'low';
+  severity: 'critical' | 'high' | 'medium' | 'low' | 'unknown';
   service: string;
   metadata?: AlertMetadata;
 }
