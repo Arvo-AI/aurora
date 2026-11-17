@@ -130,6 +130,8 @@ celery_app.conf.update(
         "routes.slack.slack_onboarding.run_demo_incident_task": {"queue": "high"},
         "routes.slack.slack_onboarding.publish_home_task": {"queue": "high"},
         "routes.slack.slack_onboarding.send_welcome_dm_task": {"queue": "high"},
+        # A person is waiting on their first real result after submitting a repo.
+        "tasks.public_repo_preview.run_public_repo_preview": {"queue": "high"},
         "routes.teams.teams_channel_metadata.bulk_activate_channels_task": {"queue": "high"},
     },
     # Explicitly include task modules from their new locations
@@ -166,6 +168,7 @@ celery_app.conf.update(
         'tasks.github_webhook_tasks',
         'tasks.bitbucket_webhook_tasks',
         'tasks.change_gating',
+        'tasks.public_repo_preview_tasks',
         'routes.bitbucket.bitbucket_selection',
         'routes.github.github_repo_metadata',
         'routes.slack.slack_channel_metadata',

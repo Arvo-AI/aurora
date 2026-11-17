@@ -375,6 +375,13 @@ function ConnectPlatformCTA() {
         </button>
       </div>
 
+      <div className="mt-6">
+        <p className="text-sm text-muted-foreground mb-2">Not ready to connect?</p>
+        <Button variant="outline" asChild>
+          <Link href="/repo-preview">Preview a public repository</Link>
+        </Button>
+      </div>
+
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
