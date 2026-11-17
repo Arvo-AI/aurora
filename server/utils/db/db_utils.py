@@ -1209,6 +1209,23 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_kubeconfig_clusters_user ON kubeconfig_clusters(user_id);
                     CREATE INDEX IF NOT EXISTS idx_kubeconfig_clusters_org ON kubeconfig_clusters(org_id);
                 """,
+                # Aurora Watch: per-cluster detector state (learned baseline, open
+                # findings, change log, log cursors) and the last poll's outcome.
+                # Written every poll by services.watch.tasks.watch_cluster.
+                "aurora_watch_state": """
+                    CREATE TABLE IF NOT EXISTS aurora_watch_state (
+                        org_id VARCHAR(255) NOT NULL,
+                        cluster_id TEXT NOT NULL,
+                        state JSONB NOT NULL DEFAULT '{}'::jsonb,
+                        polls INTEGER NOT NULL DEFAULT 0,
+                        open_findings INTEGER NOT NULL DEFAULT 0,
+                        last_error TEXT,
+                        blind_spots JSONB,
+                        last_poll_at TIMESTAMPTZ,
+                        updated_at TIMESTAMPTZ DEFAULT NOW(),
+                        PRIMARY KEY (org_id, cluster_id)
+                    );
+                """,
                 "users": """
                     CREATE TABLE IF NOT EXISTS users (
                         id VARCHAR(255) PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
@@ -1756,6 +1773,7 @@ def initialize_tables():
             rls_tables.append("artifact_versions")
             rls_tables.append("hpa_vpa_recommendations")
             rls_tables.append("recurrence_verdicts")
+            rls_tables.append("aurora_watch_state")
 
 
             # Migration: Add rca_celery_task_id column to incidents table if it doesn't exist

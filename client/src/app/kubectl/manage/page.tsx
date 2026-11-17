@@ -11,6 +11,7 @@ import { ArrowLeft, Loader2, LogOut, RefreshCw, Copy, Check } from "lucide-react
 import { useToast } from "@/hooks/use-toast";
 import { copyToClipboard } from "@/lib/utils";
 import { useQuery, jsonFetcher } from "@/lib/query";
+import { AuroraWatchCard } from "@/components/AuroraWatchCard";
 
 interface AgentConnection {
   cluster_id: string;
@@ -261,6 +262,8 @@ export default function ManageKubectlClustersPage() {
             )}
           </CardContent>
         </Card>
+
+        <AuroraWatchCard />
 
         <AlertDialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
           <AlertDialogContent className="bg-zinc-950 border-zinc-800">

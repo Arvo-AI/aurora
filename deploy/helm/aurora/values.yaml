@@ -582,6 +582,7 @@ secrets:
     # --- GitHub App (default, recommended) ---
     GITHUB_AUTH_MODE: "app"                # app (default) | oauth | hybrid
     NEXT_PUBLIC_ENABLE_INCIDENT_PREVENTION: "true"  # false = disable PR change-gating entirely
+    NEXT_PUBLIC_ENABLE_AURORA_WATCH: "true"  # false = Aurora Watch unavailable (it is per-org opt-in either way)
     GITHUB_APP_ID: ""                      # Numeric App ID from App settings
     GITHUB_APP_CLIENT_ID: ""               # Starts with Iv23l...
     NEXT_PUBLIC_GITHUB_APP_SLUG: ""        # URL slug (e.g. aurora-acme-prod)

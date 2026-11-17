@@ -759,6 +759,10 @@ app.register_blueprint(debug_bp)
 from routes.onboarding_routes import onboarding_bp
 app.register_blueprint(onboarding_bp, url_prefix="/api/onboarding")
 
+# --- Aurora Watch (Aurora opens incidents from cluster regressions) ---
+from routes.watch_routes import watch_bp
+app.register_blueprint(watch_bp)
+
 # ============================================================================
 # Global Error Handlers
 # ============================================================================

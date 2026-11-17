@@ -1,0 +1,92 @@
+---
+sidebar_position: 2
+---
+
+# Aurora Watch
+
+Aurora Watch lets Aurora open the incident itself. Every minute it reads your
+connected Kubernetes clusters with the same read-only access its investigations
+already use, learns what normal looks like, and opens an incident when something
+regresses that no alert rule caught. Each incident names the cluster change that
+most likely caused it and starts a normal Aurora investigation.
+
+Nothing is configured per alert: there are no thresholds to write. Aurora never
+writes to the cluster.
+
+## What it notices
+
+After learning a cluster for five minutes, Aurora reports a **regression from that
+cluster's own baseline**, not a fixed condition. A workload that was already failing
+when Watch started is part of the baseline until it has been healthy once. Workloads
+and Services created later get the same five-minute learning window of their own.
+
+| Signal | Example | Severity |
+|---|---|---|
+| A Service loses all its ready endpoints | a selector edited to match no pod | critical |
+| A workload loses ready replicas it had | 0 of 2 replicas ready | critical / high |
+| Pods cannot start | `ImagePullBackOff`, `CreateContainerConfigError`, `CrashLoopBackOff`, unschedulable for 2 min, stuck in an init container for 2 min | high |
+| Pods cannot be created | `FailedCreate` (e.g. exceeded quota), `FailedMount`, `ProvisioningFailed` | high |
+| A rollout stops progressing | no pod updated or ready for the Deployment's `progressDeadlineSeconds` (10 min by default) | high |
+| Containers restart | 2+ restarts in 10 min (1 restart is a notice) | high / medium |
+| Requests start failing in a workload's logs | new 5xx lines, client timeouts, proxy `connect() failed`, or failing requests and no successful ones where there used to be | high |
+| Error lines never seen before for that workload, or a known one surging | `ERROR metrics push failed` | low / medium |
+| A Warning event that was not firing before | `Unhealthy`, `BackOff` | medium |
+
+Normal operations are not regressions: a rolling update that progresses, a scale-up
+waiting on new pods, a scale to zero, a pod Pending while the cluster autoscaler adds
+a node, a single bad poll.
+
+A finding must be seen in two polls. **High** and **critical** findings open an
+incident; low and medium ones stay notices on the Kubernetes page and are reported
+again if they become incident-worthy.
+
+## Which change caused it
+
+Aurora diffs every poll against the previous one and keeps an hour of changes:
+pod template edits (image, env, resources, probes, init containers, volumes, DNS),
+Service selectors and ports, ConfigMap keys, NetworkPolicies, ResourceQuotas, PVCs,
+replaced pods. Each finding ranks them by how the changed object relates to the
+failing one (the same object, a ConfigMap it mounts, the Service in front of it, a
+dependency named in its environment, a NetworkPolicy selecting its pods) and how
+close in time the change was. The incident's investigation starts by confirming or
+refuting the top suspect.
+
+Findings that blame the same change, or two closely related objects, become one
+incident: a Service with no endpoints and the clients timing out on it are one
+incident, and so is a workload failing because a Service it depends on is down. Two
+unrelated changes stay two incidents, even in the same minute.
+
+## Turn it on
+
+1. Connect a cluster: **Connectors → Kubernetes** (in-cluster agent or kubeconfig).
+2. On **Connectors → Kubernetes → Manage**, switch on **Aurora Watch**. Optionally
+   list the namespaces to watch; by default it watches every namespace except
+   `kube-system`, `kube-public` and `kube-node-lease`.
+
+Turning it on needs the `connectors:write` permission (admins and editors). Aurora
+Watch acts as the user who turned it on: incidents are opened in their name and
+their RCA budget applies. Changing the namespaces later keeps that user; turning
+it off and on again makes it act as you. Operators can make it unavailable on an
+installation with `NEXT_PUBLIC_ENABLE_AURORA_WATCH=false`.
+
+## What it reads, and what it keeps
+
+* One `kubectl get` per minute (one per namespace when you list namespaces) for
+  pods, workloads, ReplicaSets, Services, Endpoints, events, ConfigMaps,
+  NetworkPolicies, ResourceQuotas, LimitRanges, PVCs, HPAs and PDBs, and
+  `kubectl logs --since --limit-bytes` for up to 25 workloads per minute. Every
+  command passes Aurora's read-only check and your organization's command policy
+  (Settings → Security); a denied command or an unreadable kind becomes a blind spot
+  shown on the Kubernetes page. If pods, workloads, Services or Endpoints cannot be
+  read, or the watched namespaces return more than 8 MB, that poll is skipped and
+  its error shown.
+* **Secrets are never read.** ConfigMap values are reduced to a hash per key, so
+  Aurora can say "key `default.conf` changed" without storing its content. Env
+  values whose name looks like a credential are stored as `<redacted>`; other env
+  values, container arguments and probe commands go through Aurora's secret
+  redaction (and URL passwords are masked), and probe header values are dropped.
+* Log lines quoted as evidence go through Aurora's secret redaction first, and
+  through the prompt-injection rail before they reach the investigation.
+* State per cluster (the learned baseline, open findings, the last hour of
+  changes) is stored in the `aurora_watch_state` table, scoped to your
+  organization.

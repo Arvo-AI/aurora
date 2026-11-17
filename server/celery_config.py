@@ -173,6 +173,7 @@ celery_app.conf.update(
         'utils.repo_metadata',
         'services.actions.scheduler',
         'services.connectors.heal',
+        'services.watch.tasks',
     ],
     # Periodic task schedule
     beat_schedule={
@@ -227,6 +228,13 @@ celery_app.conf.update(
         'backfill-teams-channel-descriptions': {
             'task': 'routes.teams.teams_channel_metadata.backfill_channel_descriptions',
             'schedule': BACKFILL_INTERVAL_SECONDS,
+        },
+        # Aurora Watch: poll the clusters of orgs that turned it on, open
+        # incidents for regressions (services/watch). A no-op for other orgs.
+        'aurora-watch-tick': {
+            'task': 'services.watch.tasks.watch_tick',
+            'schedule': 60.0,
+            'options': {'expires': 60},  # a tick that waited a minute in the queue is stale
         },
     },
     beat_schedule_filename='celerybeat-schedule',

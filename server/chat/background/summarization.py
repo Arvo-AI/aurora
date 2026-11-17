@@ -119,6 +119,17 @@ def _build_summary_prompt(
         if alert_metadata.get("incidentUrl"):
             key_details.append(f"Incident URL: {alert_metadata['incidentUrl']}")
 
+    elif source_type == "aurora_watch":
+        watch = alert_metadata.get("aurora_watch") or raw_payload or {}
+        if watch.get("message"):
+            key_details.append(f"What regressed: {watch['message']}")
+        for finding in (watch.get("findings") or [])[:3]:
+            key_details.append(f"Finding: {finding.get('summary')}")
+        suspects = watch.get("suspected_changes") or []
+        if suspects:
+            top = suspects[0]
+            key_details.append(f"Suspected change: {top.get('object')}: {'; '.join(top.get('details') or [])}")
+
     elif source_type == "pagerduty":
         if alert_metadata.get("incidentId"):
             key_details.append(f"Incident ID: {alert_metadata['incidentId']}")

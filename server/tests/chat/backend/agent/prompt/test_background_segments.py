@@ -38,6 +38,17 @@ def test_platform_sources_pick_their_segment(source, expected):
     assert "background_source_general" not in names
 
 
+def test_aurora_watch_gets_its_addendum_and_the_general_requirements():
+    names = _segments_for("aurora_watch")
+    assert "background_source_aurora_watch" in names
+    assert "background_source_general" in names
+    assert names.index("background_source_aurora_watch") < names.index("background_source_general")
+
+
+def test_the_addendum_is_only_for_aurora_watch():
+    assert "background_source_aurora_watch" not in _segments_for("grafana")
+
+
 @pytest.mark.parametrize("source", ["grafana", "chat", "team_routing"])
 def test_other_sources_fall_through_to_general(source):
     names = _segments_for(source)

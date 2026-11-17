@@ -148,6 +148,8 @@ x-common-env: &common-env
   GH_OAUTH_CLIENT_SECRET: ${GH_OAUTH_CLIENT_SECRET}
   # Enable/disable Incident Prevention (PR change-gating). Set to false to turn off entirely.
   NEXT_PUBLIC_ENABLE_INCIDENT_PREVENTION: ${NEXT_PUBLIC_ENABLE_INCIDENT_PREVENTION:-true}
+  # Aurora Watch (opens incidents from cluster regressions; per-org opt-in). false = unavailable.
+  NEXT_PUBLIC_ENABLE_AURORA_WATCH: ${NEXT_PUBLIC_ENABLE_AURORA_WATCH:-true}
 
   # AI Safety Guardrails
   GUARDRAILS_ENABLED: ${GUARDRAILS_ENABLED:-true}

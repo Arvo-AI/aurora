@@ -8,11 +8,13 @@ import { apiGet, apiPost, apiRequest, type ApiError } from '@/lib/services/api-c
 // streaming thoughts, and copy-pasteable post-mortems
 // ============================================================================
 
-export type AlertSource = 'netdata' | 'datadog' | 'grafana' | 'prometheus' | 'pagerduty' | 'splunk' | 'elastic' | 'dynatrace' | 'coroot' | 'bigpanda' | 'servicenow' | 'cloudwatch' | 'chat';
+export type AlertSource = 'netdata' | 'datadog' | 'grafana' | 'prometheus' | 'pagerduty' | 'splunk' | 'elastic' | 'dynatrace' | 'coroot' | 'bigpanda' | 'servicenow' | 'cloudwatch' | 'chat' | 'aurora_watch';
 
 export function getSourceIconSrc(source: string): string | null {
   if (source === 'chat') return null;
   if (source === 'cloudwatch') return '/aws.ico';
+  // Opened by Aurora itself from a Kubernetes cluster regression.
+  if (source === 'aurora_watch') return '/kubernetes-svgrepo-com.svg';
   return `/${source}.svg`;
 }
 

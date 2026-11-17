@@ -80,6 +80,9 @@ def get_user_providers(user_id: str) -> List[str]:
 
 PAYLOAD_CHAR_THRESHOLD = 1_000
 CHAT_PAYLOAD_MAX =60_000
+# Payloads Aurora builds itself, already bounded, that must reach the agent whole:
+# per-field truncation would cut the evidence and suspected changes they exist for.
+_UNTRUNCATED_SOURCES = ("chat", "aurora_watch")
 
 def _extract_rail_text_from_payload(payload: Dict[str, Any]) -> str:
     """Extract attacker-controllable text from a raw payload for guardrail evaluation."""
@@ -139,7 +142,7 @@ def build_rca_prompt(
         serialized = json.dumps(payload, ensure_ascii=False, default=str)
         payload_size = len(serialized)
 
-        if source == "chat":
+        if source in _UNTRUNCATED_SOURCES:
             if payload_size > CHAT_PAYLOAD_MAX:
                 json_content = serialized[:CHAT_PAYLOAD_MAX] + "\n... [message truncated]"
             else:
