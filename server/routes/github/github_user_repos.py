@@ -55,6 +55,7 @@ from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_credentials_from_db, get_org_id_for_user
 from utils.db.connection_pool import db_pool
 from utils.log_sanitizer import sanitize
+from connectors.github_connector.hosts import github_api_url
 
 github_user_repos_bp = Blueprint('github_user_repos', __name__)
 logger = logging.getLogger(__name__)
@@ -173,7 +174,7 @@ def _fetch_installation_repos(
     while True:
         try:
             resp = requests.get(
-                "https://api.github.com/installation/repositories",
+                f"{github_api_url()}/installation/repositories",
                 headers=headers,
                 params={"per_page": _PER_PAGE, "page": page},
                 timeout=_GITHUB_TIMEOUT,
@@ -313,7 +314,7 @@ def _fetch_oauth_repos(token: str) -> list[dict[str, Any]]:
     while True:
         try:
             resp = requests.get(
-                "https://api.github.com/user/repos",
+                f"{github_api_url()}/user/repos",
                 headers=headers,
                 params={
                     "per_page": _PER_PAGE,
@@ -426,7 +427,7 @@ def get_user_branches(user_id, repo_full_name):
         while True:
             try:
                 response = requests.get(
-                    f"https://api.github.com/repos/{encoded_path}/branches",
+                    f"{github_api_url()}/repos/{encoded_path}/branches",
                     headers=headers,
                     params={"per_page": _PER_PAGE, "page": page},
                     timeout=_GITHUB_TIMEOUT,

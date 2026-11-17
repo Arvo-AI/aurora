@@ -82,6 +82,12 @@ from utils.auth.github_app_jwt import GitHubAppJWTError, mint_app_jwt
 from utils.auth import normalize_email
 from utils.auth.handoff import mint_handoff as _mint_handoff
 from utils.db.connection_pool import db_pool
+from connectors.github_connector.hosts import (
+    github_api_url,
+    github_app_install_url,
+    github_app_page_url,
+    github_web_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -370,8 +376,7 @@ def github_app_signup_start():
     if not _signup_ready():
         return _render_error(_ERROR_NOT_AVAILABLE)
 
-    slug = (os.getenv("NEXT_PUBLIC_GITHUB_APP_SLUG") or "").strip()
-    if not slug:
+    if github_app_page_url() is None:
         logger.error("[GITHUB-SIGNUP] NEXT_PUBLIC_GITHUB_APP_SLUG missing")
         return _render_error(_ERROR_NOT_AVAILABLE)
 
@@ -381,9 +386,7 @@ def github_app_signup_start():
         logger.exception("[GITHUB-SIGNUP] failed to sign signup state")
         return _render_error(_ERROR_INTERNAL)
 
-    return flask.redirect(
-        f"https://github.com/apps/{slug}/installations/new?state={state}", code=302
-    )
+    return flask.redirect(github_app_install_url(state), code=302)
 
 
 def _verify_installation(installation_id: int) -> dict | None:
@@ -398,7 +401,7 @@ def _verify_installation(installation_id: int) -> dict | None:
         return None
     try:
         resp = requests.get(
-            f"https://api.github.com/app/installations/{installation_id}",
+            f"{github_api_url()}/app/installations/{installation_id}",
             headers={
                 "Authorization": f"Bearer {app_jwt}",
                 "Accept": _GH_JSON_MEDIA_TYPE,
@@ -438,7 +441,7 @@ def _exchange_code_for_identity(code: str) -> tuple[dict, str] | None:
 
     try:
         token_resp = requests.post(
-            "https://github.com/login/oauth/access_token",
+            f"{github_web_url()}/login/oauth/access_token",
             json={"client_id": client_id, "client_secret": client_secret, "code": code},
             headers={"Accept": "application/json"},
             timeout=GITHUB_TIMEOUT,
@@ -466,7 +469,7 @@ def _exchange_code_for_identity(code: str) -> tuple[dict, str] | None:
     }
     try:
         user_resp = requests.get(
-            "https://api.github.com/user", headers=headers, timeout=GITHUB_TIMEOUT
+            f"{github_api_url()}/user", headers=headers, timeout=GITHUB_TIMEOUT
         )
     except requests.RequestException:
         logger.exception("[GITHUB-SIGNUP] /user request failed")
@@ -492,7 +495,7 @@ def _exchange_code_for_identity(code: str) -> tuple[dict, str] | None:
         # to GitHub's stable noreply convention rather than failing signup.
         try:
             emails_resp = requests.get(
-                "https://api.github.com/user/emails",
+                f"{github_api_url()}/user/emails",
                 headers=headers,
                 timeout=GITHUB_TIMEOUT,
             )
@@ -542,7 +545,7 @@ def _user_authorized_for_installation(access_token: str, installation_id: int) -
     for page in range(1, _USER_INSTALLATIONS_MAX_PAGES + 1):
         try:
             resp = requests.get(
-                "https://api.github.com/user/installations",
+                f"{github_api_url()}/user/installations",
                 headers=headers,
                 params={"per_page": _USER_INSTALLATIONS_PER_PAGE, "page": page},
                 timeout=GITHUB_TIMEOUT,

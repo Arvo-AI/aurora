@@ -58,6 +58,13 @@ from utils.auth.stateless_auth import (
     validate_user_exists,
 )
 from utils.db.connection_pool import db_pool
+from connectors.github_connector.hosts import (
+    github_api_url,
+    github_app_install_url as _build_install_url,
+    github_app_page_url,
+    github_avatar_url,
+    github_installation_settings_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -313,7 +320,7 @@ def _reconcile_user_installations(user_id: str) -> None:
         for iid in linked_ids:
             try:
                 resp = requests.get(
-                    f"https://api.github.com/app/installations/{iid}",
+                    f"{github_api_url()}/app/installations/{iid}",
                     headers=headers,
                     timeout=GITHUB_RECONCILE_TIMEOUT,
                 )
@@ -380,8 +387,7 @@ def github_app_install_url(user_id):
     """
     if not flask.current_app.config.get("GITHUB_APP_ENABLED"):
         return jsonify({"error": "GitHub App not configured. Aurora is in OAuth-only mode."}), 503
-    slug = (os.getenv("NEXT_PUBLIC_GITHUB_APP_SLUG") or "").strip()
-    if not slug:
+    if github_app_page_url() is None:
         # 503 (not 500) so the frontend can show a "GitHub App not yet
         # configured by your admin" affordance instead of a generic crash.
         logger.error(
@@ -395,10 +401,7 @@ def github_app_install_url(user_id):
         logger.exception("[GITHUB-APP-INSTALL] failed to sign install state")
         return jsonify({"error": "GitHub App install state could not be initialized"}), 500
 
-    install_url = (
-        f"https://github.com/apps/{slug}/installations/new?state={signed_state}"
-    )
-    return jsonify({"install_url": install_url})
+    return jsonify({"install_url": _build_install_url(signed_state)})
 
 
 @github_app_bp.route("/app/install/callback", methods=["GET"])
@@ -452,7 +455,7 @@ def github_app_install_callback():
         )
         return _render_error(_ERROR_NOT_CONFIGURED)
 
-    api_url = f"https://api.github.com/app/installations/{installation_id}"
+    api_url = f"{github_api_url()}/app/installations/{installation_id}"
     headers = {
         "Authorization": f"Bearer {app_jwt}",
         "Accept": _GH_JSON_MEDIA_TYPE,
@@ -696,6 +699,8 @@ def github_app_list_installations(user_id):
             "permissions_pending_update": r[9],
             "linked_at": r[10].isoformat() if r[10] else None,
             "is_primary": r[11],
+            "manage_url": github_installation_settings_url(r[0], r[1], r[3]),
+            "avatar_url": github_avatar_url(r[1]),
         }
         for r in rows
     ]
@@ -741,7 +746,7 @@ def github_app_discover_installations(user_id):
         "Accept": _GH_JSON_MEDIA_TYPE,
         "X-GitHub-Api-Version": "2022-11-28",
     }
-    next_url = "https://api.github.com/app/installations?per_page=100"
+    next_url = f"{github_api_url()}/app/installations?per_page=100"
     installs: list = []
     pages_seen = 0
     MAX_PAGES = 20  # 20 * 100 = 2000 installs is plenty for Aurora scale
@@ -884,7 +889,7 @@ def github_app_claim_installation(user_id, installation_id):
 
     try:
         resp = requests.get(
-            f"https://api.github.com/app/installations/{installation_id}",
+            f"{github_api_url()}/app/installations/{installation_id}",
             headers={
                 "Authorization": f"Bearer {app_jwt}",
                 "Accept": _GH_JSON_MEDIA_TYPE,
@@ -1483,7 +1488,7 @@ def github_disconnect(user_id):
             for iid in linked_installs:
                 try:
                     resp = requests.delete(
-                        f"https://api.github.com/app/installations/{iid}",
+                        f"{github_api_url()}/app/installations/{iid}",
                         headers=headers,
                         timeout=GITHUB_RECONCILE_TIMEOUT,
                     )

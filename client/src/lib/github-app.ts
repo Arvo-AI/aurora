@@ -12,6 +12,10 @@ export interface GitHubInstallation {
   repository_selection: 'all' | 'selected';
   suspended_at: string | null;
   permissions_pending_update: boolean;
+  /** Installation settings page on the configured GitHub host. */
+  manage_url?: string;
+  /** Account avatar on the configured GitHub host. */
+  avatar_url?: string | null;
 }
 
 export interface GitHubInstallationsResponse {

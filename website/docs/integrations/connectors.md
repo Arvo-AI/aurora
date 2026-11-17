@@ -663,15 +663,45 @@ lose real-time webhook delivery (no push for `pull_request`,
 `workflow_run`, etc.) — incident correlation features that depend on
 webhooks degrade to lag-based polling.
 
-#### GitHub Enterprise Server (GHES)
+#### GitHub Enterprise
 
-**Not currently supported.** Aurora's GitHub-API call sites still
-hardcode `https://api.github.com`. Enabling GHES requires routing every
-hardcoded `api.github.com` and `github.com` reference through
-configurable base URLs (`GH_API_BASE_URL`, `GH_BASE_URL`). Until that
-work lands, GHES customers must run Aurora at a public hostname and
-talk to a public GHES URL (which usually defeats the point of GHES) or
-use the OAuth fallback above.
+Aurora works with GitHub Enterprise Cloud (`<name>.ghe.com`) and GitHub
+Enterprise Server. Create the App on your enterprise host as in Path A, then
+set `NEXT_PUBLIC_GITHUB_APP_SLUG` to the App's **full URL** as shown on its
+page, instead of the bare slug:
+
+```bash
+NEXT_PUBLIC_GITHUB_APP_SLUG=https://acme.ghe.com/apps/acme/aurora
+```
+
+Aurora takes the GitHub host from that URL and uses it for the install link,
+OAuth, every API call, links in chat and the UI, and the GitHub MCP server.
+The API base is derived from the host:
+
+| Host | API base |
+|------|----------|
+| `github.com` | `https://api.github.com` |
+| `<name>.ghe.com` | `https://api.<name>.ghe.com` |
+| anything else (GitHub Enterprise Server) | `https://<host>/api/v3` |
+
+Set `GITHUB_API_URL` only when that rule does not hold (for example, a
+proxy in front of GitHub). In OAuth-only mode there is no App: set
+`NEXT_PUBLIC_GITHUB_APP_SLUG` to your GitHub host URL so OAuth and API calls
+go there.
+
+Things that differ from github.com:
+
+- **Webhook source IPs.** If you allowlist webhook senders, use your
+  enterprise's addresses, not the `hooks` list from
+  `https://api.github.com/meta`. For GitHub Enterprise Cloud, GitHub
+  publishes the ranges per region ("Network details for GHE.com"); for
+  GitHub Enterprise Server, it is your server's egress address. Webhooks are
+  verified with the App's webhook secret either way.
+- **Private certificate authority.** If your GitHub host or an egress proxy
+  uses a private CA, Aurora's containers must trust it (for Python,
+  `REQUESTS_CA_BUNDLE`; the GitHub MCP server uses the system trust store).
+- **Network egress.** The server, Celery worker and chatbot must reach both
+  the web host and the API host.
 
 #### Troubleshooting
 

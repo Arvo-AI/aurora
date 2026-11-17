@@ -15,6 +15,7 @@ from typing import Any
 import requests
 from celery_config import celery_app
 from chat.backend.agent.utils.message_content import extract_text_from_content
+from connectors.github_connector.hosts import github_api_url
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,7 @@ METADATA_PROMPT = (
 
 def _fetch_readme(auth_headers: dict[str, Any], owner: str, repo: str) -> str:
     resp = requests.get(
-        f"https://api.github.com/repos/{owner}/{repo}/readme",
+        f"{github_api_url()}/repos/{owner}/{repo}/readme",
         headers={**auth_headers, "Accept": "application/vnd.github.v3+json"},
         timeout=15,
     )
@@ -47,7 +48,7 @@ def _fetch_readme(auth_headers: dict[str, Any], owner: str, repo: str) -> str:
 
 def _fetch_top_level_listing(auth_headers: dict[str, Any], owner: str, repo: str) -> str:
     resp = requests.get(
-        f"https://api.github.com/repos/{owner}/{repo}/contents",
+        f"{github_api_url()}/repos/{owner}/{repo}/contents",
         headers={**auth_headers, "Accept": "application/vnd.github.v3+json"},
         timeout=15,
     )

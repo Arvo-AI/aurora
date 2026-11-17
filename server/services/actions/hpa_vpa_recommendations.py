@@ -24,6 +24,7 @@ from typing import Any, Optional
 
 import requests
 
+from connectors.github_connector.hosts import github_api_url
 from utils.auth.stateless_auth import set_rls_context
 from utils.db.connection_pool import db_pool
 from utils.log_sanitizer import sanitize
@@ -645,7 +646,7 @@ def _close_github_pr(user_id: str, repo_full_name: str, pr_number: int, timeout:
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
-    url = f"https://api.github.com/repos/{repo_full_name}/pulls/{int(pr_number)}"
+    url = f"{github_api_url()}/repos/{repo_full_name}/pulls/{int(pr_number)}"
 
     try:
         resp = requests.patch(url, headers=headers, json={"state": "closed"}, timeout=timeout)

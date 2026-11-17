@@ -789,10 +789,13 @@ export default function GitHubProviderIntegration() {
     return `${count} selected repositor${count === 1 ? 'y' : 'ies'}`;
   };
 
+  // The installations list carries these for the configured GitHub host
+  // (github.com or GitHub Enterprise); other responses fall back to github.com.
   const installationManageUrl = (installation: GitHubInstallation): string =>
-    installation.account_type === 'Organization'
-      ? `https://github.com/organizations/${installation.account_login}/settings/installations/${installation.installation_id}`
-      : `https://github.com/settings/installations/${installation.installation_id}`;
+    installation.manage_url
+      || (installation.account_type === 'Organization'
+        ? `https://github.com/organizations/${installation.account_login}/settings/installations/${installation.installation_id}`
+        : `https://github.com/settings/installations/${installation.installation_id}`);
 
   const activeInstallation: GitHubInstallation | null = (() => {
     if (installations.length === 0) return null;
@@ -1006,7 +1009,7 @@ export default function GitHubProviderIntegration() {
                       <div className="flex items-start gap-3 min-w-0 flex-1">
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img
-                          src={`https://github.com/${installation.account_login}.png?size=40`}
+                          src={installation.avatar_url || `https://github.com/${installation.account_login}.png?size=40`}
                           alt={`${installation.account_login} avatar`}
                           width={40}
                           height={40}
