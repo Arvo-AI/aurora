@@ -122,6 +122,7 @@ from .rabbitmq_tool import (
     rabbitmq_list_connections,
     rabbitmq_list_consumers,
     rabbitmq_health_checks,
+    rabbitmq_list_brokers,
     is_rabbitmq_connected,
     RabbitMQOverviewArgs,
     RabbitMQNodesArgs,
@@ -132,6 +133,7 @@ from .rabbitmq_tool import (
     RabbitMQListConnectionsArgs,
     RabbitMQListConsumersArgs,
     RabbitMQHealthArgs,
+    RabbitMQListBrokersArgs,
 )
 from .coroot_tool import (
     coroot_get_incidents,
@@ -3164,6 +3166,9 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     try:
         if rabbitmq_connected and _open("rabbitmq"):
             _rabbitmq_tools = [
+                (rabbitmq_list_brokers, "rabbitmq_list_brokers", RabbitMQListBrokersArgs,
+                 ("List the RabbitMQ brokers this user can query, with each account_id and name. "
+                  "Every other RabbitMQ tool takes account_id to pick one broker. Omitting it queries every broker, up to 5; with more, pick one from this list.")),
                 (rabbitmq_get_overview, "rabbitmq_get_overview", RabbitMQOverviewArgs,
                  ("Read RabbitMQ cluster overview: version, queue totals, message rates, and listeners. "
                   "Start here when a broker or consumer outage is suspected.")),
@@ -3173,7 +3178,8 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                  ("List RabbitMQ queues sorted by depth. Shows ready, unacked, consumers, and rates. "
                   "Zero consumers with a growing ready count means nothing is subscribed to that queue. Check the worker connection and which queue it consumes.")),
                 (rabbitmq_get_queue, "rabbitmq_get_queue", RabbitMQGetQueueArgs,
-                 "Get one RabbitMQ queue, including dead-letter arguments and publish/deliver rates."),
+                 ("Get one RabbitMQ queue: depth and whether it is growing (depth_rate), dead-letter and limit settings from both "
+                  "queue arguments and policy (effective_policy), its consumers with the connection that holds each, and rates.")),
                 (rabbitmq_list_exchanges, "rabbitmq_list_exchanges", RabbitMQListExchangesArgs,
                  "List RabbitMQ exchanges and their publish rates."),
                 (rabbitmq_list_bindings, "rabbitmq_list_bindings", RabbitMQListBindingsArgs,

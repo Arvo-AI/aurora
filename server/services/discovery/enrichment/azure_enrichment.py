@@ -14,6 +14,7 @@ import logging
 import os
 
 from services.discovery.enrichment.cli_utils import run_cli_json_command
+from utils.security.subprocess_env import strip_github_app_secrets
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +26,7 @@ def _build_env(credentials):
     corresponding AZURE_* environment variables. Otherwise returns a copy
     of the current environment (assumes ``az login`` was already done).
     """
-    env = os.environ.copy()
+    env = strip_github_app_secrets(os.environ.copy())
 
     tenant_id = credentials.get("tenant_id")
     client_id = credentials.get("client_id")

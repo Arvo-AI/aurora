@@ -1,6 +1,7 @@
 """Extract citations from RCA chat sessions for evidence linking."""
 
 import json
+import re
 import logging
 from dataclasses import dataclass
 from datetime import datetime
@@ -124,10 +125,14 @@ _TOOL_NAME_MAPPING: Dict[str, str] = {
     "rabbitmq_list_connections": "RabbitMQ Connections",
     "rabbitmq_list_consumers": "RabbitMQ Consumers",
     "rabbitmq_health_checks": "RabbitMQ Health",
+    "rabbitmq_list_brokers": "RabbitMQ Brokers",
 }
 
 # Internal coordination tools that show up as tool messages but aren't real
 # evidence — filter them out of citations entirely.
+# Start of a RabbitMQ tool result: its ``brokers`` list is always the first key.
+_LEADING_BROKERS_RE = re.compile(r'\s*\{\s*"brokers"\s*:\s*')
+
 _NON_EVIDENCE_TOOLS = frozenset({
     "dispatch_subagent",
     "write_findings",
@@ -213,6 +218,78 @@ class CitationExtractor:
                 f"[CitationExtractor] Failed to extract citations for session {session_id}: {e}"
             )
             return []
+
+    def extract_citations_from_steps(self, incident_id: str, user_id: str) -> List[Citation]:
+        """Citations from the RCA's execution_steps, in the order they ran.
+
+        Each tool call is written there as it starts and ends, so this survives a
+        run whose chat context was never saved (its worker died, say). Only the
+        RCA's own session and its sub-agents count: action runs on the incident
+        record steps too, and they are not the investigation's evidence.
+        """
+        from chat.background.continuation import RCA_STEPS_WHERE
+        from utils.db.connection_pool import db_pool
+        from utils.auth.stateless_auth import set_rls_context
+
+        try:
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cursor:
+                    set_rls_context(cursor, conn, user_id, log_prefix="[CitationExtractor:steps]")
+                    cursor.execute(
+                        f"""SELECT es.tool_name, es.tool_call_id, es.tool_input, es.tool_output, es.started_at
+                            FROM execution_steps es
+                            WHERE {RCA_STEPS_WHERE} AND es.tool_output IS NOT NULL
+                            ORDER BY es.step_index""",
+                        (incident_id,),
+                    )
+                    rows = cursor.fetchall()
+        except Exception:
+            logger.exception(f"[CitationExtractor] Failed to read execution steps for incident {incident_id}")
+            return []
+
+        citations: List[Citation] = []
+        for tool_name, tool_call_id, tool_input, tool_output, started_at in rows:
+            if tool_name in _NON_EVIDENCE_TOOLS:
+                continue
+            output = self._extract_output(tool_output or "")
+            if not output.strip():
+                continue
+            args = self._parse_history_args(tool_input)
+            command = self._extract_command(args, tool_output or "", tool_name)
+            command = self._with_splunk_instance(tool_name, command, args, tool_output or "")
+            citations.append(Citation(
+                index=len(citations) + 1,
+                tool_name=self._normalize_tool_name(tool_name),
+                command=command,
+                output=output,
+                timestamp=started_at,
+                tool_call_id=tool_call_id or "",
+            ))
+        logger.info(f"[CitationExtractor] Extracted {len(citations)} citations from execution steps")
+        return citations
+
+    @staticmethod
+    def merge_citations(session: List[Citation], steps: List[Citation]) -> List[Citation]:
+        """The recorded steps plus any session citation they lack, renumbered.
+
+        A session citation with the same tool call replaces the step (its
+        command is recorded before arguments are truncated), keeping whichever
+        output is longer: a session excerpt is capped shorter than a step's.
+        """
+        by_call = {c.tool_call_id: c for c in session if c.tool_call_id}
+        merged: List[Citation] = []
+        for step in steps:
+            match = by_call.pop(step.tool_call_id, None) if step.tool_call_id else None
+            if match is None:
+                merged.append(step)
+                continue
+            if len(step.output or "") > len(match.output or ""):
+                match.output = step.output
+            merged.append(match)
+        merged += [c for c in session if not c.tool_call_id or c.tool_call_id in by_call]
+        for index, citation in enumerate(merged, start=1):
+            citation.index = index
+        return merged
 
     def _load_sub_agent_history(
         self, cursor, incident_id: str
@@ -437,10 +514,13 @@ class CitationExtractor:
 
     @staticmethod
     def _with_splunk_instance(tool_name: str, command: str, args: Any, content: str) -> str:
-        """Append the Splunk instance a search, index, or sourcetype call used."""
-        if tool_name not in ("search_splunk", "list_splunk_indexes", "list_splunk_sourcetypes"):
+        """Append the Splunk instance or RabbitMQ broker a call used."""
+        if tool_name.startswith("rabbitmq_") and tool_name != "rabbitmq_list_brokers":
+            label = CitationExtractor._rabbitmq_broker_label(args, content)
+        elif tool_name in ("search_splunk", "list_splunk_indexes", "list_splunk_sourcetypes"):
+            label = CitationExtractor._splunk_instance_label(args, content)
+        else:
             return command
-        label = CitationExtractor._splunk_instance_label(args, content)
         if not label or label in command:
             return command
         return f"{command} on {label}"
@@ -481,6 +561,46 @@ class CitationExtractor:
         if isinstance(args, dict) and args.get("account_id"):
             return str(args["account_id"])
         return ""
+
+    @staticmethod
+    def _leading_brokers(content: str) -> Optional[Dict[str, Any]]:
+        """Decode just a leading ``{"brokers": [...]`` from a truncated JSON string."""
+        match = _LEADING_BROKERS_RE.match(content)
+        if not match:
+            return None
+        try:
+            brokers, _end = json.JSONDecoder().raw_decode(content, match.end())
+        except (json.JSONDecodeError, ValueError):
+            return None
+        return {"brokers": brokers} if isinstance(brokers, list) else None
+
+    @staticmethod
+    def _rabbitmq_broker_label(args: Any, content: Any) -> str:
+        """Which RabbitMQ brokers a call hit, from its ``brokers`` list or the requested account."""
+        parsed: Any = content if isinstance(content, dict) else None
+        if isinstance(content, str) and content:
+            try:
+                parsed = json.loads(content)
+            except (json.JSONDecodeError, TypeError):
+                # History keeps only an excerpt. ``brokers`` leads every result,
+                # so it usually survives truncation even when the rest doesn't.
+                parsed = CitationExtractor._leading_brokers(content)
+        brokers = parsed.get("brokers") if isinstance(parsed, dict) else None
+        labels = CitationExtractor._rabbitmq_labels(brokers) if isinstance(brokers, list) else []
+        if labels:
+            return ", ".join(labels)
+        # Result not stored yet — use the broker the model asked for.
+        if isinstance(args, dict) and isinstance(args.get("account_id"), str):
+            return args["account_id"]
+        return ""
+
+    @staticmethod
+    def _rabbitmq_labels(brokers: list) -> list:
+        return [
+            CitationExtractor._format_splunk_label(str(item["account_id"]), str(item.get("broker") or ""))
+            for item in brokers
+            if isinstance(item, dict) and item.get("account_id")
+        ]
 
     @staticmethod
     def _one_splunk_label(item: Any) -> str:

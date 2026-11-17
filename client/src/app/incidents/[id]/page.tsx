@@ -10,7 +10,11 @@ import { ArrowLeft, AlertTriangle, GitMerge, Repeat } from 'lucide-react';
 import IncidentCard from '../components/IncidentCard';
 import ThoughtsPanel, { PANEL_WIDTH_DEFAULT } from '../components/ThoughtsPanel';
 
+// After this long with no change the poll slows down. The page never declares
+// a failure on its own: a model can think for many minutes without changing
+// the incident row, and the server is what ends a run that is really stuck.
 const STALE_POLL_MS = 5 * 60 * 1000;
+const SLOW_POLL_INTERVAL_MS = 10_000;
 
 export default function IncidentDetailPage() {
   const params = useParams();
@@ -27,6 +31,8 @@ export default function IncidentDetailPage() {
   const lastUpdatedAtRef = useRef<string>('');
   // Poll, SSE and manual refresh all call getIncident; only the newest request may apply.
   const fetchSeqRef = useRef(0);
+  // Bumped to restart the poll loop, e.g. after a continuation is started.
+  const [pollKey, setPollKey] = useState(0);
 
   const applyIncidentData = useCallback((data: Incident) => {
     const newThoughts = data.streamingThoughts || [];
@@ -64,7 +70,8 @@ export default function IncidentDetailPage() {
         }
         if (seq === fetchSeqRef.current) applyIncidentData(data);
 
-        const needsPoll = data.status === 'investigating' || data.auroraStatus === 'summarizing';
+        const needsPoll = data.status === 'investigating'
+          || data.auroraStatus === 'running' || data.auroraStatus === 'summarizing';
         if (!needsPoll || !active) { pollStartRef.current = 0; return; }
 
         if (data.updatedAt !== lastUpdatedAtRef.current) {
@@ -72,11 +79,8 @@ export default function IncidentDetailPage() {
           pollStartRef.current = Date.now();
         }
         if (!pollStartRef.current) pollStartRef.current = Date.now();
-        if (Date.now() - pollStartRef.current > STALE_POLL_MS) {
-          setIncident(prev => prev ? { ...prev, auroraStatus: 'error' as const } : prev);
-          return;
-        }
-        timer = setTimeout(() => fetchAndSchedule(false), 1000);
+        const quiet = Date.now() - pollStartRef.current > STALE_POLL_MS;
+        timer = setTimeout(() => fetchAndSchedule(false), quiet ? SLOW_POLL_INTERVAL_MS : 1000);
       } catch (e) {
         if (!active) return;
         if (isInitial) {
@@ -87,11 +91,8 @@ export default function IncidentDetailPage() {
           }
         } else {
           if (!pollStartRef.current) pollStartRef.current = Date.now();
-          if (Date.now() - pollStartRef.current > STALE_POLL_MS) {
-            setIncident(prev => prev ? { ...prev, auroraStatus: 'error' as const } : prev);
-          } else {
-            timer = setTimeout(() => fetchAndSchedule(false), 2000);
-          }
+          const quiet = Date.now() - pollStartRef.current > STALE_POLL_MS;
+          timer = setTimeout(() => fetchAndSchedule(false), quiet ? SLOW_POLL_INTERVAL_MS : 2000);
         }
       } finally {
         if (isInitial && active) setLoading(false);
@@ -100,7 +101,7 @@ export default function IncidentDetailPage() {
 
     fetchAndSchedule(true);
     return () => { active = false; clearTimeout(timer); };
-  }, [params.id, applyIncidentData]);
+  }, [params.id, applyIncidentData, pollKey]);
 
   // A fold lands after the RCA completes, i.e. after the poll loop above has
   // stopped, so refetch on incident events naming this incident as member or
@@ -259,6 +260,7 @@ export default function IncidentDetailPage() {
               }}
               citations={incident.citations}
               onRefresh={refreshIncident}
+              onInvestigationRestarted={() => setPollKey(k => k + 1)}
             />
           </div>
         </div>

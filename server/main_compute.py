@@ -9,6 +9,12 @@ from dotenv import load_dotenv
 # Load environment variables from the project root .env file
 load_dotenv()
 
+# Same-uid children (agent commands, MCP servers) must not read this process's
+# env from /proc. Under gunicorn --preload this runs in the master, so the
+# forked workers inherit it.
+from utils.security.subprocess_env import deny_same_uid_proc_access
+deny_same_uid_proc_access()
+
 import logging
 import os
 import sys

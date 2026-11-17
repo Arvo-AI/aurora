@@ -5,7 +5,7 @@ import logging
 import os
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, NamedTuple, Optional
 from uuid import UUID
 
 from celery_config import celery_app
@@ -175,6 +175,30 @@ Style: descriptive, not advisory
 """
 
     return prompt
+
+
+# Why an investigation ended before it finished, as the report states it.
+UNFINISHED_REASONS = {
+    "time_limit": "it reached its time limit",
+    "stalled": "it stopped making progress and was halted",
+    "error": "it hit an error it could not recover from",
+    "interrupted": "the worker running it stopped unexpectedly",
+}
+
+
+def _unfinished_investigation_note(reason: str) -> str:
+    """Instructions put in front of the summary prompt when the RCA did not finish."""
+    why = UNFINISHED_REASONS.get(reason, "it was interrupted")
+    return (
+        "IMPORTANT: this investigation did not finish; " + why + ". The evidence below is "
+        "everything it gathered before it stopped.\n"
+        "- Start the report with this line: \"Investigation incomplete: " + why + "; the "
+        "findings below are partial.\"\n"
+        "- Report only what the evidence establishes. Do not present an unconfirmed "
+        "hypothesis as the root cause: if it was not established, say \"Root cause not "
+        "determined\", then give the most likely candidates and what would confirm each.\n"
+        "- In the Not Checked section, list the areas the investigation had not reached."
+    )
 
 
 def _build_summary_prompt_with_chat(
@@ -717,8 +741,24 @@ def generate_incident_summary_from_chat(
     user_id: str,
     session_id: str,
     announce_completion: bool = True,
+    unfinished_reason: Optional[str] = None,
+    include_recorded_steps: bool = False,
+    finishes_rca: bool = False,
 ) -> Dict[str, Any]:
     """Regenerate incident summary after RCA using the RCA chat transcript with citations.
+
+    finishes_rca: the run that owns the RCA (the primary one or a continuation)
+    finished. Its full report clears the incident's unfinished state, once
+    written. Any other summary of an unfinished RCA (a follow-up chat) stays
+    partial, and a failed summary keeps the report an earlier run wrote.
+
+    include_recorded_steps: also cite every tool call recorded for the
+    incident, not only those in this session's context. Set for a continuation,
+    whose context holds only its own run.
+
+    unfinished_reason: set when the RCA was stopped before it finished
+    (a key of UNFINISHED_REASONS). The summary then covers the partial evidence
+    and says up front that the investigation is incomplete.
 
     announce_completion: False when the summary is being regenerated after a
     follow-up chat (Slack/Google Chat reply on an existing incident). The
@@ -749,6 +789,9 @@ def generate_incident_summary_from_chat(
         return {"incident_id": incident_id, "status": "hook_blocked", "error": hook_message}
 
     summary_written = False  # guards the soft-limit handler's error overwrite
+    # This run itself stopped before it finished (the RCA task says why).
+    stopped_early = unfinished_reason is not None
+    keeps_earlier_report = False
 
     try:
         basics = _fetch_incident_basics(incident_id, user_id=user_id)
@@ -758,12 +801,26 @@ def generate_incident_summary_from_chat(
             )
             return {"incident_id": incident_id, "status": "not_found"}
 
+        prior_reason, continuations = _read_unfinished_state(incident_id, user_id)
+        plan = _plan_summary(unfinished_reason, finishes_rca, prior_reason, continuations)
+        unfinished_reason = plan.unfinished_reason
+        include_recorded_steps = include_recorded_steps or plan.include_recorded_steps
+        keeps_earlier_report = plan.keeps_earlier_report
+
         # Extract citations from the chat session (citations are simply tool calls and their outputs).
         # Passing incident_id expands dispatch_subagent rollups into per-tool-call citations.
         extractor = CitationExtractor()
         all_citations = extractor.extract_citations_from_session(
             session_id, user_id, incident_id=incident_id,
         )
+
+        if not all_citations or unfinished_reason or include_recorded_steps:
+            # An interrupted run never saves its context, and a continuation's
+            # context holds only its own turn: the evidence of every run is in
+            # the tool calls recorded as they ran.
+            all_citations = extractor.merge_citations(
+                all_citations, extractor.extract_citations_from_steps(incident_id, user_id),
+            )
 
         logger.info(
             f"{_LOG_PREFIX} Extracted {len(all_citations)} potential citations for incident {incident_id}"
@@ -800,6 +857,9 @@ def generate_incident_summary_from_chat(
             fix_suggestions=fix_suggestions if fix_suggestions else None,
             agent_reasoning=agent_reasoning,
         )
+        if unfinished_reason:
+            prompt = _unfinished_investigation_note(unfinished_reason) + "\n\n" + prompt
+            logger.info("%s Summarizing unfinished investigation %s (%s)", _LOG_PREFIX, incident_id, unfinished_reason)
 
         logger.info(
             "%s incident_summary_prompt incident=%s citations=%d "
@@ -844,11 +904,6 @@ def generate_incident_summary_from_chat(
                 used_keys.update(keys)
 
             used_citations = [c for c in all_citations if str(c.index) in used_keys]
-            if used_citations:
-                save_incident_citations(incident_id, used_citations)
-                logger.info(
-                    f"{_LOG_PREFIX} Saved {len(used_citations)} used citations for incident {incident_id}"
-                )
 
         # Generate next steps from the investigation trace (v3 recommender).
         # Falls back to summary-based extraction if the trace is empty.
@@ -880,8 +935,21 @@ def generate_incident_summary_from_chat(
                 f"{_LOG_PREFIX} Failed to generate recommendations for incident {incident_id}: {e}"
             )
 
-        _update_incident_summary(incident_id, summary, user_id=user_id)
-        summary_written = True
+        # A finished RCA's report ends its unfinished state, in the same write.
+        # False only when the write itself failed (None from older stubs counts as written).
+        summary_written = _update_incident_summary(
+            incident_id, summary, user_id=user_id,
+            clear_unfinished=finishes_rca and not unfinished_reason,
+        ) is not False
+        if not summary_written:
+            raise RuntimeError("The incident summary could not be saved")
+        # Citations replace the earlier report's only once its text is replaced,
+        # so a report kept after a failed write keeps its own citations.
+        if used_citations:
+            save_incident_citations(incident_id, used_citations)
+            logger.info(
+                f"{_LOG_PREFIX} Saved {len(used_citations)} used citations for incident {incident_id}"
+            )
 
         # Root-cause recurrence check (dedup layer 1): runs post-summary-write,
         # pre-notification — fold-then-notify is the ordering that Slack threading
@@ -890,6 +958,16 @@ def generate_incident_summary_from_chat(
         # braces so notifications stay guaranteed. On task retry the existing
         # verdict row makes the re-run a no-op.
         recurrence_outcome = None
+        if unfinished_reason:
+            # A partial report is not a root cause: do not fold incidents on it or
+            # record it in the Incident Index. A continuation that finishes does both.
+            _notify_completed()
+            return {
+                "incident_id": incident_id,
+                "status": "completed_partial",
+                "summary_length": len(summary),
+                "citations_count": len(used_citations),
+            }
         try:
             from services.correlation.recurrence_agent import run_recurrence_check
             recurrence_outcome = run_recurrence_check(
@@ -987,12 +1065,16 @@ def generate_incident_summary_from_chat(
                 "incident_id": incident_id,
                 "status": "completed_soft_limit",
             }
-        _update_incident_summary(
-            incident_id,
-            "Summary generation timed out. View investigation chat for details.",
-            status="error",
-            user_id=user_id,
-        )
+        if keeps_earlier_report:
+            _keep_earlier_report(incident_id, user_id, announce=finishes_rca or stopped_early)
+        else:
+            _update_incident_summary(
+                incident_id,
+                "Summary generation timed out. View investigation chat for details.",
+                status="error",
+                user_id=user_id,
+            )
+            _notify_unwritten_partial_report(user_id, incident_id, unfinished_reason if stopped_early else None)
         return {
             "incident_id": incident_id,
             "status": "timeout",
@@ -1009,12 +1091,16 @@ def generate_incident_summary_from_chat(
             )
             raise self.retry(exc=e)
 
-        _update_incident_summary(
-            incident_id,
-            "Summary generation failed. View investigation chat for details.",
-            status="error",
-            user_id=user_id,
-        )
+        if keeps_earlier_report:
+            _keep_earlier_report(incident_id, user_id, announce=finishes_rca or stopped_early)
+        else:
+            _update_incident_summary(
+                incident_id,
+                "Summary generation failed. View investigation chat for details.",
+                status="error",
+                user_id=user_id,
+            )
+            _notify_unwritten_partial_report(user_id, incident_id, unfinished_reason if stopped_early else None)
         return {
             "incident_id": incident_id,
             "status": "failed",
@@ -1022,10 +1108,106 @@ def generate_incident_summary_from_chat(
         }
 
 
+class _SummaryPlan(NamedTuple):
+    unfinished_reason: Optional[str]
+    include_recorded_steps: bool
+    keeps_earlier_report: bool
+
+
+def _plan_summary(
+    unfinished_reason: Optional[str], finishes_rca: bool, prior_reason: Optional[str], continuations: int,
+) -> _SummaryPlan:
+    """How to summarize, given why this run stopped and the incident's unfinished state.
+
+    * The RCA's own run stopping early (*unfinished_reason*) writes a partial report.
+    * A follow-up chat on an RCA that never finished (*prior_reason*, not
+      *finishes_rca*) still writes a partial report over the RCA's evidence,
+      not a conclusion drawn from the follow-up alone.
+    * A failed summary must not erase a report an earlier run wrote: a
+      continued RCA's (*continuations*), or the one a follow-up re-summarizes.
+    """
+    stopped_early = unfinished_reason is not None
+    include_steps = False
+    if not stopped_early and not finishes_rca and prior_reason:
+        unfinished_reason = prior_reason
+        include_steps = True
+    keeps_earlier = bool(prior_reason) and (continuations > 0 or not (finishes_rca or stopped_early))
+    return _SummaryPlan(unfinished_reason, include_steps, keeps_earlier)
+
+
+def _read_unfinished_state(incident_id: str, user_id: str) -> tuple:
+    """(rca_unfinished_reason, rca_continuations) for the incident.
+
+    A failed read raises, so the task retries: read as "finished", it would
+    turn a partial report into a conclusion.
+    """
+    with db_pool.get_admin_connection() as conn:
+        with conn.cursor() as cursor:
+            if not set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX):
+                raise RuntimeError("Could not set the org context to read the incident")
+            cursor.execute(
+                "SELECT rca_unfinished_reason, rca_continuations FROM incidents WHERE id = %s",
+                (incident_id,),
+            )
+            row = cursor.fetchone()
+    if not row or len(row) != 2 or not isinstance(row[0], (str, type(None))):
+        return None, 0
+    return row[0], int(row[1] or 0)
+
+
+def _keep_earlier_report(incident_id: str, user_id: str, announce: bool) -> None:
+    """A summary failed where an earlier report exists: keep that report.
+
+    The incident goes back to it, still unfinished and so still continuable.
+    *announce* tells the user, when the run that failed to report was one they
+    were waiting on (a continuation, or the RCA stopping again).
+    """
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                if not set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX):
+                    return
+                cursor.execute(
+                    "UPDATE incidents SET aurora_status = 'complete', updated_at = NOW() WHERE id = %s",
+                    (incident_id,),
+                )
+            conn.commit()
+    except Exception:
+        logger.exception(f"{_LOG_PREFIX} Could not restore the earlier report of {incident_id}")
+    if not announce:
+        return
+    try:
+        from utils.notifications.dispatcher import notify_investigation_failed
+        notify_investigation_failed(
+            user_id, incident_id,
+            error_message="The new report could not be written; the earlier report is kept.",
+        )
+    except Exception:
+        logger.exception(f"{_LOG_PREFIX} Failed to notify about the kept report for {incident_id}")
+
+
+def _notify_unwritten_partial_report(user_id: str, incident_id: str, unfinished_reason: Optional[str]) -> None:
+    """Tell the user when an RCA stopped early and its report could not be written.
+
+    The RCA task handed the failure over to this summary, so without this the
+    incident's card would never hear how the investigation ended.
+    """
+    if not unfinished_reason:
+        return
+    try:
+        from utils.notifications.dispatcher import notify_investigation_failed
+        notify_investigation_failed(
+            user_id, incident_id,
+            error_message="The investigation stopped early and its report could not be written.",
+        )
+    except Exception:
+        logger.exception(f"{_LOG_PREFIX} Failed to notify about unwritten report for {incident_id}")
+
+
 def _update_incident_summary(
     incident_id: str, summary: str, status: Optional[str] = "complete",
-    user_id: Optional[str] = None,
-) -> None:
+    user_id: Optional[str] = None, clear_unfinished: bool = False,
+) -> bool:
     """Update the aurora_summary field for an incident.
 
     Args:
@@ -1033,7 +1215,11 @@ def _update_incident_summary(
         summary: The generated summary text
         status: The aurora_status to set ('complete', 'error', etc.). If None, preserve current status.
         user_id: User ID to resolve org_id for RLS context (required from Celery workers).
+        clear_unfinished: also clear rca_unfinished_reason (a finished RCA's report).
+
+    Returns True when the row was updated.
     """
+    rows_updated = 0
 
     try:
         UUID(incident_id)  # Validate UUID format
@@ -1044,7 +1230,7 @@ def _update_incident_summary(
                 if user_id:
                     resolved_org_id = set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX)
                     if not resolved_org_id:
-                        return
+                        return False
 
                 # If status is None, only update summary and preserve current aurora_status
                 if status is None:
@@ -1065,10 +1251,11 @@ def _update_incident_summary(
                             aurora_status = %s,
                             status = CASE WHEN status = 'investigating' AND %s = 'complete' THEN 'analyzed' ELSE status END,
                             analyzed_at = CASE WHEN analyzed_at IS NULL THEN %s ELSE analyzed_at END,
+                            rca_unfinished_reason = CASE WHEN %s THEN NULL ELSE rca_unfinished_reason END,
                             updated_at = %s
                         WHERE id = %s
                         """,
-                        (summary, status, status, datetime.now(), datetime.now(), incident_id),
+                        (summary, status, status, datetime.now(), clear_unfinished, datetime.now(), incident_id),
                     )
 
                 rows_updated = cursor.rowcount
@@ -1104,7 +1291,9 @@ def _update_incident_summary(
                         _LOG_PREFIX, incident_id,
                     )
 
+        return rows_updated > 0
     except Exception as e:
         logger.error(
             f"{_LOG_PREFIX} Failed to update incident {incident_id} summary: {e}"
         )
+        return False

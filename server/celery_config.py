@@ -354,15 +354,28 @@ if hasattr(celery_app, 'tasks'):
 import threading
 
 try:
-    from celery.signals import worker_process_init
+    from celery.signals import worker_init, worker_process_init
 except (ImportError, ModuleNotFoundError):
     # Tests stub celery as MagicMock when the package isn't installed (see
     # tests/conftest.py), so celery.signals isn't importable outside workers.
-    worker_process_init = None
+    worker_init = worker_process_init = None
 
 _prewarm_ready = threading.Event()
 
 _prewarm_logger = logging.getLogger("celery.prewarm")
+
+
+if worker_init is not None:
+
+    @worker_init.connect
+    def _deny_proc_access(**kwargs):
+        """Runs in the worker master before the pool forks, so every child inherits it.
+
+        Task code runs agent shell commands as same-uid children; without this
+        they could read the master's secrets from /proc/<pid>/environ.
+        """
+        from utils.security.subprocess_env import deny_same_uid_proc_access
+        deny_same_uid_proc_access()
 
 
 if worker_process_init is not None:
