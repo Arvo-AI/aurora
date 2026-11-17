@@ -421,6 +421,10 @@ app.register_blueprint(connector_access_bp)
 from routes.org_teams import org_teams_bp
 app.register_blueprint(org_teams_bp)
 
+# --- Change gating: zero-connection "try a review" preview ---
+from routes.change_gating_try import change_gating_try_bp
+app.register_blueprint(change_gating_try_bp)
+
 # --- GitHub Integration Routes (App-first, OAuth gated by GITHUB_AUTH_MODE) ---
 from routes.github.github_user_repos import github_user_repos_bp
 from routes.github.github_repo_selection import github_repo_selection_bp

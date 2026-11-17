@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
-import { ChevronLeft, Settings, LogOut, User, Zap, Plug, Gauge, SquarePen, Workflow } from "lucide-react"
+import { ChevronLeft, Settings, LogOut, User, Zap, Plug, Gauge, SquarePen, Workflow, ShieldCheck } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import ChatHistory from "@/components/ChatHistory"
@@ -220,6 +220,24 @@ export default function Navigation({
               <div className="flex items-center">
                 <Gauge size={16} />
                 <span className="ml-2">Monitor</span>
+              </div>
+            </Link>
+          </li>
+
+          {/* Try a review: zero-connection pre-merge review */}
+          <li>
+            <Link
+              href="/try-review"
+              className={cn(
+                "w-full flex items-center justify-between px-2.5 py-1.5 rounded-md hover:bg-primary/10 transition-colors text-sm border border-transparent hover:border-border/50",
+                pathname?.startsWith("/try-review")
+                  ? "bg-card rounded-lg border border-border shadow-sm"
+                  : "text-muted-foreground"
+              )}
+            >
+              <div className="flex items-center">
+                <ShieldCheck size={16} />
+                <span className="ml-2">Try a review</span>
               </div>
             </Link>
           </li>
