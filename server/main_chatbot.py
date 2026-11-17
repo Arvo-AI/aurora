@@ -1607,7 +1607,20 @@ async def handle_connection(websocket) -> None:
                                 "file_data": file_data  # Already includes data:application/pdf;base64, prefix
                             }
                         })
-                
+                evidence_names = [a.get('filename', 'unknown') for a in attachments if a.get('is_server_path')]
+                if evidence_names:
+                    content_parts.append({
+                        "type": "text",
+                        "text": (
+                            "[ATTACHED EVIDENCE FILES]\n"
+                            + "\n".join(f"- {name}" for name in evidence_names)
+                            + "\nThese files are attached to this message. Use the read_uploaded_file tool "
+                            "('list', then 'grep' for errors, then 'read' around matches) and cite file name "
+                            "and line number. Do not ask the user for logs, errors or service names that "
+                            "these files already contain."
+                        ),
+                    })
+
                 # For multimodal content, we need to use the content parts format
                 human_message = HumanMessage(content=content_parts)
             else:
@@ -1635,7 +1648,10 @@ async def handle_connection(websocket) -> None:
                     "[RCA INVESTIGATION REQUESTED]\n"
                     "The user has explicitly requested a Root Cause Analysis investigation. "
                     "You MUST call the trigger_rca tool with their message as the issue_description. "
-                    "Extract a short title, affected service, and severity from their description.\n\n"
+                    "Extract a short title, affected service, and severity from their description. "
+                    "If evidence files are attached, after trigger_rca returns, use read_uploaded_file to "
+                    "give the user a short preliminary summary of what the files show (errors, timeline, "
+                    "likely culprit) instead of asking them for more details.\n\n"
                 )
 
             if routing_instruction:

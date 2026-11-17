@@ -99,18 +99,24 @@ def read_uploaded_file(
     incident_id: Optional[str] = None,
     **kwargs,
 ) -> str:
-    """List, read or grep the evidence files uploaded with a manual incident."""
+    """List, read or grep uploaded evidence files (from the incident, or attached to the current message)."""
     if not user_id:
         return "Error: User authentication required."
-    if not incident_id:
-        return "Error: No incident context. This tool is only available during RCA investigations."
 
     from utils.db.connection_pool import db_pool
 
     try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                files, err = _fetch_uploaded_files(cursor, conn, incident_id, user_id)
+        files, err = [], "No uploaded files are available."
+        if incident_id:
+            with db_pool.get_admin_connection() as conn:
+                with conn.cursor() as cursor:
+                    files, err = _fetch_uploaded_files(cursor, conn, incident_id, user_id)
+        if not files:
+            # Interactive chat: no incident yet, so read the files attached to this message.
+            from chat.backend.agent.tools.trigger_rca_tool import _evidence_from_state
+            chat_files = _evidence_from_state()
+            if chat_files:
+                files, err = chat_files, None
         if err:
             return err
 

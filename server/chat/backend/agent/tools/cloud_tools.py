@@ -3358,7 +3358,9 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
 
     # Add uploaded-evidence reader for incidents created from uploaded files
     rca_source = (getattr(state_context, 'rca_context', None) or {}).get('source') if state_context else None
-    if incident_id and is_background and rca_source == "upload":
+    chat_attachments = (getattr(state_context, 'attachments', None) or []) if state_context else []
+    has_chat_evidence = not is_background and any(a.get('is_server_path') for a in chat_attachments)
+    if (incident_id and is_background and rca_source == "upload") or has_chat_evidence:
         try:
             from .uploaded_evidence_tool import read_uploaded_file, ReadUploadedFileArgs, READ_UPLOADED_FILE_DESCRIPTION
             _ctx = with_forced_context(read_uploaded_file)
