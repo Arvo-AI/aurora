@@ -1650,8 +1650,10 @@ async def handle_connection(websocket) -> None:
                     "You MUST call the trigger_rca tool with their message as the issue_description. "
                     "Extract a short title, affected service, and severity from their description. "
                     "If evidence files are attached, after trigger_rca returns, use read_uploaded_file to "
-                    "give the user a short preliminary summary of what the files show (errors, timeline, "
-                    "likely culprit) instead of asking them for more details.\n\n"
+                    "inspect ALL attached files first, without writing any text between tool calls. "
+                    "Then reply ONCE with a short preliminary summary of what the files show (errors, "
+                    "timeline, likely culprit), citing file name and line number, instead of asking "
+                    "them for more details.\n\n"
                 )
 
             if routing_instruction:
