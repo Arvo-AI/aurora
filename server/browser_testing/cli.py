@@ -1,0 +1,76 @@
+"""Command-line entry points for incident-guided browser testing."""
+
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+
+from .author import author_scenario
+from .runner import run_scenario
+from .scenario import save_scenario
+
+
+DEFAULT_MODEL = "gpt-5-mini"
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="aurora-browser-test")
+    commands = parser.add_subparsers(dest="command", required=True)
+
+    author = commands.add_parser("author", help="author and freeze a scenario")
+    author.add_argument("--brief", required=True, type=Path)
+    author.add_argument("--preview-url", required=True)
+    author.add_argument("--incident-id", required=True)
+    author.add_argument("--incident-reference", required=True)
+    author.add_argument("--baseline-commit", required=True)
+    author.add_argument("--output", required=True, type=Path)
+    author.add_argument("--model", default=DEFAULT_MODEL)
+
+    run = commands.add_parser("run", help="run a frozen scenario")
+    run.add_argument("--scenario", required=True, type=Path)
+    run.add_argument("--preview-url", required=True)
+    run.add_argument("--commit", required=True)
+    run.add_argument("--output-dir", required=True, type=Path)
+    run.add_argument("--model", default=DEFAULT_MODEL)
+    return parser
+
+
+def main() -> int:
+    args = _parser().parse_args()
+    if args.command == "author":
+        brief = args.brief.read_text(encoding="utf-8").strip()
+        scenario = author_scenario(
+            brief=brief,
+            preview_url=args.preview_url,
+            incident_id=args.incident_id,
+            incident_reference=args.incident_reference,
+            baseline_commit=args.baseline_commit,
+            model=args.model,
+        )
+        save_scenario(args.output, scenario)
+        print(json.dumps({"scenario": str(args.output), "scenarioHash": scenario["scenarioHash"]}))
+        return 0
+
+    result = run_scenario(
+        scenario_path=args.scenario,
+        preview_url=args.preview_url,
+        tested_commit=args.commit,
+        output_dir=args.output_dir,
+        model=args.model,
+    )
+    print(
+        json.dumps(
+            {
+                "result": str(args.output_dir / "browser-result.json"),
+                "scenarioHash": result.get("scenarioHash"),
+                "verdict": result["verdict"],
+                "reason": result["reason"],
+            }
+        )
+    )
+    return {"passed": 0, "failed": 1, "inconclusive": 2}[result["verdict"]]
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

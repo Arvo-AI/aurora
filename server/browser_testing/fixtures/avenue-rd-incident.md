@@ -1,0 +1,1 @@
+The road board previously showed “Road closed” for Avenue Rd even though the City record described a blocked curb lane. Verify in the running app that Avenue Rd shows “Lane restriction” and Queen St E still shows “Road closed.”

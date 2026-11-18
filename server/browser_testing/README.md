@@ -1,0 +1,44 @@
+# Incident-guided browser testing
+
+This package turns an incident brief into a small frozen browser scenario and
+replays that scenario against a running preview. The model chooses which visible
+rows contain the evidence; the runner, not the model, compares the browser's
+badge readings with the frozen expectations.
+
+Install the isolated CI dependencies and Chromium:
+
+```console
+python -m pip install -r browser_testing/requirements-ci.txt
+python -m playwright install chromium
+```
+
+Author and freeze the Avenue Road scenario while the baseline app is running:
+
+```console
+python -m browser_testing author \
+  --brief browser_testing/fixtures/avenue-rd-incident.md \
+  --preview-url http://127.0.0.1:5000 \
+  --incident-id 40fc996b-ccde-4553-a3e3-ea2046b80bb4 \
+  --incident-reference http://localhost:3000/incidents/40fc996b-ccde-4553-a3e3-ea2046b80bb4 \
+  --baseline-commit 0e254410ea011f64764c3b362ec213c905b52614 \
+  --output browser_testing/fixtures/avenue-rd-scenario.json \
+  --model gpt-5-mini
+```
+
+Replay the checked-in scenario against a candidate commit:
+
+```console
+python -m browser_testing run \
+  --scenario browser_testing/fixtures/avenue-rd-scenario.json \
+  --preview-url http://127.0.0.1:5000 \
+  --commit "$TESTED_COMMIT" \
+  --output-dir browser-evidence \
+  --model gpt-5-mini
+```
+
+The replay writes `browser-result.json` and `browser-evidence.png`. Exit code
+zero means all complete readings matched. Exit code one means complete browser
+evidence contained a mismatch. Exit code two means the run was inconclusive,
+for example because a row was missing or ambiguous or the browser/model failed.
+Every run uses a fresh Playwright Chromium context, stays on the preview origin,
+and closes the context when it ends.
