@@ -2,11 +2,13 @@ import json
 
 import pytest
 
+import browser_testing.scenario as scenario_module
 from browser_testing.paths import PathAccessError, artifact_file, scenario_file
 from browser_testing.scenario import (
     ScenarioError,
     freeze_scenario,
     load_scenario,
+    save_scenario,
     validate_frozen,
 )
 
@@ -64,3 +66,15 @@ def test_artifacts_reject_unapproved_or_traversing_paths():
         artifact_file("../browser-result.json")
     with pytest.raises(PathAccessError, match="unsupported"):
         artifact_file("other.json")
+
+
+def test_scenario_save_uses_fixed_fixture_directory(tmp_path, monkeypatch):
+    target = tmp_path / "avenue-rd-scenario.json"
+    monkeypatch.setattr(scenario_module, "SCENARIO_DIRECTORY", tmp_path)
+    monkeypatch.setattr(scenario_module, "AUTHORED_SCENARIO_FILE", target)
+
+    frozen = freeze_scenario(scenario())
+    save_scenario(frozen)
+
+    assert json.loads(target.read_text(encoding="utf-8")) == frozen
+    assert not (tmp_path / ".avenue-rd-scenario.json.tmp").exists()

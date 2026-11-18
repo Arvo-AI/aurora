@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
 
-from .paths import AUTHORED_SCENARIO_FILE, scenario_file
+from .paths import AUTHORED_SCENARIO_FILE, SCENARIO_DIRECTORY, scenario_file
 
 
 SCHEMA_VERSION = 1
@@ -161,10 +162,24 @@ def load_scenario(path: str | Path) -> dict[str, Any]:
 
 
 def save_scenario(value: dict[str, Any]) -> None:
-    target = AUTHORED_SCENARIO_FILE
-    target.parent.mkdir(parents=True, exist_ok=True)
-    temporary = target.parent / ".avenue-rd-scenario.json.tmp"
-    temporary.write_text(
-        json.dumps(value, indent=2) + "\n", encoding="utf-8", newline="\n"
+    SCENARIO_DIRECTORY.mkdir(parents=True, exist_ok=True)
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    directory_fd = os.open(SCENARIO_DIRECTORY, directory_flags)
+    temporary_name = ".avenue-rd-scenario.json.tmp"
+    final_name = AUTHORED_SCENARIO_FILE.name
+    file_flags = (
+        os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
     )
-    temporary.replace(target)
+    try:
+        temporary_fd = os.open(temporary_name, file_flags, 0o600, dir_fd=directory_fd)
+        with os.fdopen(temporary_fd, "w", encoding="utf-8", newline="\n") as handle:
+            json.dump(value, handle, indent=2)
+            handle.write("\n")
+        os.replace(
+            temporary_name,
+            final_name,
+            src_dir_fd=directory_fd,
+            dst_dir_fd=directory_fd,
+        )
+    finally:
+        os.close(directory_fd)
