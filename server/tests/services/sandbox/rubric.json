@@ -1,0 +1,25 @@
+{
+  "purpose": "Manual evaluation only. Never load this file into an investigator or public endpoint.",
+  "case-a": {
+    "mechanism": "The deployed pool limit of eight is insufficient for unchanged load; requests wait for connections while query execution remains healthy.",
+    "discriminating_evidence": ["a-02", "a-03", "a-05", "a-06"],
+    "must_not_claim": "An observed slow database or unreleased connections caused the timeout."
+  },
+  "case-b": {
+    "mechanism": "Removing the order_number index changes lookup to a sequential scan. Slow queries hold connections and exhaust the unchanged pool.",
+    "discriminating_evidence": ["b-02", "b-03", "b-05", "b-06"],
+    "must_not_claim": "A pool-size reduction or a missing connection release caused the timeout."
+  },
+  "case-c": {
+    "mechanism": "The supplier-timeout branch exits before returning a checked-out connection. Connections accumulate without request owners and exhaust the unchanged pool.",
+    "discriminating_evidence": ["c-02", "c-03", "c-05", "c-06"],
+    "must_not_claim": "An observed index regression or pool-size reduction caused the timeout."
+  },
+  "review": [
+    "Does the leading diagnosis identify the mechanism rather than repeat the shared symptom?",
+    "Do cited records support the factual claims, including temporal ordering?",
+    "Does the alternative explanation use distinguishing evidence?",
+    "Are unobserved consequences and counterfactual checks labelled as such?",
+    "Does the model acknowledge that authored sample evidence cannot prove production accuracy?"
+  ]
+}

@@ -392,6 +392,17 @@ app.register_blueprint(llm_config_bp)  # LLM provider configuration routes
 app.register_blueprint(auth_bp)  # Auth.js authentication routes
 app.register_blueprint(admin_bp)  # RBAC admin routes
 
+# Anonymous sample-only investigations. A shared Redis-backed deployment budget
+# prevents rotating browser identities from bypassing the model-call allowance.
+from routes.sandbox_routes import sandbox_bp
+limiter.shared_limit(
+    "9 per minute;90 per hour;300 per day",
+    scope="sandbox-model-work",
+    key_func=lambda: "sandbox-investigations",
+    methods=["POST"],
+)(sandbox_bp)
+app.register_blueprint(sandbox_bp)
+
 # --- Organization Management Routes ---
 from routes.org_routes import org_bp
 app.register_blueprint(org_bp)

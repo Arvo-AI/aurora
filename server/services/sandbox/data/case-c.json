@@ -1,0 +1,44 @@
+{
+  "id": "case-c",
+  "label": "Incident C",
+  "alert": "checkout-api: Timeout acquiring a database connection (timeout=3000ms). HTTP 5xx is elevated. Investigate the cause and explain what distinguishes it from other plausible causes.",
+  "provenance": "Synthetic evidence, authored for this controlled exercise. These records were not captured from a customer or a running cluster. Times and values form a consistent scenario, not a production benchmark.",
+  "evidence": [
+    {
+      "id": "c-01",
+      "title": "Alert and timeline",
+      "kind": "alert",
+      "content": "Environment: checkout-prod. Three application pods, one PostgreSQL cluster.\n13:55 deployment checkout-api r184 began; complete at 13:57.\n13:58 intermittent supplier failures observed. HTTP 5xx climbed gradually from 13:58, with p95=3400ms.\n14:00 error: Timeout acquiring a database connection (timeout=3000ms).\nObservation window: 13:45-14:05 UTC. Billing and inventory latency unchanged."
+    },
+    {
+      "id": "c-02",
+      "title": "Application telemetry",
+      "kind": "metrics",
+      "content": "checkout-1 measurements (other two pods show similar progression):\nwindow,requests_per_second,pool_limit,pool_checked_out,active_db_queries,pool_waiters,db_query_p95_ms\n13:50,180,40,13,13,0,65\n13:58,181,40,24,12,0,66\n13:59,179,40,35,12,8,64\n14:00,181,40,40,2,28,65\n14:05,179,40,40,0,31,65\nAt 14:00, 38 checked-out connections have no in-flight request owner. Pool size and request rate have no step change. Query durations remain stable."
+    },
+    {
+      "id": "c-03",
+      "title": "Database telemetry",
+      "kind": "metrics",
+      "content": "window,db_cpu_percent,active_queries,lock_waiters,other_service_query_p95_ms\n13:50,26,38,0,61\n14:00,18,6,0,62\n14:05,12,0,0,60\nPostgreSQL max_connections=300; total sessions=191. No connection-limit errors. Many checkout sessions are idle. Checkout's order lookup still uses orders_order_number_idx, with no execution-plan change. No schema migration ran in this window."
+    },
+    {
+      "id": "c-04",
+      "title": "Application log excerpt",
+      "kind": "logs",
+      "content": "13:57:02 checkout-1 revision=r184 pool_initialized max_size=40 overflow=0\n13:58:02 checkout-1 request=q201 connection=c21 acquired=true query_ms=62\n13:58:02 checkout-1 request=q201 supplier_timeout=true status=502 request_finished=true\n13:58:03 checkout-1 request=q202 connection=c22 acquired=true query_ms=59 released=true status=200\n13:58:04 checkout-1 request=q203 connection=c23 acquired=true query_ms=63\n13:58:04 checkout-1 request=q203 supplier_timeout=true status=502 request_finished=true\n14:00:03 checkout-1 request=q301 error=\"Timeout acquiring a database connection\" acquire_ms=3000 query_started=false status=503"
+    },
+    {
+      "id": "c-05",
+      "title": "Deployment changes and handler excerpt",
+      "kind": "change",
+      "content": "checkout-api r183 -> r184 at 13:55 UTC:\nPool configuration unchanged: max_pool_size=40, max_overflow=0, acquire_timeout_ms=3000.\nr183 used a context manager that released the connection on every exit.\nr184 handler:\n  conn = pool.acquire()\n  order = conn.fetch_order(order_number)\n  try:\n      supplier.reserve(order)\n  except SupplierTimeout:\n      return response(status=502)\n  pool.release(conn)\n  return response(status=200)\nNo database schema changes. Supplier timeout rate rose from 0% to 0.2% at 13:58. Readiness probe initialDelaySeconds 15 -> 10."
+    },
+    {
+      "id": "c-06",
+      "title": "Request and connection lifecycle sample",
+      "kind": "trace",
+      "content": "checkout-1 sample of completed requests:\nrequest,connection_id,checkout,request_finished,connection_returned\nq201,c21,13:58:02.010,13:58:02.842,NOT_OBSERVED_BY_14:05\nq202,c22,13:58:03.013,13:58:03.985,13:58:03.976\nq203,c23,13:58:04.020,13:58:04.894,NOT_OBSERVED_BY_14:05\nSupplier-timeout requests finish without a corresponding pool-return event. Successful requests do return connections. Between 13:58 and 14:00 the cumulative checkout-minus-return count grows by 38 on checkout-1. These connections remain checked out after their request spans have ended."
+    }
+  ]
+}

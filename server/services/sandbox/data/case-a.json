@@ -1,0 +1,44 @@
+{
+  "id": "case-a",
+  "label": "Incident A",
+  "alert": "checkout-api: Timeout acquiring a database connection (timeout=3000ms). HTTP 5xx is elevated. Investigate the cause and explain what distinguishes it from other plausible causes.",
+  "provenance": "Synthetic evidence, authored for this controlled exercise. These records were not captured from a customer or a running cluster. Times and values form a consistent scenario, not a production benchmark.",
+  "evidence": [
+    {
+      "id": "a-01",
+      "title": "Alert and timeline",
+      "kind": "alert",
+      "content": "Environment: checkout-prod. Three application pods, one PostgreSQL cluster.\n13:55 deployment checkout-api r184 began; complete at 13:57.\n13:58 HTTP p95 rose from 140ms to 3400ms; 5xx rose sharply at 14:00.\n14:00 error: Timeout acquiring a database connection (timeout=3000ms).\nObservation window: 13:45-14:05 UTC. No other alert fired."
+    },
+    {
+      "id": "a-02",
+      "title": "Application telemetry",
+      "kind": "metrics",
+      "content": "Per-pod averages over 5-minute windows:\nwindow,requests_per_second,pool_limit,pool_checked_out,pool_waiters,pool_acquire_p95_ms,db_query_p95_ms\n13:45,180,40,13,0,4,65\n13:50,182,40,13,0,4,66\n14:00,181,8,8,31,3000,64\n14:05,179,8,8,29,3000,65\nAll three pods show the same transition. Database operation mean duration is 60ms before and after the deployment. Request rate has no step change."
+    },
+    {
+      "id": "a-03",
+      "title": "Database telemetry",
+      "kind": "metrics",
+      "content": "window,db_cpu_percent,active_queries,lock_waiters,other_service_query_p95_ms\n13:50,26,38,0,61\n14:00,25,24,0,62\n14:05,25,24,0,60\nNo database connection-limit errors. PostgreSQL max_connections=300; total sessions=91 at 14:00. Inventory-api and billing-api latency unchanged. No query-plan change was observed for checkout's order lookup."
+    },
+    {
+      "id": "a-04",
+      "title": "Application log excerpt",
+      "kind": "logs",
+      "content": "13:50:12 checkout-1 request=q100 acquire_ms=3 query_ms=61 release=true status=200\n13:57:02 checkout-1 revision=r184 pool_initialized max_size=8 overflow=0\n13:58:06 checkout-1 request=q201 acquire_ms=1210 query_ms=58 release=true status=200\n14:00:03 checkout-1 request=q202 error=\"Timeout acquiring a database connection\" acquire_ms=3000 query_started=false status=503\n14:00:04 checkout-2 request=q203 acquire_ms=2050 query_ms=63 release=true status=200\n14:00:05 checkout-3 request=q204 error=\"Timeout acquiring a database connection\" acquire_ms=3000 query_started=false status=503"
+    },
+    {
+      "id": "a-05",
+      "title": "Deployment and configuration changes",
+      "kind": "change",
+      "content": "checkout-api r183 -> r184 at 13:55 UTC:\n config/database.yaml:\n- max_pool_size: 40\n+ max_pool_size: 8\n  max_overflow: 0\n  acquire_timeout_ms: 3000\nOther changes: readiness probe initialDelaySeconds 15 -> 10. No application database-access code changed. Database schema migration history: no changes in this window. Previous week's typical checked-out connections per pod: 11-16."
+    },
+    {
+      "id": "a-06",
+      "title": "Request and connection lifecycle sample",
+      "kind": "trace",
+      "content": "checkout-1 sample of completed requests, 13:59-14:01:\nrequest,connection_id,checkout,request_finished,connection_returned\nq301,c11,13:59:00.010,13:59:00.082,13:59:00.074\nq302,c12,13:59:00.013,13:59:00.085,13:59:00.076\nq303,c13,13:59:00.020,13:59:00.094,13:59:00.085\nAcross the window: 15,200 successful checkouts and 15,200 returns. No connection remains checked out after its request ends in this trace sample."
+    }
+  ]
+}

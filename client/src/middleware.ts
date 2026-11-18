@@ -1,6 +1,7 @@
 import { auth } from "@/auth"
 import { NextResponse } from "next/server"
 import { ROLE_ADMIN } from "@/lib/roles"
+import { isPublicSandboxPath } from "@/lib/sandbox-paths"
 
 // Public routes that don't require authentication
 const publicRoutes = [
@@ -55,6 +56,11 @@ export default auth((req) => {
   )
   const isApiRoute = nextUrl.pathname.startsWith('/api/')
   const isAdminRoute = nextUrl.pathname.startsWith('/admin') || nextUrl.pathname.startsWith('/api/admin')
+  // A sample-only evaluation must remain available even to signed-in users who
+  // have not finished organization setup. This bypass covers these exact paths only.
+  if (isPublicSandboxPath(nextUrl.pathname)) {
+    return applySecurityHeaders(NextResponse.next())
+  }
   const isChangePasswordRoute = nextUrl.pathname.startsWith('/sign-in') && nextUrl.searchParams.get('mode') === 'change-password'
   const isSetupOrgRoute = nextUrl.pathname.startsWith('/setup-org')
   const isOrgSwitching = nextUrl.pathname.startsWith('/org/switching')
@@ -129,8 +135,10 @@ export default auth((req) => {
     }
   }
 
-  const response = NextResponse.next()
+  return applySecurityHeaders(NextResponse.next())
+})
 
+function applySecurityHeaders(response: NextResponse): NextResponse {
   const backendOrigin = process.env.PUBLIC_API_URL || process.env.NEXT_PUBLIC_BACKEND_URL || ''
   const wsOrigin = process.env.PUBLIC_WS_URL || process.env.NEXT_PUBLIC_WEBSOCKET_URL || ''
   const connectSrc = [
@@ -162,7 +170,7 @@ export default auth((req) => {
   ].join('; '))
 
   return sanitizeResponse(response)
-})
+}
 
 export const config = {
   matcher: ['/((?!.+\\.[\\w]+$|_next).*)', '/', '/(api|trpc)(.*)'],

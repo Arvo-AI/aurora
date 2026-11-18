@@ -9,8 +9,9 @@ export default function ConditionalShell({ children }: { children: React.ReactNo
   const isAuthPage = pathname?.startsWith("/sign-in") || pathname?.startsWith("/setup-org") || pathname?.startsWith("/onboarding")
   const isLegalPage = pathname?.startsWith("/terms")
   const isTransitionPage = pathname?.startsWith("/org/switching")
+  const isSandboxPage = pathname === "/sandbox"
 
-  if (isAuthPage || isLegalPage || isTransitionPage) {
+  if (isAuthPage || isLegalPage || isTransitionPage || isSandboxPage) {
     return <>{children}</>
   }
 
