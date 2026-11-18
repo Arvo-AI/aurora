@@ -318,6 +318,10 @@ def _import_installation_repos(
 
     Metadata generation is dispatched only for genuinely new rows, and the
     LLM-usage hook inside :func:`generate_repo_metadata` still gates cost.
+
+    When ``enroll_change_gating`` is set, the newly enrolled repos also get
+    an immediate first review (:func:`_enqueue_first_reviews`) so the user
+    sees a result on GitHub within minutes of installing.
     """
     import time
 
@@ -475,6 +479,188 @@ def _import_installation_repos(
             logger.warning(
                 "[RepoImport] metadata enqueue failed for %s: %s", repo_name, exc,
             )
+
+    if enroll_change_gating and newly_added:
+        added = set(newly_added)
+        _enqueue_first_reviews(
+            user_id, installation_id, token,
+            [r for r in repos if r.get("full_name") in added],
+        )
+
+
+# ---------------------------------------------------------------------------
+# Install-time first reviews (time to first value)
+# ---------------------------------------------------------------------------
+# Without this, a new one-click signup sees nothing until someone opens or
+# pushes to a PR, which can take days or weeks. Instead, review what already
+# exists the moment the install lands: the newest open PRs into each enrolled
+# repo's default branch, or, when none are open, the most recently merged PR
+# (reviewed retrospectively). Bounded so a large install can't fan out cost.
+_FIRST_REVIEW_MAX_PRS = 3
+_FIRST_REVIEW_MAX_REPOS = 10
+# One page per repo, large enough that a repo full of draft PRs still
+# yields its newest ready-for-review ones.
+_FIRST_REVIEW_PULLS_PER_REPO = 50
+_FIRST_REVIEW_ACTION = "install_backfill"
+
+
+def _list_pulls(token: str, repo_full_name: str, base: str, state: str) -> list[dict[str, Any]]:
+    """Most recently updated PRs into ``base`` (one page). [] on any failure."""
+    try:
+        resp = requests.get(
+            f"https://api.github.com/repos/{repo_full_name}/pulls",
+            headers={
+                "Authorization": f"token {token}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            params={
+                "state": state, "base": base, "sort": "updated",
+                "direction": "desc", "per_page": _FIRST_REVIEW_PULLS_PER_REPO,
+            },
+            timeout=15,
+        )
+    except requests.RequestException as exc:
+        logger.warning(
+            "[FirstReview] pulls list failed repo=%s state=%s: %s",
+            repo_full_name, state, type(exc).__name__,
+        )
+        return []
+    if resp.status_code != 200:
+        logger.warning(
+            "[FirstReview] pulls list returned status=%s repo=%s state=%s",
+            resp.status_code, repo_full_name, state,
+        )
+        return []
+    try:
+        pulls = resp.json()
+    except ValueError:
+        return []
+    return [p for p in pulls if isinstance(p, dict)] if isinstance(pulls, list) else []
+
+
+def _review_target(repo_full_name: str, pr: dict[str, Any], retrospective: bool) -> dict[str, Any] | None:
+    """Reduce a GitHub PR to what ``investigate_pr`` needs (None if unusable)."""
+    number = pr.get("number")
+    head_sha = (pr.get("head") or {}).get("sha")
+    if not isinstance(number, int) or not head_sha:
+        return None
+    return {
+        "repo": repo_full_name,
+        "pr_number": number,
+        "head_sha": head_sha,
+        "retrospective": retrospective,
+        # ISO-8601 timestamps from GitHub sort correctly as strings.
+        "sort_key": (pr.get("merged_at") if retrospective else pr.get("updated_at")) or "",
+    }
+
+
+def _pick_first_review_targets(token: str, repos: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], str]:
+    """Choose what to review at install time; returns ``(targets, mode)``.
+
+    ``mode`` is ``open`` (up to ``_FIRST_REVIEW_MAX_PRS`` newest non-draft
+    open PRs into the default branch, across the most recently pushed
+    repos), ``merged`` (no open PRs: the single most recently merged PR,
+    reviewed retrospectively) or ``none``.
+    """
+    candidates = [r for r in repos if r.get("full_name") and r.get("default_branch")]
+    candidates.sort(key=lambda r: r.get("pushed_at") or "", reverse=True)
+    scanned = candidates[:_FIRST_REVIEW_MAX_REPOS]
+
+    open_targets: list[dict[str, Any]] = []
+    for repo in scanned:
+        name, base = repo["full_name"], repo["default_branch"]
+        for pr in _list_pulls(token, name, base, "open"):
+            if pr.get("draft") or (pr.get("base") or {}).get("ref") != base:
+                continue
+            target = _review_target(name, pr, retrospective=False)
+            if target:
+                open_targets.append(target)
+    if open_targets:
+        open_targets.sort(key=lambda t: t["sort_key"], reverse=True)
+        return open_targets[:_FIRST_REVIEW_MAX_PRS], "open"
+
+    merged_targets: list[dict[str, Any]] = []
+    for repo in scanned:
+        name, base = repo["full_name"], repo["default_branch"]
+        for pr in _list_pulls(token, name, base, "closed"):
+            if not pr.get("merged_at") or (pr.get("base") or {}).get("ref") != base:
+                continue
+            target = _review_target(name, pr, retrospective=True)
+            if target:
+                merged_targets.append(target)
+    if merged_targets:
+        merged_targets.sort(key=lambda t: t["sort_key"], reverse=True)
+        return merged_targets[:1], "merged"
+    return [], "none"
+
+
+def _enqueue_first_reviews(
+    user_id: str, installation_id: int, token: str, repos: list[dict[str, Any]]
+) -> None:
+    """Best-effort: enqueue the install-time first reviews. Never raises.
+
+    Goes through the normal ``investigate_pr`` task, so enrollment checks,
+    Redis idempotency, the LLM-usage hook and posting all behave exactly as
+    for a webhook-triggered review. Claims the same ``seen`` dedupe key the
+    webhook handler uses, so a PR event racing the install isn't reviewed twice.
+    """
+    try:
+        from utils.flags.feature_flags import is_incident_prevention_enabled
+
+        if not is_incident_prevention_enabled():
+            logger.info(
+                "change_gating_first_review installation_id=%s status=skipped reason=feature_disabled",
+                installation_id,
+            )
+            return
+
+        targets, mode = _pick_first_review_targets(token, repos)
+        if not targets:
+            logger.info(
+                "change_gating_first_review installation_id=%s user=%s status=no_targets repos=%d",
+                installation_id, user_id, len(repos),
+            )
+            return
+
+        from tasks.change_gating import change_gating_keys, investigate_pr
+        from utils.cache.redis_client import get_redis_client
+
+        try:
+            redis_client = get_redis_client()
+        except Exception:
+            redis_client = None
+        delivery_id = f"{_FIRST_REVIEW_ACTION}:{installation_id}"
+        enqueued = 0
+        for target in targets:
+            if redis_client is not None:
+                seen_key = change_gating_keys(
+                    target["repo"], target["pr_number"], target["head_sha"]
+                )["seen"]
+                try:
+                    if not redis_client.set(seen_key, delivery_id, nx=True, ex=86400):
+                        continue  # a webhook already queued this exact head
+                except Exception:
+                    pass  # dedupe is an optimization; investigate_pr has its own keys
+            investigate_pr.delay(
+                user_id=user_id,
+                installation_id=installation_id,
+                repo_full_name=target["repo"],
+                pr_number=target["pr_number"],
+                head_sha=target["head_sha"],
+                action=_FIRST_REVIEW_ACTION,
+                delivery_id=delivery_id,
+                retrospective=target["retrospective"],
+            )
+            enqueued += 1
+        logger.info(
+            "change_gating_first_review installation_id=%s user=%s status=enqueued mode=%s enqueued=%d",
+            installation_id, user_id, mode, enqueued,
+        )
+    except Exception:
+        logger.exception(
+            "change_gating_first_review installation_id=%s status=failed", installation_id,
+        )
 
 
 @celery_app.task(
