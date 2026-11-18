@@ -241,6 +241,8 @@ _OPEN_PREFIXES = (
     "/api/auth/saml/acs/",
     "/api/auth/saml/metadata/",
     "/github/webhook",
+    # Central runner callback uses a random, one-time per-run bearer token.
+    "/github/browser-test/callback",
     # OAuth callback — registered only when GITHUB_AUTH_MODE allows OAuth, but
     # listed here unconditionally so the gate applies even if OAuth flips on
     # at runtime.
