@@ -8,6 +8,7 @@ rolled back at the end, so nothing is left behind.
 
 import uuid
 from contextlib import contextmanager
+from datetime import datetime
 from types import SimpleNamespace
 
 import psycopg2.errors
@@ -204,8 +205,11 @@ class TestClusters:
 
         got = sorted(store.list_clusters(user), key=lambda c: c["source"])
 
-        assert got == [{"cluster_id": live, "name": "prod-east", "source": "agent"},
-                       {"cluster_id": kc, "name": "staging", "source": "kubeconfig"}]
+        assert [{k: c[k] for k in ("cluster_id", "name", "source")} for c in got] == [
+            {"cluster_id": live, "name": "prod-east", "source": "agent"},
+            {"cluster_id": kc, "name": "staging", "source": "kubeconfig"}]
+        # When each was connected, as an aware time (a cluster not polled yet is new, not stalled).
+        assert all(datetime.fromisoformat(c["connected_at"]).tzinfo is not None for c in got)
 
 
 CLUSTER = {"cluster_id": "kc-1", "name": "prod-east"}

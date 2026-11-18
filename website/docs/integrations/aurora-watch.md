@@ -82,9 +82,11 @@ installation with `NEXT_PUBLIC_ENABLE_AURORA_WATCH=false`.
   `kubectl logs --since --limit-bytes` for up to 25 workloads per minute. Every
   command passes Aurora's read-only check and your organization's command policy
   (Settings → Security); a denied command or an unreadable kind becomes a blind spot
-  shown on the Kubernetes page. If pods, workloads, Services or Endpoints cannot be
-  read, or one response is over 8 MB, that poll is skipped and its error shown; the
-  cluster is then retried after 1, 2, 4 and up to 15 minutes. A cluster that has not
+  shown on the Kubernetes page. A poll reads at most 32 MB, and 8 MB in one
+  response (a big namespace is read a few kinds at a time). If pods, workloads,
+  Services or Endpoints cannot be read, or the limits are exceeded, that poll is
+  skipped and its error shown; the cluster is then retried after 1, 2, 4 and up to
+  15 minutes, or on the next minute once the settings change. A cluster that has not
   been polled for three minutes (Aurora's workers busy with investigations) is shown
   as **Not polling**.
 * **Secrets are never read.** ConfigMap values are reduced to a hash per key, so

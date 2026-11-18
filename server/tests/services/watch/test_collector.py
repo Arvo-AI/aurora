@@ -197,3 +197,43 @@ def test_namespaces_that_together_exceed_the_poll_budget_say_so():
     each = json.dumps({"kind": "List", "items": [{"kind": "Pod", "pad": "x" * (5 * 1024 * 1024)}]})
     with pytest.raises(StateTooLarge, match="watch fewer namespaces"):
         collect_state(lambda cmd, t: each, [f"ns{i}" for i in range(8)])
+
+
+def test_output_that_never_parses_still_counts_toward_the_poll_budget():
+    # A misbehaving agent answering the optional kinds with megabytes of non-JSON (each
+    # becomes a blind spot) cannot make one poll download without end.
+    c = shop()
+    junk = "x" * (7 * 1024 * 1024)
+
+    def run(command, timeout):
+        kinds = command.split()[1].split(",")
+        return c.kubectl_get(command) if set(kinds) <= set(collector.ESSENTIAL_RESOURCES) else junk
+
+    with pytest.raises(StateTooLarge, match="watch fewer namespaces"):
+        collect_state(run)
+
+
+def test_a_group_that_does_not_parse_is_read_kind_by_kind_and_counted_once():
+    c = shop()
+    calls = []
+
+    def run(command, timeout):
+        calls.append(command)
+        if command.startswith("get pods,") or "," in command.split()[1]:
+            return "x" * (6 * 1024 * 1024)  # each group: 6 MiB that does not parse
+        return c.kubectl_get(command)
+
+    raw, blind = collect_state(run)  # 4 x 6 MiB of groups would be 24 MiB, still read in full
+    assert len(raw["deployments"]["items"]) == 5 and blind == []
+
+
+def test_one_big_namespace_in_the_allowlist_is_read_in_smaller_groups():
+    c = shop()
+
+    def run(command, timeout):
+        if len(command.split()[1].split(",")) == len(collector.STATE_RESOURCES):
+            raise KubectlError("output too large (9500000 bytes); narrow the command, e.g. with -n <namespace>")
+        return c.kubectl_get(command)
+
+    raw, _ = collect_state(run, ["shop"])
+    assert len(raw["deployments"]["items"]) == 5

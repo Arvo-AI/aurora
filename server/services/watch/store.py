@@ -82,19 +82,20 @@ def list_clusters(user_id: str) -> list[dict[str, Any]]:
             return []
         cur.execute(
             """
-            SELECT c.cluster_id, t.cluster_name, 'agent' AS source
+            SELECT c.cluster_id, t.cluster_name, 'agent' AS source, c.connected_at AT TIME ZONE 'UTC'
               FROM active_kubectl_connections c
               JOIN kubectl_agent_tokens t ON c.token = t.token
              WHERE t.org_id = %s AND c.status = 'active'
             UNION
-            SELECT cluster_id, cluster_name, 'kubeconfig' AS source
+            SELECT cluster_id, cluster_name, 'kubeconfig' AS source, created_at
               FROM kubeconfig_clusters
              WHERE org_id = %s AND is_active = TRUE
             """,
             (org_id, org_id),
         )
         rows = cur.fetchall()
-    return [{"cluster_id": r[0], "name": r[1], "source": r[2]} for r in rows if r[0]]
+    return [{"cluster_id": r[0], "name": r[1], "source": r[2],
+             "connected_at": r[3].isoformat() if r[3] else None} for r in rows if r[0]]
 
 
 def load_state(user_id: str, cluster_id: str) -> dict[str, Any] | None:

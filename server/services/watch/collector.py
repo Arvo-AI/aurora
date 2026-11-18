@@ -146,6 +146,12 @@ _OVER_BUDGET = (f"the watched namespaces return over {MAX_POLL_BYTES // (1024 * 
                 "one poll reads; watch fewer namespaces")
 
 
+class _NotJson(ValueError):
+    def __init__(self, size: int) -> None:
+        super().__init__("kubectl output is not JSON")
+        self.size = size
+
+
 def _read(run: Runner, command: str, budget: dict[str, int]) -> dict[str, Any]:
     try:
         text = run(command, COMMAND_TIMEOUT)
@@ -156,11 +162,13 @@ def _read(run: Runner, command: str, budget: dict[str, int]) -> dict[str, Any]:
     size = len(text.encode("utf-8"))
     if size > MAX_STATE_BYTES:
         raise StateTooLarge(_TOO_LARGE)
-    data = json.loads(text)  # a response that does not parse is read again kind by kind: not counted
-    budget["left"] = budget.get("left", MAX_POLL_BYTES) - size
+    budget["left"] = budget.get("left", MAX_POLL_BYTES) - size  # every response counts, parsed or not
     if budget["left"] < 0:
         raise StateTooLarge(_OVER_BUDGET)
-    return data
+    try:
+        return json.loads(text)
+    except ValueError as exc:
+        raise _NotJson(size) from exc
 
 
 def _collect_scope(run: Runner, scope: str, blind: dict[str, str], budget: dict[str, int],
@@ -176,6 +184,8 @@ def _collect_scope(run: Runner, scope: str, blind: dict[str, str], budget: dict[
         except (CommandBlocked, StateTooLarge):
             raise
         except (KubectlError, ValueError) as exc:
+            if isinstance(exc, _NotJson):
+                budget["left"] += exc.size  # read again kind by kind below: counted once
             logger.info("[AuroraWatch] get %s failed (%s); reading kinds one by one", ",".join(group),
                         type(exc).__name__)
         for resource in group:
@@ -208,7 +218,21 @@ def collect_state(run: Runner, namespaces: list[str] | None = None) -> tuple[dic
     if wanted:
         raw: dict[str, Any] = {r: {"items": []} for r in STATE_RESOURCES}
         for ns in wanted:
-            for resource, value in _collect_scope(run, f"-n {ns}", blind, budget).items():
+            try:
+                scope_raw = _collect_scope(run, f"-n {ns}", blind, budget)
+            except StateTooLarge as exc:
+                if str(exc) != _TOO_LARGE:
+                    raise
+                # One big namespace: read it in the smaller groups a cluster-wide read uses.
+                try:
+                    scope_raw = _collect_scope(run, f"-n {ns}", blind, budget, READ_GROUPS)
+                except StateTooLarge as again:
+                    if str(again) != _TOO_LARGE:
+                        raise
+                    raise StateTooLarge(
+                        f"namespace {ns} has over {MAX_STATE_BYTES // (1024 * 1024)} MB of one kind, more "
+                        "than one poll reads; remove it from the namespaces to watch") from again
+            for resource, value in scope_raw.items():
                 raw.setdefault(resource, {"items": []})["items"] += value["items"]
     else:
         raw = _collect_scope(run, "-A", blind, budget, READ_GROUPS)

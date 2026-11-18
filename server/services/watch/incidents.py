@@ -35,26 +35,29 @@ def _rank(severity: Any) -> int:
 
 def _merge_payload(existing: dict[str, Any] | None, new: dict[str, Any]) -> dict[str, Any]:
     """Fold a group's findings into an incident that is already open: a finding seen
-    again (it got worse) replaces its older copy, new ones are added, and the group's
-    suspects (the latest attribution) lead the incident's."""
+    again (it got worse) replaces its older copy, and new ones are added. The
+    incident's suspects lead, and a joining symptom's own suspects follow; only a
+    finding the incident already has, blamed again, leads with its latest suspects.
+    The message (what opened it, and what else was wrong) is kept."""
     if not existing:
         return new
     merged = dict(existing)
     newer = {f.get("subject"): f for f in new.get("findings") or []}
+    known = {f.get("subject") for f in existing.get("findings") or []}
     kept = [newer.pop(f.get("subject"), f) for f in existing.get("findings") or []]
     merged["findings"] = (kept + list(newer.values()))[: report.MAX_FINDINGS]
 
     def ident(s: dict[str, Any]) -> tuple:
         return s.get("object"), s.get("at")
 
+    reblamed = any(f.get("subject") in known for f in new.get("findings") or [])
+    first, then = (new, existing) if reblamed else (existing, new)
     suspects, seen = [], set()
-    for s in (new.get("suspected_changes") or []) + (existing.get("suspected_changes") or []):
+    for s in (first.get("suspected_changes") or []) + (then.get("suspected_changes") or []):
         if ident(s) not in seen:
             seen.add(ident(s))
             suspects.append(s)
     merged["suspected_changes"] = suspects[: report.MAX_SUSPECTS]
-    if new.get("suspected_changes"):
-        merged["message"] = new.get("message") or existing.get("message")
     if _rank(new.get("severity")) > _rank(existing.get("severity")):
         merged["severity"] = new["severity"]
     merged["updated_at"] = new.get("first_seen")

@@ -115,3 +115,22 @@ def test_the_view_says_when_the_user_watch_acts_as_left(monkeypatch):
     view = mod._view("admin-1", "org-1")
     # Not "the workers are busy": polls are skipped on purpose until Watch is turned on again.
     assert view["owner_left"] is True and view["clusters"][0]["stale"] is False
+
+
+def test_a_cluster_connected_a_moment_ago_is_not_stalled(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    import routes.watch_routes as mod
+
+    now = datetime.now(timezone.utc)
+    monkeypatch.setattr("services.watch.store.get_settings", lambda org: {
+        "enabled": True, "owner_user_id": "admin-1", "namespaces": None,
+        "updated_at": (now - timedelta(hours=2)).isoformat()})
+    monkeypatch.setattr("services.watch.store.list_clusters", lambda user: [
+        {"cluster_id": "new-1", "name": "new", "connected_at": (now - timedelta(seconds=20)).isoformat()},
+        {"cluster_id": "old-1", "name": "old", "connected_at": (now - timedelta(hours=1)).isoformat()}])
+    monkeypatch.setattr("services.watch.store.status", lambda user: [])  # neither polled yet
+    monkeypatch.setattr("services.watch.tasks._owner_in_org", lambda user, org: True)
+    monkeypatch.setattr("utils.flags.feature_flags.is_aurora_watch_enabled", lambda: True)
+    stale = {c["cluster_id"]: c["stale"] for c in mod._view("admin-1", "org-1")["clusters"]}
+    assert stale == {"new-1": False, "old-1": True}

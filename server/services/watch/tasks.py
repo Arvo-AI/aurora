@@ -45,8 +45,10 @@ def _enabled_orgs() -> list[tuple[str, dict[str, Any]]]:
 
 
 def _settings_key(settings: dict[str, Any]) -> str:
-    """What a failed read depends on: which namespaces are read, and as whom."""
-    return f"{settings.get('owner_user_id')}|{','.join(settings.get('namespaces') or [])}"
+    """What a failed read depends on: which namespaces are read, as whom, and when the
+    settings were last saved (turning Watch off and on again is a fresh start)."""
+    return (f"{settings.get('owner_user_id')}|{','.join(settings.get('namespaces') or [])}"
+            f"|{settings.get('updated_at')}")
 
 
 def _owner_in_org(user_id: str, org_id: str) -> bool:
@@ -129,7 +131,10 @@ def poll_cluster(org_id: str, cluster: dict[str, Any], runner=None, clock=time.t
         return {"status": "too_soon"}
     # Backing off after failed reads, unless the settings changed since (the error may
     # have said to list namespaces). The same slack as above absorbs tick jitter.
-    if started < state.get("retry_at", 0) - POLL_SECONDS * 0.2 and state.get("retry_for") == _settings_key(settings):
+    if state.get("retry_for") != _settings_key(settings):
+        for field in ("read_failures", "retry_at", "retry_for"):  # new settings: a fresh start
+            state.pop(field, None)
+    if started < state.get("retry_at", 0) - POLL_SECONDS * 0.2:
         return {"status": "backing_off"}
     try:
         raw, blind = collect_state(run, settings.get("namespaces"))

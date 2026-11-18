@@ -22,14 +22,26 @@ def test_a_state_saved_by_another_version_is_learned_again():
     assert current_state(fresh) is fresh
 
 
-def test_an_extended_incident_leads_with_the_newest_suspects():
+def test_an_incident_leads_with_the_newest_suspects_only_when_its_own_finding_is_blamed_again():
     from services.watch.incidents import _merge_payload
 
-    old = {"findings": [], "severity": "high", "message": "old",
+    old = {"findings": [{"subject": "Deployment/shop/redis"}], "severity": "high", "message": "redis down",
            "suspected_changes": [{"object": f"Deployment/shop/a{i}", "at": "t1"} for i in range(3)]}
-    new = {"findings": [], "severity": "critical", "message": "new", "first_seen": "t2",
-           "suspected_changes": [{"object": "Deployment/shop/b", "at": "t2"}]}
-    merged = _merge_payload(old, new)
-    assert [s["object"] for s in merged["suspected_changes"]] == [
-        "Deployment/shop/b", "Deployment/shop/a0", "Deployment/shop/a1"]
-    assert (merged["message"], merged["severity"]) == ("new", "critical")
+    newer_cause = {"object": "Deployment/shop/b", "at": "t2"}
+    # A downstream symptom joining: its own (unrelated) suspects do not take over the incident.
+    joined = _merge_payload(old, {"findings": [{"subject": "Deployment/shop/api"}], "severity": "high",
+                                  "message": "api failing", "first_seen": "t2", "suspected_changes": [newer_cause]})
+    assert [s["object"] for s in joined["suspected_changes"]][0] == "Deployment/shop/a0"
+    assert joined["message"] == "redis down"
+    # The incident's own finding, worse and blamed on a newer change: that change leads.
+    reblamed = _merge_payload(old, {"findings": [{"subject": "Deployment/shop/redis"}], "severity": "critical",
+                                    "message": "redis 0/1", "first_seen": "t2", "suspected_changes": [newer_cause]})
+    assert [s["object"] for s in reblamed["suspected_changes"]][0] == "Deployment/shop/b"
+    assert (reblamed["message"], reblamed["severity"]) == ("redis down", "critical")
+
+
+def test_a_state_digested_with_another_key_is_learned_again():
+    # The digest key (INTERNAL_API_SECRET) was rotated: every masked value would read as changed.
+    from services.watch.detector import current_state, new_state
+
+    assert current_state({**new_state(), "digest_id": "rotated!", "polls": 40})["polls"] == 0

@@ -2,10 +2,22 @@
 
 import json
 
+import pytest
+
+from services.watch import snapshot as snapshot_mod
 from services.watch.changes import detect_changes
 from services.watch.snapshot import build_snapshot
 
 from .k8s import shop
+
+
+@pytest.fixture
+def digest_key(monkeypatch):
+    """A server secret to key masked-value digests with (INTERNAL_API_SECRET in Aurora)."""
+    monkeypatch.setattr(snapshot_mod, "_DIGEST_KEY", b"test-internal-api-secret")
+    snapshot_mod._clean.cache_clear()
+    yield
+    snapshot_mod._clean.cache_clear()
 
 
 def test_pods_map_to_their_deployment_through_the_replicaset():
@@ -17,7 +29,7 @@ def test_pods_map_to_their_deployment_through_the_replicaset():
     assert snap["services"]["shop/api"]["ready_endpoints"] == 2
 
 
-def test_credentials_in_env_are_redacted_and_configmap_values_are_never_kept():
+def test_credentials_in_env_are_redacted_and_configmap_values_are_never_kept(digest_key):
     c = shop()
     c.set_env("api", "DB_PASSWORD", "hunter2")
     c.configmap("api-code", {"api.py": "TOKEN = 'sk-live-123'"})
@@ -28,7 +40,7 @@ def test_credentials_in_env_are_redacted_and_configmap_values_are_never_kept():
     assert env["DB_PASSWORD"].startswith("<redacted #") and env["REDIS_HOST"] == "redis"
 
 
-def test_a_rotated_credential_is_still_a_change_without_its_value_being_kept():
+def test_a_rotated_credential_is_still_a_change_without_its_value_being_kept(digest_key):
     # The outage after a password rotation must still blame the rotation.
     c = shop()
     c.set_env("api", "DB_PASSWORD", "old-pw-2025")
@@ -41,7 +53,7 @@ def test_a_rotated_credential_is_still_a_change_without_its_value_being_kept():
     assert "old-pw-2025" not in json.dumps(change) and "new-pw-2026" not in json.dumps(cur)
 
 
-def test_credentials_inside_innocently_named_values_and_args_are_redacted():
+def test_credentials_inside_innocently_named_values_and_args_are_redacted(digest_key):
     c = shop()
     c.set_env("api", "DATABASE_URL", "postgres://shop:s3cr3t-pa55@db.internal:5432/shop")
     container = c.deployments["api"]["template"]["spec"]["containers"][0]
@@ -121,7 +133,7 @@ def test_rollout_strategy_follows_kubernetes_defaults_and_rounding():
     assert rollout_strategy("DaemonSet", {}, 5, 5) == (False, 1)
 
 
-def test_password_only_urls_flag_values_and_probe_tokens_are_redacted():
+def test_password_only_urls_flag_values_and_probe_tokens_are_redacted(digest_key):
     from services.watch.snapshot import _argv, _env_value, _probe
 
     pw = "Zq8vN3xL2pR7tK9wM4bY"
@@ -165,3 +177,40 @@ def test_a_configmap_with_thousands_of_keys_makes_a_bounded_change_record():
     later = build_snapshot(c.render(), c.now + 120)
     [changed] = [ch for ch in detect_changes(cur, later) if ch["name"] == "dashboards"]
     assert len(changed["details"]) <= 6 and len(json.dumps(changed)) < 1000
+
+
+def test_without_a_server_secret_masked_values_carry_no_digest(monkeypatch):
+    # A constant key in the source would make every digest checkable against guesses.
+    monkeypatch.setattr(snapshot_mod, "_DIGEST_KEY", None)
+    snapshot_mod._clean.cache_clear()
+    try:
+        assert snapshot_mod._env_value({"name": "DB_PASSWORD", "value": "hunter2"}) == "<redacted>"
+        assert snapshot_mod._argv(["--requirepass", "hunter2"]) == ["--requirepass", "<redacted>"]
+    finally:
+        snapshot_mod._clean.cache_clear()
+
+
+def test_credential_flags_that_end_in_key_or_token_id_are_masked(digest_key):
+    args = snapshot_mod._argv(["--account-key", "Zk3pQ9vX2mL7tR4wB8nC", "--master-key", "m",
+                               "-dev-root-token-id", "root", "--passphrase", "p", "--max-keys", "1000",
+                               "--password-file", "/etc/pw", "--web.key-file", "/certs/k.pem"])
+    assert [a.startswith("<redacted") for a in args[1::2]] == [True, True, True, True, False, False, False]
+
+
+def test_a_long_value_with_a_hidden_part_still_shows_an_edit(digest_key):
+    # Values are cut at 120 characters; a token rotated past the cut is still a change.
+    def env(token):
+        return snapshot_mod._env_value({"name": "APP_CONFIG", "value": "x" * 130 + token})
+
+    assert env("aaaa") != env("bbbb") and "aaaa" not in env("aaaa")
+
+
+def test_query_parameters_are_masked_in_linear_time():
+    import time
+
+    start = time.perf_counter()
+    for i in range(400):  # crafted env values at the length cap, a fresh one each time
+        snapshot_mod._clean("0001" + "?key" * 249 + str(i))
+    assert time.perf_counter() - start < 2
+    assert "hunter2" not in snapshot_mod._clean("/-/ready?token=hunter2&verbose=1")
+    assert snapshot_mod._clean("/items?page=2&sort=name") == "/items?page=2&sort=name"

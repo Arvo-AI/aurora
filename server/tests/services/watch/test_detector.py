@@ -505,7 +505,34 @@ class TestLogs:
         found = by_subject(run(c, state, 2, surge))
         assert {s["kind"] for s in found["Deployment/shop/api"]["symptoms"]} >= {"error_log_surge"}
 
-    def test_hostile_log_lines_cost_little(self):
+    def test_the_line_mask_takes_quoted_json_and_header_credentials_and_keeps_signals(self):
+        from services.watch.detector import _mask_secrets
+        from services.watch.logs import normalize
+
+        pw, key = "Sup3rS3cret" + "Passw0rd", "Zk3pQ9" + "vX2mL7tR4w"  # synthetic; split so none is committed whole
+        assert "Sup3rS3cret" not in _mask_secrets('{"level":"error","password":"' + pw + '"}')
+        assert "Zk3pQ9" not in _mask_secrets('msg="partner call ok" api_key="' + key + '"')
+        assert "abc123" not in _mask_secrets("Authorization: Bearer abc123def")
+        # An HTTP status after a credential-shaped pair, pipe-delimited, is still a status.
+        line = "2026-11-17 21:44:51|ERROR|session_id=web-1|status=500|path=/items"
+        assert normalize(_mask_secrets(line)).http_class == "5xx"
+        # Words that only look like keys, and lowercase names, are left alone.
+        for kept in ("transcoder exited: signal: killed", "auth=failed",
+                     "connect to checkout-service-v2-canary refused", "payments-6c5d4f7b8c-a1b2c"):
+            assert _mask_secrets(kept) == kept
+
+    def test_samples_quoted_as_evidence_go_through_the_full_secret_rules(self):
+        c = shop()
+        state = learned(c)
+        logs = healthy_logs()
+        fake_pat = "ghp_" + "q83Xa2nLv9P4f7Jv6TmRzW8b1K2cDhG5sY0i"  # synthetic; split so none is committed whole
+        logs["Deployment/shop/api"] = logs["Deployment/shop/api"] + [
+            f"request failed: upstream rejected credentials password=hunter2 github={fake_pat[:-4]}"] * 3
+        found = by_subject(run(c, state, 2, logs))
+        evidence = " ".join(found["Deployment/shop/api"]["evidence"])
+        assert "hunter2" not in evidence and "q83Xa2" not in evidence
+
+
         # A client can make every access-log line 4 KB of keyword soup; a poll must not
         # spend a minute on it.
         import time
@@ -656,7 +683,36 @@ class TestLifecycle:
                 keys.add(finding["incident_key"])
         assert len(keys) == 1
 
-    def test_a_deploy_made_during_a_polling_gap_is_still_the_suspect(self):
+    def test_a_newer_cause_of_a_new_symptom_is_blamed_even_without_a_rise_in_severity(self):
+        # api is 1 of 2 ready (high); later a NetworkPolicy breaks its requests (high too).
+        c = shop()
+        state = learned(c)
+        c.scale("api", 2, unready=1)
+        run(c, state, 3)
+        finding = state["open"]["Deployment/shop/api"]
+        assert finding["severity"] == "high"
+        finding["incident_id"], first_key = "I1", finding["incident_key"]
+        run(c, state, 30)  # ten minutes on
+        c.objects["networkpolicies"].append({"kind": "NetworkPolicy", "metadata": {
+            "name": "lockdown", "namespace": "shop", "creationTimestamp": "2026-01-01T00:00:00Z"},
+            "spec": {"podSelector": {"matchLabels": {"app": "api"}}, "policyTypes": ["Ingress"]}})
+        logs = healthy_logs()
+        logs["Deployment/shop/api"] = ["upstream timed out while connecting to upstream"] * 3
+        run(c, state, 3, logs)
+        assert finding["suspects"][0]["key"] == "NetworkPolicy/shop/lockdown"
+        assert finding["incident_key"] != first_key and "incident_id" not in finding
+
+    def test_a_deploy_made_during_a_gap_longer_than_the_change_window_is_still_the_suspect(self):
+        c = shop()
+        state = learned(c)
+        run(c, state, 3)
+        c.tick(2 * 3600)  # the cluster unreachable for two hours
+        c.set_env("worker", "BATCH_SIZE", "2500")
+        c.crash("worker")
+        f = by_subject(run(c, state, 4))["Deployment/shop/worker"]
+        assert f["suspects"][0]["details"] == ["container worker: env BATCH_SIZE 500 -> 2500"]
+
+
         c = shop()
         state = learned(c)
         run(c, state, 3)

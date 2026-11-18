@@ -38,9 +38,13 @@ def _view(user_id: str, org_id: str) -> dict:
     clusters = []
     for c in list_clusters(user_id):
         s = by_cluster.get(c["cluster_id"]) or {}
-        # No poll for three intervals since the last poll or since Watch was last turned
-        # on: the workers are busy (investigations) or down.
-        ages = [a for a in (s.get("seconds_since_poll"), settings_age) if a is not None]
+        # No poll for three intervals since the last poll, since Watch was last turned on,
+        # or (never polled yet) since the cluster was connected: the workers are busy
+        # (investigations) or down.
+        last = s.get("seconds_since_poll")
+        if last is None:
+            last = _age_seconds(c.get("connected_at"))
+        ages = [a for a in (last, settings_age) if a is not None]
         clusters.append({
             "cluster_id": c["cluster_id"],
             "name": c.get("name"),

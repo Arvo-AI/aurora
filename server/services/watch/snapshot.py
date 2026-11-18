@@ -31,23 +31,45 @@ BAD_WAITING = frozenset({
 
 _SENSITIVE_NAME = re.compile(r"pass|secret|token|key|credential|auth|private|cert|dsn|session", re.I)
 # A URL's password, the user possibly empty (redis://:pw@host). It runs to the last
-# "@", so a password containing "/" or "@" is masked too (over-masking is fine).
-_URL_PASSWORD = re.compile(r"(\w[\w+.-]*://[^:/@\s]*):(\S*)@")
+# "@", so a password containing "/" or "@" is masked too (over-masking is fine). The
+# scheme is bounded so a long run of word characters cannot make it slow.
+_URL_PASSWORD = re.compile(r"(\b[A-Za-z][\w+.-]{0,30}://[^:/@\s]*):(\S*)@")
 # A flag whose name ends in a credential word, and its value, joined or not:
-# --requirepass x, --db-password=x, --github-token x. Not --token-ttl or --keyspace.
-_FLAG = (r"--?[\w.-]*?(?:password|passwd|pass|pwd|secret|token|api[-_]?key|access[-_]?key|"
-         r"secret[-_]?key|credentials?|auth)")
+# --requirepass x, --db-password=x, --account-key x, -dev-root-token-id x,
+# -Dapi.key=x. Not --token-ttl, --keyspace, --max-keys or --password-file.
+_FLAG = r"--?[\w.-]*?(?:password|passwd|passphrase|pass|pwd|secret|token(?:[-_]?id)?|key|credentials?|auth)"
 _SECRET_FLAG = re.compile(rf"^{_FLAG}$", re.I)
 _SECRET_FLAG_VALUE = re.compile(rf"(?<![\w-])({_FLAG})(=|\s+)(?!<redacted|-)(\S+)", re.I)
-# A query parameter named like a credential: /-/ready?token=x, ?access_token=x, &sig=x.
-_QUERY_SECRET = re.compile(r"([?&][^=&#\s]*(?:token|key|pass|secret|auth|sig)[^=&#\s]*=)([^&#\s]+)", re.I)
-# Masked values keep a keyed digest, so a rotated password still shows as a change
-# without the value (or an offline-guessable hash of it) ever being stored.
-_DIGEST_KEY = (os.getenv("INTERNAL_API_SECRET") or "aurora-watch").encode()
+# Query parameters, matched in linear time; a credential-named one is masked:
+# /-/ready?token=x, ?access_token=x, &sig=x.
+_QUERY_PARAM = re.compile(r"([?&])([^=&#\s?]{1,200})=([^&#\s]+)")
+_CREDENTIAL_WORD = re.compile(r"token|key|pass|secret|auth|sig", re.I)
+# Masked values keep a digest keyed by a server secret, so a rotated password still
+# shows as a change while neither the value nor a hash that could be checked against
+# guesses is stored. Without the secret (some dev installs) a masked value is just
+# "<redacted>", and a rotation does not show.
+_DIGEST_KEY = os.getenv("INTERNAL_API_SECRET", "").encode() or None
+# Which key made the digests: a state made with another key (the secret was rotated)
+# would see every masked value as changed, so it is learned again instead.
+DIGEST_ID = (hmac.new(_DIGEST_KEY, b"aurora-watch digest key id", hashlib.sha256).hexdigest()[:8]
+             if _DIGEST_KEY else "none")
+
+
+def _digest(value: str) -> str:
+    """``#`` and 8 hex chars of a keyed digest, or "" without a key."""
+    if _DIGEST_KEY is None:
+        return ""
+    return "#" + hmac.new(_DIGEST_KEY, value.encode("utf-8", "replace"), hashlib.sha256).hexdigest()[:8]
 
 
 def _masked(value: str) -> str:
-    return f"<redacted #{hmac.new(_DIGEST_KEY, value.encode('utf-8', 'replace'), hashlib.sha256).hexdigest()[:8]}>"
+    digest = _digest(value)
+    return f"<redacted {digest}>" if digest else "<redacted>"
+
+
+def _mask_query(match: re.Match, tag: Any) -> str:
+    sep, name, value = match.groups()
+    return f"{sep}{name}={tag(value)}" if _CREDENTIAL_WORD.search(name) else match.group(0)
 
 
 @functools.lru_cache(maxsize=20_000)  # pod specs barely change between polls
@@ -62,9 +84,9 @@ def _clean(value: str, digest: bool = True) -> str:
     value = value.replace("\x00", "")
     masked = _URL_PASSWORD.sub(lambda m: f"{m.group(1)}:{tag(m.group(2))}@", value)
     masked = _SECRET_FLAG_VALUE.sub(lambda m: f"{m.group(1)}{m.group(2)}{tag(m.group(3))}", masked)
-    masked = _QUERY_SECRET.sub(lambda m: f"{m.group(1)}{tag(m.group(2))}", masked)
+    masked = _QUERY_PARAM.sub(lambda m: _mask_query(m, tag), masked)
     out, findings = redact(masked)
-    return f"{out} {_masked(value)}" if findings and digest else out
+    return f"{out} {_digest(value)}".rstrip() if findings and digest else out
 
 
 def _argv(values: Any) -> list[str] | None:
@@ -170,10 +192,15 @@ def _last_write(meta: dict[str, Any]) -> float | None:
 def _env_value(entry: dict[str, Any]) -> str:
     name = entry.get("name") or ""
     if "value" in entry:
+        raw = str(entry.get("value"))
         if _SENSITIVE_NAME.search(name):
-            return _masked(str(entry.get("value")))
-        value = _clean(str(entry.get("value"))[:1000])
-        return value if len(value) <= 120 else value[:117] + "..."
+            return _masked(raw)
+        value = _clean(raw[:1000])
+        if len(value) > 120:
+            # Cut for length: a digest of the whole value keeps an edit past the cut (or a
+            # masked value's digest that the cut removed) visible as a change.
+            value = f"{value[:117]}... {_digest(raw)}".rstrip()
+        return value
     ref = entry.get("valueFrom") or {}
     for kind, label in (("secretKeyRef", "secret"), ("configMapKeyRef", "configmap")):
         if kind in ref:

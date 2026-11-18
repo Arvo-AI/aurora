@@ -44,7 +44,7 @@ from typing import Any
 
 from services.watch.changes import detect_changes
 from services.watch.logs import normalize
-from services.watch.snapshot import BAD_WAITING, TRACKED_OBJECTS
+from services.watch.snapshot import BAD_WAITING, DIGEST_ID, TRACKED_OBJECTS
 from utils.security.output_redaction import redact
 
 SEVERITY_RANK = {"low": 1, "medium": 2, "high": 3, "critical": 4}
@@ -130,11 +130,12 @@ STATE_VERSION = 2
 
 
 def current_state(state: dict[str, Any] | None) -> dict[str, Any]:
-    """The stored state, or a fresh one when it is missing or from another version. An
-    old snapshot was cleaned and templated under other rules, so diffing against it
-    would report changes and new log lines that never happened (quoting whatever the
-    old rules kept)."""
-    if not state or state.get("version") != STATE_VERSION:
+    """The stored state, or a fresh one when it is missing, from another version, or made
+    with another digest key. An old snapshot was cleaned and templated under other
+    rules (or its masked values digested with another key), so diffing against it
+    would report changes and new log lines that never happened, quoting whatever the
+    old rules kept."""
+    if not state or state.get("version") != STATE_VERSION or state.get("digest_id") != DIGEST_ID:
         return new_state()
     return state
 
@@ -142,6 +143,7 @@ def current_state(state: dict[str, Any] | None) -> dict[str, Any]:
 def new_state(config: dict[str, Any] | None = None) -> dict[str, Any]:
     return {
         "version": STATE_VERSION,
+        "digest_id": DIGEST_ID,
         "config": {**DEFAULTS, **(config or {})},
         "polls": 0,
         "prev": None,
@@ -210,52 +212,59 @@ def _event_deltas(state: dict[str, Any], snapshot: dict[str, Any]) -> list[dict[
     return out
 
 
-# Before templating, in linear time on every line: a long run mixing letters and
-# digits (a token, a key, a JWT segment) and the value of a credential-named pair.
-# The full secret rules run once per new template, on its template and sample.
+# Before templating, in linear time on every line: tokens (a long run mixing upper and
+# lower case and digits, as keys, JWT segments and PATs do, but not lowercase names
+# like checkout-service-v2 or a pod name), the value of a credential-shaped pair
+# (password=..., "api_key": "...", logfmt or JSON, quoted or not), and the credential
+# after an Authorization header. The full secret rules run where text is kept or
+# quoted: a template the baseline stores, a finding's evidence and held lines.
 _TOKEN_RUN = re.compile(r"[A-Za-z0-9+_=-]{20,}")
 _CREDENTIAL_PAIR = re.compile(
-    r"(?i)\b((?:pass(?:word|wd)?|pwd|secret|token|api[_-]?key|apikey|access[_-]?key|auth|session|sig(?:nature)?)"
-    r"[\w.-]{0,30}[ \t]*[=:][ \t]*)[^\s&\"',;]+")
-_REDACTION_BUDGET = 100  # full secret scans per poll, of new error templates and their samples
+    r"(?i)\b([\w.-]{0,30}?(?:password|passwd|pwd|passphrase|secret|token|api[_-]?key|apikey|access[_-]?key|"
+    r"private[_-]?key|auth[_-]?(?:token|key)|session[_-]?(?:id|token|key)|signature|credentials?)"
+    r"[\"']?[ \t]*[=:][ \t]*[\"']?)[^\s&\"',;|)\]}>]+")
+_AUTH_HEADER = re.compile(r"(?i)\b(authorization[\"']?[ \t]*[=:][ \t]*[\"']?(?:bearer|basic|token)[ \t]+)[^\s\"',;|)\]}>]+")
+
+
+def _looks_like_token(run: str) -> bool:
+    has_digit = any(c.isdigit() for c in run)
+    has_upper = any(c.isupper() for c in run)
+    has_lower = any(c.islower() for c in run)
+    return has_digit and (has_upper and has_lower or has_upper and len(run) >= 20 and not has_lower
+                          or len(run) >= 32 and "-" not in run and "_" not in run)
 
 
 def _mask_secrets(line: str) -> str:
-    def token(m: re.Match) -> str:
-        run = m.group(0)
-        mixed = any(c.isdigit() for c in run) and any(c.isalpha() for c in run)
-        return "<token>" if mixed else run
-
-    return _CREDENTIAL_PAIR.sub(r"\1<redacted>", _TOKEN_RUN.sub(token, line))
+    masked = _TOKEN_RUN.sub(lambda m: "<token>" if _looks_like_token(m.group(0)) else m.group(0), line)
+    return _AUTH_HEADER.sub(r"\1<redacted>", _CREDENTIAL_PAIR.sub(r"\1<redacted>", masked))
 
 
-def template_counts(lines: list[str], budget: dict[str, int] | None = None) -> dict[str, dict[str, Any]]:
+def template_counts(lines: list[str]) -> dict[str, dict[str, Any]]:
     """Log lines by template. Every line is masked in linear time before templating:
     normalize() masks digits and hex, which would hide a token from the secret rules
     and keep the rest of it in the template, and a token that differs per request
-    would mint a new template per request. The full secret rules then run on error
-    templates, whose samples evidence quotes, at most ``budget`` times a poll, so a
-    client that fills access logs with keyword soup cannot stall the poll."""
-    budget = {"left": _REDACTION_BUDGET} if budget is None else budget
+    would mint a new template per request. The full rules run later, only on what is
+    kept or quoted, so their cost grows with findings, not with log volume."""
     counts: dict[str, dict[str, Any]] = {}
     for line in lines:
-        line = line.replace("\x00", "")
-        masked = _mask_secrets(line)
+        masked = _mask_secrets(line.replace("\x00", ""))
         t = normalize(masked)
         if t is None:
             continue
         entry = counts.get(t.fingerprint)
         if entry is None:
-            template, sample = t.template, masked.strip()[:300]
-            if t.is_error and budget["left"] > 0:
-                budget["left"] -= 1
-                template, sample = _scrubbed(template), _scrubbed(line.strip()[:300])
             entry = counts[t.fingerprint] = {
-                "template": template, "error": t.is_error, "request_failure": t.is_request_failure,
-                "http_class": t.http_class, "count": 0, "sample": sample,
+                "template": t.template, "error": t.is_error, "request_failure": t.is_request_failure,
+                "http_class": t.http_class, "count": 0, "sample": masked.strip()[:600],
             }
         entry["count"] += 1
     return counts
+
+
+def _kept(entry: dict[str, Any]) -> dict[str, Any]:
+    """A template entry about to be stored or quoted, through the full secret rules."""
+    return {**entry, "template": _scrubbed(entry["template"]),
+            "sample": _scrubbed(entry.get("sample") or "")[:300]}
 
 
 def _absorb_templates(state: dict[str, Any], workload: str, counts: dict[str, dict[str, Any]]) -> None:
@@ -266,7 +275,7 @@ def _absorb_templates(state: dict[str, Any], workload: str, counts: dict[str, di
         if k is None:
             if len(known) >= limit:
                 continue
-            known[fp] = {"template": entry["template"], "error": entry["error"],
+            known[fp] = {"template": _scrubbed(entry["template"]), "error": entry["error"],
                          "total": entry["count"], "polls": 1}
         else:
             k["total"] += entry["count"]
@@ -439,7 +448,8 @@ def _log_symptoms(state: dict[str, Any], key: str, label: str, counts: dict[str,
             severity, what = "medium", "error lines surging in"
         else:
             severity, what = "low", "error lines never seen before in"
-        evidence = [f"{e['count']}x {e['sample']}" for e in sorted(group, key=lambda e: -e["count"])]
+        evidence = [f"{e['count']}x {_scrubbed(e.get('sample') or '')[:300]}"
+                    for e in sorted(group, key=lambda e: -e["count"])[:8]]
         out.append(_symptom(key, kind, severity, f"{what} {label} logs", evidence,
                             fingerprints=[e["fp"] for e in group], traffic=bool(failing_requests)))
     # A workload that logged successful requests in (nearly) every learning poll
@@ -607,10 +617,15 @@ def _rollout_stalled_for(state: dict[str, Any], key: str, w: dict[str, Any], now
     converging = w.get("converging", w["updated"] < w["desired"])
     if w.get("held"):
         # Its revisions may never converge on their own (OnDelete, a partition), so it
-        # is in flight only while it visibly replaces pods; at rest, a fault in it is
-        # reported at once.
+        # is in flight only while it moves pods to the new revision: a new generation,
+        # or more pods updated than at any poll of this generation. A deleted pod that
+        # comes back is not progress; at rest, a fault in it is reported at once.
+        marks = state.setdefault("held_updated", {})
         before = ((state.get("prev") or {}).get("workloads") or {}).get(key) or {}
-        converging = (w["updated"], w.get("generation")) != (before.get("updated"), before.get("generation"))
+        seen = marks.get(key) or [before.get("generation"), before.get("updated", w["updated"])]
+        new_generation = w.get("generation") != seen[0]
+        converging = new_generation or w["updated"] > seen[1]
+        marks[key] = [w.get("generation"), w["updated"] if new_generation else max(seen[1], w["updated"])]
     # Once under way, a rollout stays in flight until every replica is ready: the
     # last new pod counts as "updated" as soon as it is scheduled (DaemonSets).
     in_flight = w.get("observed_generation") == w.get("generation") and (
@@ -785,7 +800,7 @@ def attribute(finding: dict[str, Any], changes: list[dict[str, Any]], snapshot: 
         gap = finding["first_seen"] - change["at"]
         # Writes up to two minutes "after" the first symptom are still candidates:
         # the symptom can be confirmed before managedFields catches up, and clocks skew.
-        if gap > config["change_window_seconds"] or gap < -120:
+        if finding["first_seen"] - _recorded_at(change) > config["change_window_seconds"] or gap < -120:
             continue
         weight, why = _relation(finding, change, snapshot)
         if weight <= 0:
@@ -830,7 +845,7 @@ def step(state: dict[str, Any], snapshot: dict[str, Any], logs: dict[str, list[s
     is reported once; later polls extend it (new symptoms, escalation) or close
     it after ``resolve_polls`` clean polls.
     """
-    if state.get("version") != STATE_VERSION:  # saved by another version: learn again, in place
+    if current_state(state) is not state:  # another version or digest key: learn again, in place
         fresh = new_state()
         state.clear()
         state.update(fresh)
@@ -840,8 +855,7 @@ def step(state: dict[str, Any], snapshot: dict[str, Any], logs: dict[str, list[s
         _rebaseline_after_gap(state, snapshot)
         return state, []
     # Lines from before the first poll are history, not behaviour to learn.
-    redaction_budget = {"left": _REDACTION_BUDGET}  # shared by every workload this poll
-    templates = {} if first_poll else {w: template_counts(lines, redaction_budget) for w, lines in (logs or {}).items()}
+    templates = {} if first_poll else {w: template_counts(lines) for w, lines in (logs or {}).items()}
     events_readable = _carry_forward_blind(state, snapshot)
     events = _event_deltas(state, snapshot) if events_readable else []
     now = snapshot["taken_at"]
@@ -849,7 +863,7 @@ def step(state: dict[str, Any], snapshot: dict[str, Any], logs: dict[str, list[s
     if not first_poll:
         cutoff = now - cfg["change_window_seconds"]
         changes = detect_changes(state["prev"], snapshot) + state["changes"]
-        state["changes"] = _bounded_changes([c for c in changes if c["at"] >= cutoff][: cfg["max_changes"]])
+        state["changes"] = _bounded_changes([c for c in changes if _recorded_at(c) >= cutoff][: cfg["max_changes"]])
 
     if is_learning(state):
         _learn(state, snapshot, events, templates)
@@ -922,12 +936,14 @@ def step(state: dict[str, Any], snapshot: dict[str, Any], logs: dict[str, list[s
                 existing["blamed_at"] = now
                 existing.pop("incident_key", None)
                 confirmed.append(existing)
-            elif was >= incident_rank and rose:
-                # An outage that got worse. If a change found since it was last blamed is
-                # the cause now, that is a new incident blaming that change; otherwise it
-                # stays on its incident, which is updated (severity, findings). Re-ranking
-                # the changes it was already blamed among only moves them between
-                # recency buckets, so that is never a newer cause.
+            elif was >= incident_rank and (rose or any(SEVERITY_RANK[s["severity"]] >= incident_rank
+                                                       for s in new_syms)):
+                # An outage that got worse, or gained an incident-worthy symptom. If a change
+                # found since it was last blamed is the cause now, that is a new incident
+                # blaming that change; otherwise it is more of the same outage (a second
+                # symptom of one crash loop confirms a poll later) and stays on its
+                # incident, which is sent the update. Re-ranking the changes it was already
+                # blamed among only moves them between recency buckets: never a newer cause.
                 fresh = attribute({**existing, "first_seen": now}, state["changes"], snapshot, cfg)
                 old, new = primary_suspect(existing), primary_suspect({"suspects": fresh})
                 if (new is not None and not reapplies_only(new)
@@ -938,10 +954,6 @@ def step(state: dict[str, Any], snapshot: dict[str, Any], logs: dict[str, list[s
                     existing.pop("incident_key", None)
                     confirmed.append(existing)
                 existing.pop("incident_id", None)  # so its incident is opened or updated again
-            elif was >= incident_rank and any(SEVERITY_RANK[s["severity"]] >= incident_rank for s in new_syms):
-                # More of the same outage (a second symptom confirming a poll later):
-                # same suspects and incident, which is sent the new evidence.
-                existing.pop("incident_id", None)
             continue
         kind, ns, name = subject.split("/", 2)
         finding = {
@@ -975,7 +987,7 @@ def step(state: dict[str, Any], snapshot: dict[str, Any], logs: dict[str, list[s
                 if fp not in held and len(held) >= _MAX_HELD_TEMPLATES:
                     finding["log_templates_dropped"] = finding.get("log_templates_dropped", 0) + 1
                     continue
-                entry = held.setdefault(fp, {**e, "count": 0})
+                entry = held.get(fp) or held.setdefault(fp, {**_kept(e), "count": 0})
                 entry["count"] += e["count"]
 
     for subject in list(state["open"]):
@@ -997,6 +1009,13 @@ def step(state: dict[str, Any], snapshot: dict[str, Any], logs: dict[str, list[s
 
 
 _MAX_CHANGES_BYTES = 1024 * 1024
+
+
+def _recorded_at(change: dict[str, Any]) -> float:
+    """When a change counts from: when it happened, or, for one made during a polling
+    gap (dated to the gap's start; when it really happened is unknown), when it was
+    found, so a gap longer than the change window does not lose it."""
+    return change.get("detected_at", change["at"]) if change.get("during_gap") else change["at"]
 
 
 def _bounded_changes(changes: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1021,9 +1040,10 @@ def _rebaseline_after_gap(state: dict[str, Any], snapshot: dict[str, Any]) -> No
     cfg = state["config"]
     _carry_forward_blind(state, snapshot)
     cutoff = snapshot["taken_at"] - cfg["change_window_seconds"]
-    gap_changes = [c for c in detect_changes(state["prev"], snapshot) if c["action"] != "pod_replaced"]
+    gap_changes = [{**c, "during_gap": True} for c in detect_changes(state["prev"], snapshot)
+                   if c["action"] != "pod_replaced"]
     state["changes"] = _bounded_changes([c for c in gap_changes + state["changes"]
-                                         if c["at"] >= cutoff][: cfg["max_changes"]])
+                                         if _recorded_at(c) >= cutoff][: cfg["max_changes"]])
     _event_deltas(state, snapshot)  # the gap's event counts become the counts seen
     for table in ("restarts", "held", "rollouts", "pending"):
         state[table] = {}
@@ -1083,7 +1103,7 @@ def _forget_deleted(state: dict[str, Any], snapshot: dict[str, Any]) -> None:
         del base["services"][key]
     for key in [k for k in base["event_polls"] if k.split("|")[0] not in workloads]:
         del base["event_polls"][key]
-    for table in ("restarts", "capacity", "rollouts"):
+    for table in ("restarts", "capacity", "rollouts", "held_updated"):
         for key in [k for k in state.get(table, {}) if k not in workloads]:
             del state[table][key]
     for key in [k for k in state.get("log_cursors", {}) if k not in workloads]:

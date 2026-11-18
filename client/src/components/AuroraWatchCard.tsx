@@ -184,7 +184,9 @@ export function AuroraWatchCard() {
           <div key={c.cluster_id} className="p-3 bg-zinc-900 border border-zinc-800 rounded-lg text-sm">
             <div className="flex items-center gap-3">
               <span className="text-white font-medium">{c.name || c.cluster_id}</span>
-              {c.last_error ? (
+              {data.owner_left ? (
+                <Badge variant="outline" className="border-amber-700 text-amber-400">Paused</Badge>
+              ) : c.last_error ? (
                 <Badge variant="outline" className="border-red-700 text-red-400">Not readable</Badge>
               ) : c.stale ? (
                 <Badge variant="outline" className="border-amber-700 text-amber-400">Not polling</Badge>

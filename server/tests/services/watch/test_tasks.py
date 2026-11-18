@@ -234,3 +234,19 @@ def test_a_tick_slightly_early_still_retries(env):
     assert tasks.poll_cluster(ORG, CLUSTER, runner=down, clock=lambda: c.now)["status"] == "unreachable"
     c.now += tasks.POLL_SECONDS - 0.5  # beat drift: the next tick lands a little early
     assert tasks.poll_cluster(ORG, CLUSTER, runner=fake_kubectl(c, healthy()), clock=lambda: c.now)["status"] == "ok"
+
+
+def test_turning_watch_off_and_on_again_is_a_fresh_start(env):
+    # Same owner, same namespaces: saving the settings again ends the backoff and its ladder.
+    c = shop()
+
+    def down(command, timeout):
+        raise KubectlError("denied by the org command policy")
+
+    for _ in range(4):
+        tasks.poll_cluster(ORG, CLUSTER, runner=down, clock=lambda: c.now)
+        c.tick(tasks.POLL_SECONDS)
+    assert env["stored"]["state"]["read_failures"] == 3
+    env["settings"]["updated_at"] = "2026-11-18T06:00:00+00:00"  # off and on again
+    assert tasks.poll_cluster(ORG, CLUSTER, runner=down, clock=lambda: c.now)["status"] == "unreachable"
+    assert env["stored"]["state"]["read_failures"] == 1 and "next try in 1 min" in env["stored"]["error"]
