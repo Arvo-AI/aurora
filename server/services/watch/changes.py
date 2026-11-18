@@ -12,15 +12,25 @@ from __future__ import annotations
 from typing import Any
 
 MAX_DETAILS = 6
+MAX_DETAIL_CHARS = 300
+_MAX_ITEMS = 10
+
+
+def _clip(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[: limit - 3] + "..."
 
 
 def _fmt(value: Any) -> str:
-    if isinstance(value, dict):
-        return "{" + ", ".join(f"{k}: {_fmt(v)}" for k, v in sorted(value.items())) + "}"
-    if isinstance(value, (list, tuple)):
-        return "[" + ", ".join(_fmt(v) for v in value) + "]"
-    text = str(value)
-    return text if len(text) <= 80 else text[:77] + "..."
+    """A value as a short line: lists and dicts show their first items, with a count."""
+    if isinstance(value, (dict, list, tuple)):
+        items = sorted(value.items()) if isinstance(value, dict) else list(value)
+        parts = [f"{k}: {_fmt(v)}" for k, v in items[:_MAX_ITEMS]] if isinstance(value, dict) else [
+            _fmt(v) for v in items[:_MAX_ITEMS]]
+        if len(items) > _MAX_ITEMS:
+            parts.append(f"+{len(items) - _MAX_ITEMS} more")
+        open_, close = ("{", "}") if isinstance(value, dict) else ("[", "]")
+        return _clip(open_ + ", ".join(parts) + close, MAX_DETAIL_CHARS)
+    return _clip(str(value), 80)
 
 
 def _flatten(value: Any, prefix: str = "") -> dict[str, Any]:
@@ -99,9 +109,26 @@ def _change(kind: str, namespace: str, name: str, action: str, details: list[str
     when = min(max(at if at is not None else start, start), end)
     return {
         "key": f"{kind}/{namespace}/{name}", "kind": kind, "namespace": namespace, "name": name,
-        "action": action, "details": details[:MAX_DETAILS], "at": when,
+        "action": action, "details": [_clip(d, MAX_DETAIL_CHARS) for d in details[:MAX_DETAILS]], "at": when,
         "detected_at": end, **extra,
     }
+
+
+def _created_detail(obj: dict[str, Any]) -> str:
+    """What a "created" change says about the new object: a ConfigMap's keys (the first
+    few and how many), other kinds' spec summary."""
+    detail = obj.get("detail")
+    if obj.get("kind") == "ConfigMap" and isinstance(detail, dict):
+        first = detail.get("first") or []
+        more = (detail.get("keys") or 0) - len(first)
+        return f" with keys {', '.join(first)}{f' and {more} more' if more > 0 else ''}" if first else ""
+    return f" {_fmt(detail)}" if detail else ""
+
+
+def _object_extra(obj: dict[str, Any]) -> dict[str, Any]:
+    """What a change record keeps of the object for attribution: a NetworkPolicy's pod
+    selector, a quota's limits. Not a ConfigMap's key list, which can be huge."""
+    return {} if obj.get("kind") == "ConfigMap" else {"detail": obj.get("detail")}
 
 
 def _fmt_ports(ports: list[list[str]]) -> str:
@@ -161,13 +188,13 @@ def detect_changes(prev: dict[str, Any], cur: dict[str, Any]) -> list[dict[str, 
     for key in sorted(set(po) | set(co)):
         old, new = po.get(key), co.get(key)
         if old is None:
-            detail = f" {_fmt(new['detail'])}" if new.get("detail") else ""
+            detail = _created_detail(new)
             out.append(_change(new["kind"], new["namespace"], new["name"], "created",
                                [f"{new['kind']} created{detail}"], new.get("last_write"), window,
-                               detail=new.get("detail")))
+                               **_object_extra(new)))
         elif new is None:
             out.append(_change(old["kind"], old["namespace"], old["name"], "deleted",
-                               [f"{old['kind']} deleted"], None, window, detail=old.get("detail")))
+                               [f"{old['kind']} deleted"], None, window, **_object_extra(old)))
         elif old["content"] != new["content"]:
             if isinstance(new["content"], dict):
                 a, b = old["content"] or {}, new["content"]
@@ -179,7 +206,7 @@ def detect_changes(prev: dict[str, Any], cur: dict[str, Any]) -> list[dict[str, 
             else:
                 details = [f"{new['kind']} spec changed {_fmt(new.get('detail'))}"]
             out.append(_change(new["kind"], new["namespace"], new["name"], "changed", details,
-                               new.get("last_write"), window, detail=new.get("detail")))
+                               new.get("last_write"), window, **_object_extra(new)))
 
     # A pod replaced while its template stayed the same: a manual delete, an
     # eviction or a node problem. Config is read at start, so the new pod may run

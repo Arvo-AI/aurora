@@ -18,6 +18,14 @@ logger = logging.getLogger(__name__)
 PREF_KEY = "aurora_watch"
 _NAMESPACE = re.compile(r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$")
 MAX_NAMESPACES = 50
+# "\u0000" in JSON text that encodes a NUL (an odd number of backslashes before "u0000").
+_NUL_ESCAPE = re.compile(r"(?<!\\)((?:\\\\)*)\\u0000")
+
+
+def jsonb_dumps(value: Any) -> str:
+    """JSON for a jsonb column. jsonb cannot hold U+0000, and cluster text (a log line,
+    an event message) can contain it: it is dropped rather than failing the write."""
+    return _NUL_ESCAPE.sub(r"\1", json.dumps(value, default=str))
 
 
 def normalize_namespaces(value: Any) -> list[str] | None:
@@ -131,7 +139,7 @@ def save_state(user_id: str, cluster_id: str, state: dict[str, Any] | None, *,
                    SET last_error = EXCLUDED.last_error, blind_spots = EXCLUDED.blind_spots,
                        last_poll_at = NOW(), updated_at = NOW()
                 """,
-                (org_id, cluster_id, error, json.dumps(blind_spots or [])),
+                (org_id, cluster_id, error, jsonb_dumps(blind_spots or [])),
             )
         else:
             cur.execute(
@@ -144,8 +152,8 @@ def save_state(user_id: str, cluster_id: str, state: dict[str, Any] | None, *,
                        last_error = EXCLUDED.last_error, blind_spots = EXCLUDED.blind_spots,
                        last_poll_at = NOW(), updated_at = NOW()
                 """,
-                (org_id, cluster_id, json.dumps(state, default=str), summary["polls"], summary["open"],
-                 error, json.dumps(blind_spots or [])),
+                (org_id, cluster_id, jsonb_dumps(state), summary["polls"], summary["open"],
+                 error, jsonb_dumps(blind_spots or [])),
             )
         conn.commit()
 
@@ -178,6 +186,7 @@ def status(user_id: str) -> list[dict[str, Any]]:
             "polls": polls or 0,
             "learning": (polls or 0) < config.get("learning_polls", 5),
             "last_poll_at": last_poll_at.isoformat() if last_poll_at else None,
+            "seconds_since_poll": (datetime.now(timezone.utc) - last_poll_at).total_seconds() if last_poll_at else None,
             "last_error": last_error,
             "blind_spots": (json.loads(blind_spots) if isinstance(blind_spots, str) else blind_spots) or [],
             "open_findings": [

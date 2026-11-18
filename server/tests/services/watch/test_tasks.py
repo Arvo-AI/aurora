@@ -19,12 +19,12 @@ CLUSTER = {"cluster_id": "kc-1", "name": "prod-east"}
 
 
 def fake_kubectl(cluster: Cluster, logs_by_app: dict[str, list[str]]):
-    """A runner that answers like kubectl: the combined get, and logs per label selector."""
+    """A runner that answers like kubectl: each get with the kinds it asks for, and logs per label selector."""
     seq = {"n": 0}
 
     def run(command: str, timeout: int) -> str:
         if command.startswith("get "):
-            return cluster.kubectl_list()
+            return cluster.kubectl_get(command)
         app = re.search(r"-l app=([a-z-]+)", command).group(1)
         out = []
         for line in logs_by_app.get(app, []):
@@ -137,3 +137,73 @@ def test_an_unreachable_chatbot_is_recorded_not_raised(env):
         run = collector.internal_api_runner(OWNER, ORG, "kc-1")
         assert tasks.poll_cluster(ORG, CLUSTER, runner=run)["status"] == "unreachable"
     assert "unreachable" in env["stored"]["error"]
+
+
+def test_a_poll_after_a_long_gap_does_not_count_what_piled_up_as_now(env):
+    # Watch off over a weekend: the worker restarted twice meanwhile and has been fine since.
+    c = shop()
+    run = fake_kubectl(c, healthy())
+    polls(c, run, DEFAULTS["learning_polls"] + 1)
+    c.tick(3 * 24 * 3600)
+    c.deployments["worker"]["restarts"] += 2
+    assert [r["status"] for r in polls(c, run, 4)] == ["ok"] * 4
+    assert env["opened"] == [] and env["stored"]["state"]["open"] == {}
+
+
+def test_a_slow_read_does_not_make_the_next_on_time_tick_look_early(env):
+    c = shop()
+    inner = fake_kubectl(c, healthy())
+
+    def slow(command, timeout):
+        c.now += 5  # every command takes 5 s: well over 12 s per poll
+        return inner(command, timeout)
+
+    statuses = []
+    for _ in range(4):
+        start = c.now
+        statuses.append(tasks.poll_cluster(ORG, CLUSTER, runner=slow, clock=lambda: c.now)["status"])
+        c.now = start + tasks.POLL_SECONDS  # the next tick, on time
+    assert statuses == ["ok"] * 4
+
+
+def test_an_unreadable_cluster_is_retried_less_and_less_often(env):
+    # An agent that drops a too-large response must not be asked again every minute.
+    c = shop()
+
+    def down(command, timeout):
+        raise KubectlError("No response from agent")
+
+    statuses = []
+    for _ in range(8):
+        statuses.append(tasks.poll_cluster(ORG, CLUSTER, runner=down, clock=lambda: c.now)["status"])
+        c.tick(tasks.POLL_SECONDS)
+    assert statuses == ["unreachable", "unreachable", "backing_off", "unreachable",
+                        "backing_off", "backing_off", "backing_off", "unreachable"]
+    assert "next try in 8 min" in env["stored"]["error"]
+    c.now = env["stored"]["state"]["retry_at"]
+    assert tasks.poll_cluster(ORG, CLUSTER, runner=fake_kubectl(c, healthy()), clock=lambda: c.now)["status"] == "ok"
+    assert "retry_at" not in env["stored"]["state"] and env["stored"]["error"] is None
+
+
+def test_a_failure_after_the_read_is_recorded_not_raised(env):
+    c = shop()
+    with patch("services.watch.detector.step", side_effect=ValueError("boom")):
+        result = tasks.poll_cluster(ORG, CLUSTER, runner=fake_kubectl(c, healthy()), clock=lambda: c.now)
+    assert result["status"] == "error" and env["stored"]["error"] == "poll failed: ValueError"
+
+
+def test_a_nul_in_a_log_line_or_an_event_never_reaches_the_stored_state(env):
+    # jsonb cannot hold U+0000: one such line would fail every save from then on.
+    import json
+
+    c = shop()
+    logs = healthy()
+    run = fake_kubectl(c, logs)
+    polls(c, run, DEFAULTS["learning_polls"])
+    logs["loadgen"] = ["GET /api/items?name=widget\x00 -> 502"] * 3
+    for count in range(1, 4):  # a probe failing again every poll
+        c.warning("Pod", c.pod_name("api", 0), "Unhealthy", "Readiness probe failed: body \x00\x00", count=count)
+        polls(c, run, 1)
+    state = env["stored"]["state"]
+    assert {"Deployment/shop/loadgen", "Deployment/shop/api"} <= set(state["open"])
+    assert "\u0000" not in json.dumps(state)

@@ -33,6 +33,8 @@ def _view(user_id: str, org_id: str) -> dict:
             "polls": s.get("polls", 0),
             "learning": s.get("learning", True),
             "last_poll_at": s.get("last_poll_at"),
+            # No poll for three intervals: the workers are busy (investigations) or down.
+            "stale": (s.get("seconds_since_poll") or 0) > POLL_SECONDS * 3,
             "last_error": s.get("last_error"),
             "blind_spots": s.get("blind_spots", []),
             "open_findings": s.get("open_findings", []),

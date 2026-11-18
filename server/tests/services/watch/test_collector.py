@@ -9,6 +9,7 @@ from services.watch import collector
 from services.watch.collector import (
     CommandBlocked,
     KubectlError,
+    StateTooLarge,
     collect_logs,
     collect_state,
     parse_log_output,
@@ -38,18 +39,32 @@ def test_log_cursor_keeps_only_new_lines():
     assert again == ["third"] and cursor2 > cursor
 
 
-def test_state_is_one_get_and_skips_kubernetes_own_namespaces():
+def test_state_is_a_few_gets_and_skips_kubernetes_own_namespaces():
+    # Cluster-wide, in a few responses, each well under the kubectl-agent's frame limit.
     c = shop()
     calls = []
 
     def run(command, timeout):
         calls.append(command)
-        return c.kubectl_list()
+        return c.kubectl_get(command)
 
     raw, blind = collect_state(run)
-    assert len(calls) == 1 and calls[0].startswith("get pods,deployments,") and " -A -o json" in calls[0]
-    assert "secrets" not in calls[0]
-    assert blind == [] and len(raw["deployments"]["items"]) == 5
+    assert [cmd.split()[1] for cmd in calls] == [",".join(g) for g in collector.READ_GROUPS]
+    assert all(cmd.endswith(" -A -o json") and "secrets" not in cmd for cmd in calls)
+    assert blind == [] and len(raw["deployments"]["items"]) == 5 and raw["endpoints"]["items"]
+
+
+def test_a_response_too_large_for_one_poll_fails_the_poll_with_a_hint():
+    c = shop()
+    huge = json.dumps({"kind": "List", "items": [{"kind": "Pod", "pad": "x" * (collector.MAX_STATE_BYTES + 1)}]})
+    with pytest.raises(StateTooLarge, match="list the namespaces to watch"):
+        collect_state(lambda cmd, t: huge if cmd.startswith("get pods ") else c.kubectl_get(cmd))
+
+    def agent_refused(cmd, t):  # what the kubectl-agent answers instead of an oversized frame
+        raise KubectlError("output too large (12000000 bytes); narrow the command, e.g. with -n <namespace>")
+
+    with pytest.raises(StateTooLarge):
+        collect_state(agent_refused)
 
 
 def _kind_by_kind(c, refuse=()):

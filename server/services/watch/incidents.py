@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from services.watch import report
+from services.watch.store import jsonb_dumps
 
 logger = logging.getLogger(__name__)
 
@@ -25,27 +26,55 @@ def source_alert_id(cluster_id: str, group_key: str) -> int:
     return zlib.crc32(f"{cluster_id}|{group_key}".encode("utf-8")) & 0x7FFFFFFF
 
 
+_SEVERITIES = ["low", "medium", "high", "critical"]
+
+
+def _rank(severity: Any) -> int:
+    return _SEVERITIES.index(severity) + 1 if severity in _SEVERITIES else 0
+
+
 def _merge_payload(existing: dict[str, Any] | None, new: dict[str, Any]) -> dict[str, Any]:
-    """Add newly confirmed findings to an incident that is already open."""
+    """Fold a group's findings into an incident that is already open: a finding seen
+    again (it got worse) replaces its older copy, new ones and new suspects are added."""
     if not existing:
         return new
     merged = dict(existing)
-    known = {f.get("subject") for f in existing.get("findings") or []}
-    merged["findings"] = (existing.get("findings") or []) + [
-        f for f in new.get("findings") or [] if f.get("subject") not in known
-    ]
-    merged["findings"] = merged["findings"][: report.MAX_FINDINGS]
+    newer = {f.get("subject"): f for f in new.get("findings") or []}
+    kept = [newer.pop(f.get("subject"), f) for f in existing.get("findings") or []]
+    merged["findings"] = (kept + list(newer.values()))[: report.MAX_FINDINGS]
+
+    def ident(s: dict[str, Any]) -> tuple:
+        return s.get("object"), s.get("at")
+
+    known = {ident(s) for s in existing.get("suspected_changes") or []}
+    merged["suspected_changes"] = ((existing.get("suspected_changes") or []) + [
+        s for s in new.get("suspected_changes") or [] if ident(s) not in known])[: report.MAX_SUSPECTS]
+    if _rank(new.get("severity")) > _rank(existing.get("severity")):
+        merged["severity"] = new["severity"]
     merged["updated_at"] = new.get("first_seen")
     return merged
 
 
-def _extend(cur, incident_id: Any, alert_metadata: Any, payload: dict[str, Any]) -> None:
-    """Add a group's findings to an open incident's Aurora Watch payload."""
+def _extend(cur, incident_id: Any, alert_metadata: Any, payload: dict[str, Any], services: list[str]) -> None:
+    """Add a group's findings, and the workloads they name, to an open incident, and
+    raise its severity if the group's is higher."""
     metadata = alert_metadata if isinstance(alert_metadata, dict) else json.loads(alert_metadata or "{}")
     metadata["aurora_watch"] = _merge_payload(metadata.get("aurora_watch"), payload)
     cur.execute(
-        "UPDATE incidents SET alert_metadata = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s",
-        (json.dumps(metadata), incident_id),
+        """
+        UPDATE incidents
+           SET alert_metadata = %s,
+               severity = CASE WHEN array_position(%s::text[], %s::text)
+                                    > COALESCE(array_position(%s::text[], severity::text), 0)
+                               THEN %s ELSE severity END,
+               affected_services = ARRAY(SELECT DISTINCT s
+                                           FROM unnest(COALESCE(affected_services, '{}') || %s::text[]) AS s
+                                          ORDER BY s),
+               updated_at = CURRENT_TIMESTAMP
+         WHERE id = %s
+        """,
+        (jsonb_dumps(metadata), _SEVERITIES, payload.get("severity"), _SEVERITIES, payload.get("severity"),
+         services, incident_id),
     )
 
 
@@ -58,23 +87,28 @@ def open_incident(user_id: str, org_id: str, cluster: dict[str, Any], group: dic
     service = report.incident_service(group)
     severity = group["severity"] if group["severity"] in ("critical", "high", "medium", "low") else "high"
     payload = report.rca_payload(group, cluster)
-    alert_id = source_alert_id(cluster.get("cluster_id") or "", group["key"])
+    services = sorted({f["name"] for f in group["findings"]})
+    group_id = source_alert_id(cluster.get("cluster_id") or "", group["key"])
+    alert_id = group_id
     now = datetime.now(timezone.utc).replace(tzinfo=None)  # incidents timestamps are naive UTC
 
     with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
         set_rls_context(cur, conn, user_id, log_prefix="[AuroraWatch:incident]")
-        # Any user's incident for this key counts: whoever Watch acts as may change.
+        # The group's latest incident, whichever user Watch acted as when it opened it
+        # (that may change). A recurrence has its own source_alert_id, so match the
+        # group id it carries too.
         cur.execute(
             """
             SELECT id, alert_metadata, status FROM incidents
-             WHERE org_id = %s AND source_type = %s AND source_alert_id = %s
+             WHERE org_id = %s AND source_type = %s
+               AND (source_alert_id = %s OR alert_metadata->>'watch_group' = %s)
              ORDER BY started_at DESC LIMIT 1
             """,
-            (org_id, report.SOURCE_TYPE, alert_id),
+            (org_id, report.SOURCE_TYPE, group_id, str(group_id)),
         )
         existing = cur.fetchone()
         if existing and existing[2] not in ("resolved", "merged"):
-            _extend(cur, existing[0], existing[1], payload)
+            _extend(cur, existing[0], existing[1], payload, services)
             conn.commit()
             logger.info("[AuroraWatch] added findings to incident %s", existing[0])
             return {"incident_id": str(existing[0]), "status": "updated"}
@@ -83,7 +117,8 @@ def open_incident(user_id: str, org_id: str, cluster: dict[str, Any], group: dic
             # a new occurrence, not a reopened incident with the old title and timestamps.
             alert_id = source_alert_id(cluster.get("cluster_id") or "", f"{group['key']}|{int(time.time())}")
 
-        metadata = {"aurora_watch": payload, "cluster": payload["cluster"], "namespace": group["namespace"]}
+        metadata = {"aurora_watch": payload, "cluster": payload["cluster"], "namespace": group["namespace"],
+                    "watch_group": str(group_id)}
         cur.execute(
             """
             INSERT INTO incidents
@@ -94,7 +129,7 @@ def open_incident(user_id: str, org_id: str, cluster: dict[str, Any], group: dic
             RETURNING id
             """,
             (user_id, org_id, report.SOURCE_TYPE, alert_id, title, service, severity, now,
-             json.dumps(metadata), now),
+             jsonb_dumps(metadata), now),
         )
         row = cur.fetchone()
         if row is None:  # a concurrent poll inserted it first
@@ -104,7 +139,7 @@ def open_incident(user_id: str, org_id: str, cluster: dict[str, Any], group: dic
                 (org_id, report.SOURCE_TYPE, alert_id, user_id),
             )
             raced = cur.fetchone()
-            _extend(cur, raced[0], raced[1], payload)
+            _extend(cur, raced[0], raced[1], payload, services)
             conn.commit()
             return {"incident_id": str(raced[0]), "status": "updated"}
         incident_id = str(row[0])
@@ -117,9 +152,8 @@ def open_incident(user_id: str, org_id: str, cluster: dict[str, Any], group: dic
                    alert_severity, correlation_strategy, correlation_score, alert_metadata)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'primary', 1.0, %s)""",
              (user_id, org_id, incident_id, report.SOURCE_TYPE, alert_id, title, service, severity,
-              json.dumps(metadata))),
-            ("UPDATE incidents SET affected_services = %s WHERE id = %s",
-             (sorted({f["name"] for f in group["findings"]}), incident_id)),
+              jsonb_dumps(metadata))),
+            ("UPDATE incidents SET affected_services = %s WHERE id = %s", (services, incident_id)),
         ):
             try:
                 cur.execute("SAVEPOINT sp_watch")

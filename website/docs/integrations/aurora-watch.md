@@ -17,7 +17,8 @@ writes to the cluster.
 
 After learning a cluster for five minutes, Aurora reports a **regression from that
 cluster's own baseline**, not a fixed condition. A workload that was already failing
-when Watch started is part of the baseline until it has been healthy once. Workloads
+when Watch started is part of the baseline while it is no worse than it was then:
+fewer ready replicas or more failing pods than at start is a regression. Workloads
 and Services created later get the same five-minute learning window of their own.
 
 | Signal | Example | Severity |
@@ -32,13 +33,16 @@ and Services created later get the same five-minute learning window of their own
 | Error lines never seen before for that workload, or a known one surging | `ERROR metrics push failed` | low / medium |
 | A Warning event that was not firing before | `Unhealthy`, `BackOff` | medium |
 
-Normal operations are not regressions: a rolling update that progresses, a scale-up
-waiting on new pods, a scale to zero, a pod Pending while the cluster autoscaler adds
-a node, a single bad poll.
+Normal operations are not regressions: a rolling update that progresses and takes no
+more pods down than its `maxUnavailable` allows, a paused, `OnDelete` or partitioned
+rollout, a scale-up waiting on new pods, a scale to zero, a pod Pending while the
+cluster autoscaler adds a node, a single bad poll.
 
 A finding must be seen in two polls. **High** and **critical** findings open an
 incident; low and medium ones stay notices on the Kubernetes page and are reported
-again if they become incident-worthy.
+again if they become incident-worthy. A finding that gets worse while its incident is
+open updates that incident (severity, findings); if a newer change made it worse, it
+opens a new incident that blames that change.
 
 ## Which change caused it
 
@@ -48,8 +52,9 @@ Service selectors and ports, ConfigMap keys, NetworkPolicies, ResourceQuotas, PV
 replaced pods. Each finding ranks them by how the changed object relates to the
 failing one (the same object, a ConfigMap it mounts, the Service in front of it, a
 dependency named in its environment, a NetworkPolicy selecting its pods) and how
-close in time the change was. The incident's investigation starts by confirming or
-refuting the top suspect.
+close in time the change was. A rollout restart or a replaced pod changes nothing by
+itself, so a ConfigMap edit that it put into effect ranks above it. The incident's
+investigation starts by confirming or refuting the top suspect.
 
 Findings that blame the same change, or two closely related objects, become one
 incident: a Service with no endpoints and the clients timing out on it are one
@@ -71,22 +76,26 @@ installation with `NEXT_PUBLIC_ENABLE_AURORA_WATCH=false`.
 
 ## What it reads, and what it keeps
 
-* One `kubectl get` per minute (one per namespace when you list namespaces) for
-  pods, workloads, ReplicaSets, Services, Endpoints, events, ConfigMaps,
-  NetworkPolicies, ResourceQuotas, LimitRanges, PVCs, HPAs and PDBs, and
+* Four `kubectl get` commands per minute (one per namespace when you list
+  namespaces) for pods, workloads, ReplicaSets, Services, Endpoints, events,
+  ConfigMaps, NetworkPolicies, ResourceQuotas, LimitRanges, PVCs, HPAs and PDBs, and
   `kubectl logs --since --limit-bytes` for up to 25 workloads per minute. Every
   command passes Aurora's read-only check and your organization's command policy
   (Settings → Security); a denied command or an unreadable kind becomes a blind spot
   shown on the Kubernetes page. If pods, workloads, Services or Endpoints cannot be
-  read, or the watched namespaces return more than 8 MB, that poll is skipped and
-  its error shown.
+  read, or one response is over 8 MB, that poll is skipped and its error shown; the
+  cluster is then retried after 1, 2, 4 and up to 15 minutes. A cluster that has not
+  been polled for three minutes (Aurora's workers busy with investigations) is shown
+  as **Not polling**.
 * **Secrets are never read.** ConfigMap values are reduced to a hash per key, so
   Aurora can say "key `default.conf` changed" without storing its content. Env
   values whose name looks like a credential are stored as `<redacted>`; other env
-  values, container arguments and probe commands go through Aurora's secret
-  redaction (and URL passwords are masked), and probe header values are dropped.
-* Log lines quoted as evidence go through Aurora's secret redaction first, and
-  through the prompt-injection rail before they reach the investigation.
+  values, container arguments, probe commands and paths, and the messages the
+  cluster writes (events, waiting reasons, conditions) go through Aurora's secret
+  redaction. URL passwords and the value after a credential-named flag
+  (`--requirepass`) are masked, and probe header values are dropped.
+* Log lines are redacted before Aurora learns or quotes them, and evidence goes
+  through the prompt-injection rail before it reaches the investigation.
 * State per cluster (the learned baseline, open findings, the last hour of
   changes) is stored in the `aurora_watch_state` table, scoped to your
   organization.

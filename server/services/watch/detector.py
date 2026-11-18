@@ -6,13 +6,13 @@ how many replicas are ready, how many endpoints a Service has, which log lines
 appear and whether a workload keeps logging successful requests, and which
 Warning events fire anyway. Objects created later get the same learning window
 of their own; a workload that was already failing when Watch started is not
-reported until it has been healthy once. After that it reports *regressions
-from that baseline*:
+reported while it is no worse than it was then. After that it reports
+*regressions from that baseline*:
 
 * a Service that had ready endpoints and now has none (not when its workloads
-  were scaled to zero, or while a rollout replaces every pod and progresses);
-* a workload that lost ready replicas it had (a progressing rollout, a scale-up
-  waiting on new pods and a scale to zero are not losses);
+  were scaled to zero, or while a Recreate rollout replaces every pod and progresses);
+* a workload that lost ready replicas it had (a scale-up waiting on new pods, a
+  scale to zero, and a progressing rollout within its maxUnavailable are not losses);
 * pods that cannot start (CrashLoopBackOff, image pull, bad config, unschedulable,
   an init container that never finishes) and rollouts that stop progressing;
 * containers that restart (with the last exit reason, e.g. OOMKilled);
@@ -37,6 +37,7 @@ dict so the caller can persist it as JSON between polls.
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import re
 from typing import Any
@@ -72,6 +73,9 @@ DEFAULTS: dict[str, Any] = {
     "hold_seconds": 180,
     # Restarts are counted over this window: one is a notice, two or more a crash loop.
     "restart_window_seconds": 600,
+    # A longer gap between polls (Watch turned off, a worker backlog, an unreachable
+    # cluster) re-baselines instead of counting what piled up meanwhile as "now".
+    "max_gap_seconds": 600,
     "max_changes": 200,
     "max_templates_per_workload": 400,
     "max_closed": 50,
@@ -194,14 +198,18 @@ def _event_deltas(state: dict[str, Any], snapshot: dict[str, Any]) -> list[dict[
 def template_counts(lines: list[str]) -> dict[str, dict[str, Any]]:
     counts: dict[str, dict[str, Any]] = {}
     for line in lines:
-        t = normalize(line)
+        # Redacted before templating: masking digits and hex first would hide a token
+        # from the secret patterns and store the rest of it in the template, and a
+        # token that differs per request would mint a new template per request.
+        clean = _scrubbed(line.replace("\x00", ""))
+        t = normalize(clean)
         if t is None:
             continue
         entry = counts.get(t.fingerprint)
         if entry is None:
             entry = counts[t.fingerprint] = {
-                "template": _scrubbed(t.template), "error": t.is_error, "request_failure": t.is_request_failure,
-                "http_class": t.http_class, "count": 0, "sample": _scrubbed(line.strip()[:300]),
+                "template": t.template, "error": t.is_error, "request_failure": t.is_request_failure,
+                "http_class": t.http_class, "count": 0, "sample": clean.strip()[:300],
             }
         entry["count"] += 1
     return counts
@@ -222,8 +230,28 @@ def _absorb_templates(state: dict[str, Any], workload: str, counts: dict[str, di
             k["polls"] += 1
 
 
+def _absorb_resolved(state: dict[str, Any], workload: str, finding: dict[str, Any]) -> None:
+    """A resolved finding's new error lines join the baseline at the rate they ran
+    while it was open, on the same scale as what was learned: the same error coming
+    back slowly does not page again, a surge of it still does. Lines the baseline
+    already knew keep their learned rate (their counts here were the surge)."""
+    held = finding.get("log_templates") or {}
+    known = state["baseline"]["templates"].get(workload) or {}
+    polls_open = max(1, finding.get("log_polls_open", 1))
+    learned = max(1, state["baseline"]["log_polls"].get(workload, 0))
+    _absorb_templates(state, workload, {
+        fp: {**e, "count": max(1, round(e["count"] * learned / polls_open))}
+        for fp, e in held.items() if fp not in known})
+
+
 def _has_success(counts: dict[str, dict[str, Any]]) -> bool:
     return any(e.get("http_class") == "2xx" for e in counts.values())
+
+
+def _failing_pods(pods: list[dict[str, Any]]) -> int:
+    """Pods that cannot run: a container waiting in a bad state, or not schedulable."""
+    return sum(1 for pod in pods
+               if pod["unschedulable"] or any(c["waiting"] in BAD_WAITING for c in pod["containers"]))
 
 
 def _failing_now(key: str, snapshot: dict[str, Any], prev: dict[str, Any] | None) -> bool:
@@ -254,6 +282,10 @@ def _learn(state: dict[str, Any], snapshot: dict[str, Any], events: list[dict[st
     base = state["baseline"]
     now = snapshot["taken_at"]
     everything = only is None
+    pods_by_workload: dict[str, list[dict[str, Any]]] = {}
+    for pod in snapshot["pods"].values() if everything else ():
+        if not pod["deleting"]:
+            pods_by_workload.setdefault(pod["workload"], []).append(pod)
     for key, w in snapshot["workloads"].items():
         if not everything and key not in only:
             continue
@@ -262,8 +294,12 @@ def _learn(state: dict[str, Any], snapshot: dict[str, Any], events: list[dict[st
         b["polls"] += 1
         if w["desired"] > 0 and w["ready"] >= w["desired"]:
             b["fully_ready_polls"] += 1
-        if everything and _failing_now(key, snapshot, state["prev"]):
-            b["broken_at_start"] = True
+        if everything:
+            # The workload at its worst while learning: as broken as that later is not a regression.
+            b["min_ready"] = min(b.get("min_ready", w["ready"]), w["ready"])
+            b["max_failing_pods"] = max(b.get("max_failing_pods", 0), _failing_pods(pods_by_workload.get(key, [])))
+            if _failing_now(key, snapshot, state["prev"]):
+                b["broken_at_start"] = True
     for key, s in snapshot["services"].items():
         if not everything and f"Service/{key}" not in only:
             continue
@@ -280,11 +316,29 @@ def _learn(state: dict[str, Any], snapshot: dict[str, Any], events: list[dict[st
     for workload, counts in templates.items():
         if not everything and workload not in only:
             continue
-        base["log_polls"][workload] = base["log_polls"].get(workload, 0) + 1
-        if _has_success(counts):
-            base["success_polls"][workload] = base["success_polls"].get(workload, 0) + 1
-        _absorb_templates(state, workload, counts if everything else
-                          {fp: e for fp, e in counts.items() if not e["error"]})
+        _learn_logs(state, workload, counts, errors=everything)
+
+
+def _learn_logs(state: dict[str, Any], workload: str, counts: dict[str, dict[str, Any]], *, errors: bool) -> None:
+    """One more poll of a workload's log baseline: its lines (error lines only if
+    ``errors``), and whether it logged successful requests."""
+    base = state["baseline"]
+    base["log_polls"][workload] = base["log_polls"].get(workload, 0) + 1
+    if _has_success(counts):
+        base["success_polls"][workload] = base["success_polls"].get(workload, 0) + 1
+    _absorb_templates(state, workload, counts if errors else {fp: e for fp, e in counts.items() if not e["error"]})
+
+
+def _learning_logs(state: dict[str, Any], snapshot: dict[str, Any],
+                   templates: dict[str, dict[str, dict[str, Any]]]) -> set[str]:
+    """Workloads there from the start whose logs were read in fewer polls than learning
+    takes, as in a cluster with more workloads than one poll reads logs for. Their
+    logs are learned the way every workload's were during learning, errors included,
+    before any log line of theirs can count as new."""
+    base, need = state["baseline"], state["config"]["learning_polls"] - 1
+    return {w for w in templates
+            if w in snapshot["workloads"] and not (base["workloads"].get(w) or {}).get("late")
+            and base["log_polls"].get(w, 0) < need}
 
 
 def _still_learning(state: dict[str, Any], snapshot: dict[str, Any]) -> set[str]:
@@ -363,7 +417,8 @@ def _log_symptoms(state: dict[str, Any], key: str, label: str, counts: dict[str,
 
 def _workload_symptoms(state: dict[str, Any], snapshot: dict[str, Any], events: list[dict[str, Any]],
                        templates: dict[str, dict[str, dict[str, Any]]],
-                       learning: set[str] | None = None) -> list[dict[str, Any]]:
+                       learning: set[str] | None = None,
+                       log_learning: set[str] | None = None) -> list[dict[str, Any]]:
     cfg, base, prev = state["config"], state["baseline"], state["prev"] or {}
     now = snapshot["taken_at"]
     prev_pods = prev.get("pods") or {}
@@ -385,17 +440,25 @@ def _workload_symptoms(state: dict[str, Any], snapshot: dict[str, Any], events: 
         deadline = w.get("progress_deadline") or cfg["rollout_stuck_seconds"]
         rolling = stalled_for is not None and stalled_for < deadline
         b = base["workloads"].get(key) or {}
-        # Already failing when Watch started: not a regression until it has been healthy once.
+        capacity = state.setdefault("capacity", {}).get(key)
+        # Already failing when Watch started: not a regression while it is no worse
+        # than it was then. Fewer ready replicas or more failing pods than at start is.
         if b.get("broken_at_start"):
             if _failing_now(key, snapshot, prev):
-                continue
-            b.pop("broken_at_start", None)
+                if (w["ready"] >= b.get("min_ready", 0)
+                        and _failing_pods(pods) <= b.get("max_failing_pods", 0)):
+                    continue
+                if capacity is None:
+                    capacity = b.get("min_ready")  # what it still had at its worst while learning
+            else:
+                b.pop("broken_at_start", None)
 
         # Lost capacity: fewer ready replicas than the workload had the last time
         # it was fully ready. A scale-up waiting on new pods is not a loss, and a
-        # rollout replacing pods on purpose is exempt until it stops progressing.
-        capacity = state.setdefault("capacity", {}).get(key)
-        if capacity and w["desired"] > 0 and w["ready"] < min(w["desired"], capacity) and not rolling:
+        # rollout that is progressing may take down as many pods as its strategy
+        # allows (maxUnavailable), but not more.
+        allowance = w.get("max_unavailable", w["desired"]) if rolling else 0
+        if capacity and w["desired"] > 0 and w["ready"] < min(w["desired"], capacity) - allowance:
             out.append(_symptom(key, "unavailable", "critical" if w["ready"] == 0 else "high",
                                 f"{label} has {w['ready']}/{w['desired']} replicas ready (it had {capacity})",
                                 [f"{w['ready']} of {w['desired']} replicas ready"]))
@@ -433,8 +496,10 @@ def _workload_symptoms(state: dict[str, Any], snapshot: dict[str, Any], events: 
                     window["evidence"] = (window["evidence"] + [
                         f"pod {pod['name']} container {c['name']} restarted {delta}x{why}"])[-5:]
         window["at"] = [t for t in window["at"] if now - t <= cfg["restart_window_seconds"]]
-        # Active while the last restart is recent; the window sets the severity.
-        if window["at"] and now - max(window["at"]) <= cfg["hold_seconds"]:
+        # Active while the window still counts a restart, so the count it reports is
+        # true and a steady restart cadence keeps one finding open instead of closing
+        # it between restarts and opening a new incident every cycle.
+        if window["at"]:
             count = len(window["at"])
             oom = any("OOMKilled" in e for e in window["evidence"])
             out.append(_symptom(
@@ -442,7 +507,7 @@ def _workload_symptoms(state: dict[str, Any], snapshot: dict[str, Any], events: 
                 f"{label} containers are {'being OOM-killed' if oom else 'restarting'} "
                 f"({count} restart{'s' if count > 1 else ''} in {cfg['restart_window_seconds'] // 60} min)",
                 list(reversed(window["evidence"]))))
-        elif not window["at"]:
+        else:
             state["restarts"].pop(key, None)
 
         # A rollout that stopped progressing: the controller has seen the new
@@ -472,32 +537,38 @@ def _workload_symptoms(state: dict[str, Any], snapshot: dict[str, Any], events: 
         if lines:
             out.append(_symptom(key, "warning_events", "medium", f"new Warning events on {label}", lines))
 
-        if key in templates:  # logs were fetched for this workload this poll
+        # Logs were fetched for this workload this poll, and its log baseline is learned.
+        if key in templates and key not in (log_learning or ()):
             out += _log_symptoms(state, key, label, templates[key], now)
     return out
 
 
 def _rollout_stalled_for(state: dict[str, Any], key: str, w: dict[str, Any], now: float) -> float | None:
-    """Seconds since a Deployment's in-flight rollout last made progress, by this watcher's clock.
+    """Seconds since a workload's in-flight rollout last made progress, by this watcher's clock.
 
-    ``None`` when no rollout is in flight. Progress is any change in the
-    generation, the number of updated replicas or the number of ready ones; the
-    object's own timestamps are not used (kubectl omits managedFields, so they
-    only say when the Deployment was created).
+    ``None`` when no rollout is in flight, which includes one Kubernetes holds on
+    purpose (a paused Deployment, an OnDelete or partitioned StatefulSet). Progress
+    is a new generation, or more replicas updated or ready than this rollout has had
+    so far: pods going unready again is not progress, so readiness that flaps cannot
+    keep a stalled rollout looking alive. The object's own timestamps are not used
+    (kubectl omits managedFields, so they only say when the workload was created).
     """
     rollouts = state.setdefault("rollouts", {})
     entry = rollouts.get(key)
     converging = w.get("converging", w["updated"] < w["desired"])
     # Once under way, a rollout stays in flight until every replica is ready: the
     # last new pod counts as "updated" as soon as it is scheduled (DaemonSets).
-    in_flight = w.get("observed_generation") == w.get("generation") and (
+    in_flight = not w.get("held") and w.get("observed_generation") == w.get("generation") and (
         converging or (entry is not None and w["ready"] < w["desired"]))
     if not in_flight:
         rollouts.pop(key, None)
         return None
-    mark = [w.get("generation"), w["updated"], w["ready"]]
-    if entry is None or entry["mark"] != mark:
-        rollouts[key] = {"mark": mark, "since": now}
+    if entry is None or entry.get("generation") != w.get("generation") or "best" not in entry:
+        rollouts[key] = {"generation": w.get("generation"), "best": [w["updated"], w["ready"]], "since": now}
+        return 0.0
+    best = entry["best"]
+    if w["updated"] > best[0] or w["ready"] > best[1]:
+        entry.update(best=[max(best[0], w["updated"]), max(best[1], w["ready"])], since=now)
         return 0.0
     return now - entry["since"]
 
@@ -527,12 +598,18 @@ def _service_symptoms(state: dict[str, Any], snapshot: dict[str, Any],
         subject = f"Service/{key}"
         selected = [wk for wk, w in snapshot["workloads"].items()
                     if w["namespace"] == s["namespace"] and labels_match(s["selector"], w["pod_labels"])]
-        # Scaled to zero on purpose, or a rollout (e.g. Recreate) replacing every pod: not an outage yet.
+        # Scaled to zero on purpose, or a progressing rollout whose strategy may take every
+        # pod down at once (Recreate): not an outage yet. Other rollouts keep pods serving.
         scaled_to_zero = bool(selected) and all(snapshot["workloads"][wk]["desired"] == 0 for wk in selected)
-        rolling = any(
-            wk in rollouts and now - rollouts[wk]["since"]
-            < (snapshot["workloads"][wk].get("progress_deadline") or state["config"]["rollout_stuck_seconds"])
-            for wk in selected)
+
+        def _may_have_none(wk: str) -> bool:
+            w = snapshot["workloads"][wk]
+            deadline = w.get("progress_deadline") or state["config"]["rollout_stuck_seconds"]
+            return (wk in rollouts and now - rollouts[wk]["since"] < deadline
+                    and w.get("max_unavailable", w["desired"]) >= w["desired"])
+
+        rolling = bool(selected) and all(_may_have_none(wk) for wk in selected
+                                         if snapshot["workloads"][wk]["desired"] > 0)
         if b["max_ready"] > 0 and s["ready_endpoints"] == 0 and not scaled_to_zero and not rolling:
             out.append(_symptom(subject, "no_endpoints", "critical",
                                 f"service/{s['name']} has no ready endpoints (it had {b['max_ready']})",
@@ -567,10 +644,23 @@ def dependencies(workload: dict[str, Any], snapshot: dict[str, Any]) -> list[str
     return sorted(deps)
 
 
+def reapplies_only(change: dict[str, Any]) -> bool:
+    """A rollout restart or a replaced pod: it changes nothing itself, the new pods run
+    what the template and its ConfigMaps already say. So a content change it applied
+    (a ConfigMap edited, then the workload restarted) is the better suspect."""
+    if change.get("action") == "pod_replaced":
+        return True
+    details = change.get("details") or []
+    return (change.get("action") == "changed" and bool(details)
+            and all(d.startswith("rollout restart requested") for d in details))
+
+
 def _relation(finding: dict[str, Any], change: dict[str, Any], snapshot: dict[str, Any]) -> tuple[int, str]:
     """How strongly a change relates to a finding's subject: (weight, why)."""
     subject = finding["subject"]
     if change["key"] == subject:
+        if reapplies_only(change):
+            return 4, "same object (a restart)"
         return 5, "same object"
     kind, ns, name = subject.split("/", 2)
     if change["namespace"] != ns:
@@ -646,7 +736,8 @@ def attribute(finding: dict[str, Any], changes: list[dict[str, Any]], snapshot: 
             why += ", named in the error"
         ranked.append({**change, "score": weight + recency + (2 if named else 0), "relation": why,
                        "seconds_before": round(gap)})
-    ranked.sort(key=lambda r: (-r["score"], abs(r["seconds_before"])))
+    # On a tie, what the pods picked up ranks above the restart that made them pick it up.
+    ranked.sort(key=lambda r: (-r["score"], reapplies_only(r), abs(r["seconds_before"])))
     return ranked[:3]
 
 
@@ -668,6 +759,9 @@ def step(state: dict[str, Any], snapshot: dict[str, Any], logs: dict[str, list[s
     """
     cfg = state["config"]
     first_poll = state["prev"] is None
+    if not first_poll and snapshot["taken_at"] - state["prev"]["taken_at"] > cfg.get("max_gap_seconds", 600):
+        _rebaseline_after_gap(state, snapshot)
+        return state, []
     # Lines from before the first poll are history, not behaviour to learn.
     templates = {} if first_poll else {w: template_counts(lines) for w, lines in (logs or {}).items()}
     events_readable = _carry_forward_blind(state, snapshot)
@@ -677,7 +771,7 @@ def step(state: dict[str, Any], snapshot: dict[str, Any], logs: dict[str, list[s
     if not first_poll:
         cutoff = now - cfg["change_window_seconds"]
         changes = detect_changes(state["prev"], snapshot) + state["changes"]
-        state["changes"] = [c for c in changes if c["at"] >= cutoff][: cfg["max_changes"]]
+        state["changes"] = _bounded_changes([c for c in changes if c["at"] >= cutoff][: cfg["max_changes"]])
 
     if is_learning(state):
         _learn(state, snapshot, events, templates)
@@ -688,11 +782,14 @@ def step(state: dict[str, Any], snapshot: dict[str, Any], logs: dict[str, list[s
         return state, []
 
     learning = _still_learning(state, snapshot)
-    symptoms = _hold_bursty(state, _workload_symptoms(state, snapshot, events, templates, learning)
+    log_learning = _learning_logs(state, snapshot, templates)
+    symptoms = _hold_bursty(state, _workload_symptoms(state, snapshot, events, templates, learning, log_learning)
                             + _service_symptoms(state, snapshot, learning), now)
     _record_capacity(state, snapshot)
     if learning:
         _learn(state, snapshot, events, templates, only=learning)
+    for workload in log_learning:
+        _learn_logs(state, workload, templates[workload], errors=True)
 
     active = set()
     for sym in symptoms:
@@ -731,20 +828,30 @@ def step(state: dict[str, Any], snapshot: dict[str, Any], logs: dict[str, list[s
             existing["last_seen"] = now
             existing["clean_polls"] = 0
             known_kinds = {s["kind"] for s in existing["symptoms"]}
-            existing["symptoms"] += [s for s in syms if s["kind"] not in known_kinds]
+            new_syms = [s for s in syms if s["kind"] not in known_kinds]
+            existing["symptoms"] += new_syms
             existing["evidence"] = [e for s in existing["symptoms"] for e in s["evidence"]][:12]
             existing["traffic"] = existing.get("traffic") or traffic
-            if SEVERITY_RANK[top["severity"]] > SEVERITY_RANK[existing["severity"]]:
-                crossed = (SEVERITY_RANK[existing["severity"]] < SEVERITY_RANK[INCIDENT_MIN_SEVERITY]
-                           <= SEVERITY_RANK[top["severity"]])
+            was, incident_rank = SEVERITY_RANK[existing["severity"]], SEVERITY_RANK[INCIDENT_MIN_SEVERITY]
+            if SEVERITY_RANK[top["severity"]] > was:
                 existing.update(severity=top["severity"], summary=top["summary"], escalated_at=now)
-                if crossed:
-                    # A notice that became an outage is reported again, now as incident-worthy,
-                    # and blamed as of now: the change that turned it into an outage may be
-                    # newer than the notice. It never had an incident, so it gets a new key.
-                    existing["suspects"] = attribute({**existing, "first_seen": now}, state["changes"], snapshot, cfg)
+            crossed = was < incident_rank <= SEVERITY_RANK[existing["severity"]]
+            worse = SEVERITY_RANK[existing["severity"]] > was or any(
+                SEVERITY_RANK[s["severity"]] >= incident_rank for s in new_syms)
+            if crossed or (worse and was >= incident_rank):
+                # It became, or already was, an outage and just got worse: blame it as of
+                # now, since the change that made it worse may be newer than the finding.
+                # A notice that became an outage, or an outage with a newer cause, is
+                # reported again with a new incident key. Worse for the same cause, it
+                # stays on its incident, which is updated (severity, findings).
+                fresh = attribute({**existing, "first_seen": now}, state["changes"], snapshot, cfg)
+                old, new = primary_suspect(existing), primary_suspect({"suspects": fresh})
+                newer_cause = new is not None and (old is None or (new["key"], new["at"]) != (old["key"], old["at"]))
+                if crossed or newer_cause:
+                    existing["suspects"] = fresh
                     existing.pop("incident_key", None)
                     confirmed.append(existing)
+                existing.pop("incident_id", None)  # so its incident is opened or updated again
             continue
         kind, ns, name = subject.split("/", 2)
         finding = {
@@ -766,9 +873,11 @@ def step(state: dict[str, Any], snapshot: dict[str, Any], logs: dict[str, list[s
     # baseline once it resolves, so the same error coming back slowly does not
     # page again; a surge of it still can.
     for workload, counts in templates.items():
-        _absorb_templates(state, workload, {fp: e for fp, e in counts.items() if not e["error"]})
+        if workload not in learning and workload not in log_learning:  # those learned theirs above
+            _absorb_templates(state, workload, {fp: e for fp, e in counts.items() if not e["error"]})
         finding = state["open"].get(workload)
         if finding:
+            finding["log_polls_open"] = finding.get("log_polls_open", 0) + 1
             held = finding.setdefault("log_templates", {})
             for fp, e in counts.items():
                 if not e["error"]:
@@ -785,7 +894,7 @@ def step(state: dict[str, Any], snapshot: dict[str, Any], logs: dict[str, list[s
         finding = state["open"][subject]
         finding["clean_polls"] = finding.get("clean_polls", 0) + 1
         if finding["clean_polls"] >= cfg["resolve_polls"]:
-            _absorb_templates(state, subject, finding.get("log_templates") or {})
+            _absorb_resolved(state, subject, finding)
             summary = {k: finding.get(k) for k in ("id", "subject", "severity", "summary", "first_seen",
                                                     "incident_key", "incident_id")}
             state["closed"] = (state["closed"] + [{**summary, "resolved_at": now}])[-cfg["max_closed"]:]
@@ -795,6 +904,36 @@ def step(state: dict[str, Any], snapshot: dict[str, Any], logs: dict[str, list[s
     state["prev"] = _for_next_poll(snapshot)
     state["polls"] += 1
     return state, confirmed
+
+
+_MAX_CHANGES_BYTES = 1024 * 1024
+
+
+def _bounded_changes(changes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The newest changes that fit in a bounded share of the stored state."""
+    kept, size = [], 0
+    for change in changes:  # newest first
+        size += len(json.dumps(change, default=str))
+        if size > _MAX_CHANGES_BYTES:
+            break
+        kept.append(change)
+    return kept
+
+
+def _rebaseline_after_gap(state: dict[str, Any], snapshot: dict[str, Any]) -> None:
+    """Polling stopped for longer than the windows measure (Watch turned off, a worker
+    backlog, an unreachable cluster). What piled up meanwhile (restarts, Warning
+    events, log lines, changes) cannot be placed in time, so this poll is history: it
+    becomes the previous poll and every window starts over. The learned baseline and
+    the open findings are kept."""
+    _carry_forward_blind(state, snapshot)
+    _event_deltas(state, snapshot)  # the gap's event counts become the counts seen
+    for table in ("restarts", "held", "rollouts", "pending"):
+        state[table] = {}
+    _record_capacity(state, snapshot)
+    _forget_deleted(state, snapshot)
+    state["prev"] = _for_next_poll(snapshot)
+    state["polls"] += 1
 
 
 def _carry_forward_blind(state: dict[str, Any], snapshot: dict[str, Any]) -> bool:
@@ -852,6 +991,10 @@ def _forget_deleted(state: dict[str, Any], snapshot: dict[str, Any]) -> None:
             del state[table][key]
     for key in [k for k in state.get("log_cursors", {}) if k not in workloads]:
         del state["log_cursors"][key]
+    subjects = set(workloads) | {f"Service/{k}" for k in services}
+    for table in ("pending", "held"):  # "<subject>|<kind>[|<fingerprint>]"
+        for key in [k for k in state.get(table, {}) if k.split("|", 1)[0] not in subjects]:
+            del state[table][key]
 
 
 def _for_next_poll(snapshot: dict[str, Any]) -> dict[str, Any]:

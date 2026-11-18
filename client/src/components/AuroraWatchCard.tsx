@@ -24,6 +24,7 @@ interface WatchCluster {
   polls: number;
   learning: boolean;
   last_poll_at: string | null;
+  stale: boolean;
   last_error: string | null;
   blind_spots: string[];
   open_findings: WatchFinding[];
@@ -178,6 +179,8 @@ export function AuroraWatchCard() {
               <span className="text-white font-medium">{c.name || c.cluster_id}</span>
               {c.last_error ? (
                 <Badge variant="outline" className="border-red-700 text-red-400">Not readable</Badge>
+              ) : c.stale ? (
+                <Badge variant="outline" className="border-amber-700 text-amber-400">Not polling</Badge>
               ) : c.learning ? (
                 <Badge variant="outline" className="border-blue-700 text-blue-400">
                   Learning ({Math.min(c.polls, learningPolls)}/{learningPolls})
@@ -188,6 +191,11 @@ export function AuroraWatchCard() {
               <span className="text-zinc-500">last look {timeAgo(c.last_poll_at)}</span>
             </div>
             {c.last_error && <p className="mt-2 text-red-400">{c.last_error}</p>}
+            {c.stale && !c.last_error && (
+              <p className="mt-2 text-amber-400">
+                No poll for several minutes: Aurora&apos;s background workers may be busy with investigations.
+              </p>
+            )}
             {c.open_findings.length > 0 && (
               <ul className="mt-2 space-y-1">
                 {c.open_findings.map((f) => (

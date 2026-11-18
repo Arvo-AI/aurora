@@ -19,6 +19,7 @@ from celery_config import celery_app
 logger = logging.getLogger(__name__)
 
 POLL_SECONDS = 60
+MAX_BACKOFF_SECONDS = 15 * 60  # an unreadable cluster is retried at least this often
 _LOCK_TTL = POLL_SECONDS * 3
 
 
@@ -115,27 +116,46 @@ def poll_cluster(org_id: str, cluster: dict[str, Any], runner=None, clock=time.t
 
     run = runner or internal_api_runner(owner, org_id, cluster_id)
     state = load_state(owner, cluster_id) or new_state()
-    # Thresholds are counted in polls: polls must stay a poll interval apart.
-    last = (state.get("prev") or {}).get("taken_at")
-    if last and clock() - last < POLL_SECONDS * 0.8:
+    # Thresholds are counted in polls: polls must stay a poll interval apart, start to
+    # start (a slow read must not make the next on-time tick look early).
+    started = clock()
+    last = state.get("started_at") or (state.get("prev") or {}).get("taken_at")
+    if last and started - last < POLL_SECONDS * 0.8:
         return {"status": "too_soon"}
+    if started < state.get("retry_at", 0):
+        return {"status": "backing_off"}
     try:
         raw, blind = collect_state(run, settings.get("namespaces"))
     except (CommandBlocked, KubectlError) as exc:
-        save_state(owner, cluster_id, None, error=f"cluster not readable: {str(exc)[:200]}")
+        # Retried less and less often while it keeps failing: a cluster too large to read
+        # must not cost its agent a dropped connection every minute.
+        failures = state.get("read_failures", 0) + 1
+        delay = min(MAX_BACKOFF_SECONDS, POLL_SECONDS * 2 ** (failures - 1))
+        state.update(read_failures=failures, retry_at=started + delay)
+        save_state(owner, cluster_id, state,
+                   error=f"cluster not readable: {str(exc)[:200]} (next try in {max(1, round(delay / 60))} min)")
         return {"status": "unreachable"}
+    state.pop("read_failures", None)
+    state.pop("retry_at", None)
 
-    snapshot = build_snapshot(raw, clock())
-    cursors = state.setdefault("log_cursors", {})
-    logs, log_blind = collect_logs(run, snapshot, cursors, since_seconds=POLL_SECONDS * 3,
-                                   open_subjects=set(state.get("open") or {}), rotation=state.get("polls", 0))
-    state, confirmed = step(state, snapshot, logs)
-    for group in group_findings(confirmed):
-        if not group["opens_incident"]:
-            logger.info("[AuroraWatch] org=%s cluster=%s notice (%s): %s",
-                        org_id, cluster_id, group["severity"], group["title"])
-    opened = report_open_findings(owner, org_id, cluster, state)
-    save_state(owner, cluster_id, state, blind_spots=blind + log_blind)
+    try:
+        snapshot = build_snapshot(raw, clock())
+        cursors = state.setdefault("log_cursors", {})
+        logs, log_blind = collect_logs(run, snapshot, cursors, since_seconds=POLL_SECONDS * 3,
+                                       open_subjects=set(state.get("open") or {}), rotation=state.get("polls", 0))
+        state, confirmed = step(state, snapshot, logs)
+        state["started_at"] = started
+        for group in group_findings(confirmed):
+            if not group["opens_incident"]:
+                logger.info("[AuroraWatch] org=%s cluster=%s notice (%s): %s",
+                            org_id, cluster_id, group["severity"], group["title"])
+        opened = report_open_findings(owner, org_id, cluster, state)
+        save_state(owner, cluster_id, state, blind_spots=blind + log_blind)
+    except Exception as exc:
+        # Recorded where the Kubernetes page shows it, instead of failing silently every minute.
+        logger.exception("[AuroraWatch] poll failed for org %s cluster %s", org_id, cluster_id)
+        save_state(owner, cluster_id, None, error=f"poll failed: {type(exc).__name__}")
+        return {"status": "error"}
     return {"status": "ok", "polls": state["polls"], "confirmed": len(confirmed), "incidents": opened}
 
 

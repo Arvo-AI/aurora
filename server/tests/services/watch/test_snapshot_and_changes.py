@@ -32,10 +32,11 @@ def test_credentials_inside_innocently_named_values_and_args_are_redacted():
     c = shop()
     c.set_env("api", "DATABASE_URL", "postgres://shop:s3cr3t-pa55@db.internal:5432/shop")
     container = c.deployments["api"]["template"]["spec"]["containers"][0]
-    container["args"] = ["--github-token", "ghp_q83Xa2nLv9P4f7Jv6TmRzW8b1K2cDhG5sY0i"]
+    fake_pat = "ghp_" + "q83Xa2nLv9P4f7Jv6TmRzW8b1K2cDhG5sY0i"  # synthetic; split so none is committed whole
+    container["args"] = ["--github-token", fake_pat]
     blob = json.dumps(build_snapshot(c.render(), c.now))
     assert "s3cr3t-pa55" not in blob and "postgres://shop:<redacted>@db.internal" in blob
-    assert "ghp_q83Xa2nLv9P4f7Jv6TmRzW8b1K2cDhG5sY0i" not in blob
+    assert fake_pat not in blob
 
 
 def test_probe_headers_and_exec_arguments_are_redacted():
@@ -84,3 +85,61 @@ def test_no_changes_between_identical_snapshots():
     a = build_snapshot(c.render(), c.now)
     c.tick()
     assert detect_changes(a, build_snapshot(c.render(), c.now)) == []
+
+
+def test_rollout_strategy_follows_kubernetes_defaults_and_rounding():
+    from services.watch.snapshot import rollout_strategy
+
+    # Deployment: maxUnavailable 25% rounds down, maxSurge 25% rounds up.
+    assert rollout_strategy("Deployment", {}, 4, 4) == (False, 1)
+    assert rollout_strategy("Deployment", {}, 2, 2) == (False, 0)
+    # Both rounding down to zero: the controller takes one pod down at a time.
+    rolling = {"strategy": {"rollingUpdate": {"maxSurge": 0, "maxUnavailable": "10%"}}}
+    assert rollout_strategy("Deployment", rolling, 4, 4) == (False, 1)
+    assert rollout_strategy("Deployment", {"strategy": {"type": "Recreate"}}, 3, 3) == (False, 3)
+    assert rollout_strategy("Deployment", {"paused": True}, 2, 1) == (True, 0)
+    # StatefulSet: OnDelete waits for someone to delete pods; a partition keeps the rest old.
+    assert rollout_strategy("StatefulSet", {"updateStrategy": {"type": "OnDelete"}}, 3, 0)[0] is True
+    partitioned = {"updateStrategy": {"rollingUpdate": {"partition": 2}}}
+    assert rollout_strategy("StatefulSet", partitioned, 3, 0)[0] is False  # still rolling ordinal 2
+    assert rollout_strategy("StatefulSet", partitioned, 3, 1)[0] is True
+    # DaemonSet: maxUnavailable as a percentage rounds up.
+    assert rollout_strategy("DaemonSet", {"updateStrategy": {"rollingUpdate": {"maxUnavailable": "10%"}}}, 12, 12) == (False, 2)
+    assert rollout_strategy("DaemonSet", {}, 5, 5) == (False, 1)
+
+
+def test_password_only_urls_flag_values_and_probe_tokens_are_redacted():
+    from services.watch.snapshot import _argv, _env_value, _probe
+
+    pw = "Zq8vN3xL2pR7tK9wM4bY"
+    assert _env_value({"name": "REDIS_URL", "value": f"redis://:{pw}@redis:6379/0"}) == "redis://:<redacted>@redis:6379/0"
+    assert pw not in _env_value({"name": "DB_URL", "value": f"postgres://app:Zq8v/{pw}@db:5432/app"})
+    assert _argv(["redis-server", "--requirepass", pw]) == ["redis-server", "--requirepass", "<redacted>"]
+    assert _argv(["sh", "-c", f"redis-server --requirepass {pw} --port 6379"]) == [
+        "sh", "-c", "redis-server --requirepass <redacted> --port 6379"]
+    # A flag after a credential-named one is not its value.
+    assert _argv(["--token=abc123", "--disable-auth", "--port", "80"]) == ["--token=<redacted>", "--disable-auth", "--port", "80"]
+    assert pw not in json.dumps(_probe({"httpGet": {"path": f"/-/readiness?token={pw}", "port": 8080}}))
+    assert _env_value({"name": "API_BASE", "value": "https://api.example.com/v1/items"}) == "https://api.example.com/v1/items"
+
+
+def test_messages_the_cluster_writes_are_redacted_before_they_are_kept():
+    c = shop()
+    probe_value = "Hd4sW9qT2m" + "K7yB3nR8vX"
+    c.warning("Pod", c.pod_name("api", 0), "Unhealthy",
+              f'Readiness probe failed: Get "http://10.244.0.7:8080/-/readiness?token={probe_value}": context deadline exceeded')
+    snap = build_snapshot(c.render(), c.now)
+    assert probe_value not in json.dumps(snap) and "Readiness probe failed" in json.dumps(snap)
+
+
+def test_a_configmap_with_thousands_of_keys_makes_a_bounded_change_record():
+    c = shop()
+    prev = build_snapshot(c.render(), c.now)
+    c.configmap("dashboards", {f"board-{i}.json": "{}" for i in range(5000)})
+    cur = build_snapshot(c.render(), c.now + 60)
+    [created] = [ch for ch in detect_changes(prev, cur) if ch["name"] == "dashboards"]
+    assert "and 4990 more" in created["details"][0] and len(json.dumps(created)) < 1000
+    c.configmap("dashboards", {f"board-{i}.json": "[]" for i in range(5000)})
+    later = build_snapshot(c.render(), c.now + 120)
+    [changed] = [ch for ch in detect_changes(cur, later) if ch["name"] == "dashboards"]
+    assert len(changed["details"]) <= 6 and len(json.dumps(changed)) < 1000

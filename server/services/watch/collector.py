@@ -43,8 +43,19 @@ SYSTEM_NAMESPACES = frozenset({"kube-system", "kube-public", "kube-node-lease"})
 # lost its endpoints": the poll fails instead, and nothing is learned or reported.
 ESSENTIAL_RESOURCES = ("pods", "deployments", "statefulsets", "daemonsets", "replicasets", "services", "endpoints")
 
-# Below the chatbot's 10 MB WebSocket frame limit for kubectl-agent responses.
+# One response must stay under the chatbot's 10 MiB WebSocket frame for kubectl-agent
+# responses (JSON escaping adds to the size on the wire); a poll reads a few of them.
 MAX_STATE_BYTES = 8 * 1024 * 1024
+MAX_POLL_BYTES = 32 * 1024 * 1024
+# A cluster-wide read, split into smaller responses: one big kind (thousands of
+# events, dashboards in ConfigMaps) does not push the rest over the frame limit.
+READ_GROUPS = (
+    ("pods",),
+    ("deployments", "statefulsets", "daemonsets", "replicasets"),
+    ("services", "endpoints", "events"),
+    ("configmaps", "networkpolicies", "resourcequotas", "limitranges",
+     "persistentvolumeclaims", "horizontalpodautoscalers", "poddisruptionbudgets"),
+)
 LOG_LIMIT_BYTES = 256 * 1024
 MAX_LOG_WORKLOADS = 25
 LOG_TAIL = 500
@@ -114,13 +125,14 @@ def internal_api_runner(user_id: str, org_id: str | None, cluster_id: str) -> Ru
     return run
 
 
-def _split_list(data: dict[str, Any]) -> dict[str, dict[str, list[dict[str, Any]]]]:
+def _split_list(data: dict[str, Any], resources: tuple[str, ...] = STATE_RESOURCES
+                ) -> dict[str, dict[str, list[dict[str, Any]]]]:
     """A ``kind: List`` of mixed kinds, split by kubectl resource name."""
-    raw: dict[str, dict[str, list[dict[str, Any]]]] = {r: {"items": []} for r in STATE_RESOURCES}
+    raw: dict[str, dict[str, list[dict[str, Any]]]] = {r: {"items": []} for r in resources}
     for item in data.get("items") or []:
         resource = RESOURCE_OF_KIND.get(item.get("kind"))
-        if resource:
-            raw.setdefault(resource, {"items": []})["items"].append(item)
+        if resource in raw:
+            raw[resource]["items"].append(item)
     return raw
 
 
@@ -128,33 +140,49 @@ class StateTooLarge(KubectlError):
     """The watched namespaces return more than one poll may read."""
 
 
-def _read(run: Runner, command: str) -> dict[str, Any]:
-    text = run(command, COMMAND_TIMEOUT)
-    if len(text) > MAX_STATE_BYTES:
-        raise StateTooLarge(f"cluster state is over {MAX_STATE_BYTES // (1024 * 1024)} MB; "
-                            "list the namespaces to watch")
+_TOO_LARGE = (f"cluster state is too large to read every minute (over {MAX_STATE_BYTES // (1024 * 1024)} MB "
+              "in one response); list the namespaces to watch")
+
+
+def _read(run: Runner, command: str, budget: dict[str, int]) -> dict[str, Any]:
+    try:
+        text = run(command, COMMAND_TIMEOUT)
+    except KubectlError as exc:
+        if "output too large" in str(exc):  # the kubectl-agent refused to send it
+            raise StateTooLarge(_TOO_LARGE) from exc
+        raise
+    size = len(text.encode("utf-8"))
+    budget["left"] = budget.get("left", MAX_POLL_BYTES) - size
+    if size > MAX_STATE_BYTES or budget["left"] < 0:
+        raise StateTooLarge(_TOO_LARGE)
     return json.loads(text)
 
 
-def _collect_scope(run: Runner, scope: str, blind: dict[str, str]) -> dict[str, dict[str, list[dict[str, Any]]]]:
-    """Every kind for one scope (``-A`` or ``-n <ns>``): one combined get, else kind by kind."""
-    try:
-        return _split_list(_read(run, f"get {','.join(STATE_RESOURCES)} {scope} -o json"))
-    except (CommandBlocked, StateTooLarge):
-        raise
-    except (KubectlError, ValueError) as exc:
-        logger.info("[AuroraWatch] combined get failed (%s); reading kinds one by one", type(exc).__name__)
+def _collect_scope(run: Runner, scope: str, blind: dict[str, str], budget: dict[str, int],
+                   groups: tuple[tuple[str, ...], ...] = (STATE_RESOURCES,)
+                   ) -> dict[str, dict[str, list[dict[str, Any]]]]:
+    """Every kind for one scope (``-A`` or ``-n <ns>``): one get per group of kinds, and a
+    group the cluster refuses (an RBAC rule missing for one kind) kind by kind."""
     raw: dict[str, dict[str, list[dict[str, Any]]]] = {}
-    for resource in STATE_RESOURCES:
+    for group in groups:
         try:
-            raw[resource] = {"items": _read(run, f"get {resource} {scope} -o json").get("items") or []}
+            raw.update(_split_list(_read(run, f"get {','.join(group)} {scope} -o json", budget), group))
+            continue
         except (CommandBlocked, StateTooLarge):
             raise
         except (KubectlError, ValueError) as exc:
-            if resource in ESSENTIAL_RESOURCES:
-                raise KubectlError(f"cannot read {resource}: {str(exc)[:200]}") from exc
-            raw[resource] = {"items": []}
-            blind[resource] = str(exc)[:120]
+            logger.info("[AuroraWatch] get %s failed (%s); reading kinds one by one", ",".join(group),
+                        type(exc).__name__)
+        for resource in group:
+            try:
+                raw[resource] = {"items": _read(run, f"get {resource} {scope} -o json", budget).get("items") or []}
+            except (CommandBlocked, StateTooLarge):
+                raise
+            except (KubectlError, ValueError) as exc:
+                if resource in ESSENTIAL_RESOURCES:
+                    raise KubectlError(f"cannot read {resource}: {str(exc)[:200]}") from exc
+                raw[resource] = {"items": []}
+                blind[resource] = str(exc)[:120]
     return raw
 
 
@@ -171,13 +199,14 @@ def collect_state(run: Runner, namespaces: list[str] | None = None) -> tuple[dic
     """
     wanted = sorted({n for n in namespaces or [] if _SAFE_NAMESPACE.match(n)})
     blind: dict[str, str] = {}
+    budget: dict[str, int] = {"left": MAX_POLL_BYTES}
     if wanted:
         raw: dict[str, Any] = {r: {"items": []} for r in STATE_RESOURCES}
         for ns in wanted:
-            for resource, value in _collect_scope(run, f"-n {ns}", blind).items():
+            for resource, value in _collect_scope(run, f"-n {ns}", blind, budget).items():
                 raw.setdefault(resource, {"items": []})["items"] += value["items"]
     else:
-        raw = _collect_scope(run, "-A", blind)
+        raw = _collect_scope(run, "-A", blind, budget, READ_GROUPS)
         for value in raw.values():
             value["items"] = [i for i in value.get("items") or []
                               if (i.get("metadata") or {}).get("namespace") not in SYSTEM_NAMESPACES]

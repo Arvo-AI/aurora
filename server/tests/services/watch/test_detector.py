@@ -6,6 +6,8 @@ over a small cluster that is broken the way Aurora Lab breaks its ``shop`` app.
 
 from __future__ import annotations
 
+import json
+
 from services.watch.detector import DEFAULTS, group_findings, new_state, step
 from services.watch.snapshot import build_snapshot
 
@@ -57,9 +59,29 @@ class TestQuietWhenNothingRegresses:
         # maxUnavailable lets ready replicas dip while pods are replaced: expected.
         c = shop()
         c.scale("api", 4)
+        c.deployments["api"]["strategy"] = {"type": "RollingUpdate",
+                                            "rollingUpdate": {"maxUnavailable": "50%", "maxSurge": "25%"}}
         state = learned(c)
         c.roll("api", unready=2)
         assert run(c, state, 8) == []
+
+    def test_a_rollout_losing_more_pods_than_its_strategy_allows_is_reported(self):
+        # Kubernetes' default (25% of 4 = 1 pod) never takes 3 down: something else did.
+        c = shop()
+        c.scale("api", 4)
+        c.deployments["api"]["strategy"] = {"type": "RollingUpdate"}
+        state = learned(c)
+        c.stall("api", updated=1)
+        c.scale("api", 4, unready=3)
+        found = by_subject(run(c, state, 3))
+        assert found["Deployment/shop/api"]["symptoms"][0]["kind"] == "unavailable"
+
+    def test_paused_and_on_delete_rollouts_are_not_stuck(self):
+        c = shop()
+        state = learned(c)
+        c.stall("api", updated=1)  # 1 of 2 on the new revision, then paused on purpose
+        c.pause("api")
+        assert run(c, state, DEFAULTS["rollout_stuck_seconds"] // 10 + 4) == []
 
     def test_the_last_pod_of_a_rollout_starting_slowly_is_quiet(self):
         # Everything is "updated" once the last pod is scheduled; it may take minutes to be ready.
@@ -102,6 +124,20 @@ class TestQuietWhenNothingRegresses:
         found = run(c, state, 3)
         assert [f["subject"] for f in found] == ["Deployment/shop/worker"]
         assert any(g["opens_incident"] for g in group_findings(found))
+
+    def test_a_workload_partly_broken_at_start_is_reported_when_it_gets_worse(self):
+        # One of two replicas never ready while learning; later both crash-loop.
+        c = shop()
+        c.scale("worker", 2, unready=1)
+        state = learned(c)
+        assert state["baseline"]["workloads"]["Deployment/shop/worker"]["broken_at_start"]
+        assert run(c, state, 5) == []  # no worse than it was: quiet
+        c.set_env("worker", "BATCH_SIZE", "2500")
+        c.crash("worker")
+        found = by_subject(run(c, state, 4))
+        worker = found["Deployment/shop/worker"]
+        assert worker["severity"] == "critical" and "0/2 replicas ready (it had 1)" in worker["summary"]
+        assert worker["suspects"][0]["details"] == ["container worker: env BATCH_SIZE 500 -> 2500"]
 
 
 class TestObjectsCreatedLater:
@@ -205,6 +241,21 @@ class TestWorkloadRegression:
         found = by_subject(run(c, state, 4))
         assert found["Deployment/shop/api"]["symptoms"][0]["kind"] == "rollout_stuck"
 
+    def test_readiness_flapping_does_not_keep_a_stalled_rollout_looking_alive(self):
+        # Pods going unready and ready again is not progress: the outage pages now,
+        # not at the rollout's deadline (or never, as when every flap reset the clock).
+        c = shop()
+        c.scale("api", 4)
+        c.deployments["api"]["strategy"] = {"type": "RollingUpdate"}
+        state = learned(c)
+        c.stall("api", updated=1)
+        poll(c, state)
+        found = []
+        for i in range(4):
+            c.scale("api", 4, unready=4 if i % 2 == 0 else 3)
+            found += poll(c, state)
+        assert "Deployment/shop/api" in by_subject(found)
+
     def test_a_replaced_pod_is_recorded_as_a_change_but_a_rollout_is_not(self):
         c = shop()
         state = learned(c)
@@ -215,6 +266,37 @@ class TestWorkloadRegression:
         c.set_env("frontend", "X", "1")  # a rollout swaps pods under a new revision
         poll(c, state)
         assert [ch["action"] for ch in state["changes"]][:1] == ["changed"]
+
+    def test_a_configmap_edit_outranks_the_restart_that_applied_it(self):
+        # Aurora Lab scenario 05: a mistyped nginx directive, then `kubectl rollout restart`.
+        c = shop()
+        state = learned(c)
+        c.configmap("frontend-nginx", {"default.conf": "upstream api { server api:8080; } proxy_conect_timeout 2s;"})
+        c.restart("frontend")
+        c.crash("frontend", reason="Error", exit_code=1)
+        f = by_subject(run(c, state, 3))["Deployment/shop/frontend"]
+        assert [s["key"] for s in f["suspects"][:2]] == ["ConfigMap/shop/frontend-nginx", "Deployment/shop/frontend"]
+        assert f["suspects"][1]["details"][0].startswith("rollout restart requested")
+
+    def test_a_configmap_edit_outranks_the_replaced_pod_that_picked_it_up(self):
+        # Aurora Lab scenario 19: the ConfigMap is edited and one of two pods is deleted.
+        c = shop()
+        state = learned(c)
+        c.configmap("frontend-nginx", {"default.conf": "upstream api { server api:8000; }"})
+        c.replace_pod("frontend")
+        c.crash("frontend", reason="Error", exit_code=1)
+        f = by_subject(run(c, state, 3))["Deployment/shop/frontend"]
+        assert [s["action"] for s in f["suspects"][:2]] == ["changed", "pod_replaced"]
+        assert f["suspects"][0]["key"] == "ConfigMap/shop/frontend-nginx"
+
+    def test_a_restart_with_nothing_else_changed_is_still_the_suspect(self):
+        c = shop()
+        state = learned(c)
+        c.restart("api")
+        c.crash("api", reason="Error", exit_code=1)
+        f = by_subject(run(c, state, 3))["Deployment/shop/api"]
+        assert f["suspects"][0]["key"] == "Deployment/shop/api"
+        assert f["suspects"][0]["relation"] == "same object (a restart)"
 
 
 class TestTwoFaultsAtOnce:
@@ -288,13 +370,41 @@ class TestLogs:
         c = shop()
         state = learned(c)
         logs = healthy_logs()
-        leak = "request failed: upstream auth error token=ghp_q83Xa2nLv9P4f7Jv6TmRzW8b1K2cDhG5sY0i"
+        fake_pat = "ghp_" + "q83Xa2nLv9P4f7Jv6TmRzW8b1K2cDhG5sY0i"  # synthetic; split so none is committed whole
+        leak = f"request failed: upstream auth error token={fake_pat}"
         logs["Deployment/shop/api"] = logs["Deployment/shop/api"] + [leak] * 3
         found = by_subject(run(c, state, 2, logs))
         evidence = " ".join(found["Deployment/shop/api"]["evidence"])
         assert "request failed" in evidence
-        assert "ghp_q83Xa2nLv9P4f7Jv6TmRzW8b1K2cDhG5sY0i" not in evidence
-        assert "ghp_q83Xa2nLv9P4f7Jv6TmRzW8b1K2cDhG5sY0i" not in str(state)
+        assert fake_pat not in evidence
+        # Not even a digit-free fragment of it, which masking digits alone would leave.
+        stored = json.dumps(state)
+        assert "TmRzW" not in stored and "cDhG" not in stored
+
+    def test_tokens_in_successful_requests_never_reach_a_stored_template(self):
+        # 2xx lines are learned every poll, so their template must not carry the token.
+        c = shop()
+        state = new_state()
+        jwt = ("eyJhbGciOiJSUzI1NiIsImtpZCI6ImsxIn0.eyJzdWIiOiJ1c2VyLTQyIiwiZW1haWwiOiJhbGljZUBleGFtcGxlLmNvbSJ9"
+               ".QmFzZTY0VXJsU2lnbmF0dXJl")
+        logs = healthy_logs()
+        logs["Deployment/shop/frontend"] = [
+            f'10.244.0.9 - - [17/Nov/2026:21:44:51 +0000] "GET /ws/updates?access_token={jwt} HTTP/1.1" 200 38'] * 3
+        for _ in range(LEARN + 2):
+            poll(c, state, logs)
+        stored = json.dumps(state)
+        assert "ImtpZCI" not in stored and "VXJsU" not in stored
+
+    def test_what_is_kept_about_a_deleted_workload_is_dropped(self):
+        c = shop()
+        state = learned(c)
+        logs = healthy_logs()
+        logs["Deployment/shop/worker"] = ["ERROR metrics: push failed"] * 2
+        poll(c, state, logs)
+        assert any(k.startswith("Deployment/shop/worker|") for k in state["pending"])
+        del c.deployments["worker"]  # a preview environment torn down
+        poll(c, state)
+        assert not any(k.startswith("Deployment/shop/worker|") for k in list(state["pending"]) + list(state["held"]))
 
     def test_lines_from_before_the_first_poll_are_history_not_baseline(self):
         # Startup errors fetched by the first poll must not teach "timeouts are normal".
@@ -330,6 +440,36 @@ class TestLogs:
         kinds = {s["kind"] for s in found["Deployment/shop/api"]["symptoms"]}
         assert "error_log_surge" in kinds
 
+    def test_logs_first_read_after_learning_are_learned_before_they_count(self):
+        # More workloads than one poll reads logs for: the worker's were not read while
+        # learning. Its chronic error line is its baseline, not a new failure.
+        c = shop()
+        logs = healthy_logs()
+        unread = {k: v for k, v in logs.items() if k != "Deployment/shop/worker"}
+        state = new_state()
+        for _ in range(LEARN):
+            poll(c, state, unread)
+        logs["Deployment/shop/worker"] = ["ERROR dial tcp 10.0.0.9:5432: connect: connection refused (retrying)"] * 2
+        assert run(c, state, LEARN + 2, logs) == []
+        logs["Deployment/shop/worker"] += ["upstream timed out while connecting to upstream"] * 3
+        assert "Deployment/shop/worker" in by_subject(run(c, state, 2, logs))
+
+    def test_after_an_incident_resolves_a_surge_of_its_error_still_pages(self):
+        c = shop()
+        state = learned(c)
+        failing = healthy_logs()
+        failing["Deployment/shop/api"] = ['10.0.0.1 "GET /items HTTP/1.0" 200 -'] + [
+            "upstream timed out while connecting to upstream"] * 2
+        run(c, state, 30, failing)  # 2 a poll for a while: an incident
+        assert "Deployment/shop/api" in state["open"]
+        run(c, state, DEFAULTS["hold_seconds"] // 10 + DEFAULTS["resolve_polls"] + 1)
+        assert "Deployment/shop/api" not in state["open"]
+        surge = healthy_logs()
+        surge["Deployment/shop/api"] = ['10.0.0.1 "GET /items HTTP/1.0" 200 -'] + [
+            "upstream timed out while connecting to upstream"] * 25
+        found = by_subject(run(c, state, 2, surge))
+        assert {s["kind"] for s in found["Deployment/shop/api"]["symptoms"]} >= {"error_log_surge"}
+
 
 class TestEvents:
     def test_a_warning_that_fired_all_through_learning_is_background_noise(self):
@@ -360,8 +500,8 @@ class TestLifecycle:
         c.crash("worker")
         assert len(run(c, state, 5)) == 1
         c.heal("worker")
-        # Recent restarts keep it open for the hold period, then clean polls close it.
-        run(c, state, DEFAULTS["hold_seconds"] // 10)
+        # Restarts still in the restart window keep it open, then clean polls close it.
+        run(c, state, DEFAULTS["restart_window_seconds"] // 10)
         assert "Deployment/shop/worker" in state["open"]
         run(c, state, DEFAULTS["resolve_polls"] + 1)
         assert state["open"] == {}
@@ -403,3 +543,52 @@ class TestLifecycle:
         again = run(c, state, 3, logs)
         assert [f["subject"] for f in again] == ["Deployment/shop/worker"]
         assert again[0]["severity"] == "critical"
+
+    def test_an_outage_with_a_newer_cause_is_reported_again_with_that_cause(self):
+        c = shop()
+        state = learned(c)
+        for _ in range(2):  # two restarts in a few minutes: high, with no change to blame
+            c.deployments["worker"]["restarts"] += 1
+            poll(c, state)
+        finding = state["open"]["Deployment/shop/worker"]
+        assert finding["severity"] == "high" and finding["suspects"] == []
+        finding["incident_id"] = "I1"  # what report_open_findings stores
+        first_key = finding["incident_key"]
+        c.set_env("worker", "BATCH_SIZE", "2500")  # a bad deploy, later, takes it down
+        c.crash("worker")
+        again = run(c, state, 4)
+        assert [f["subject"] for f in again] == ["Deployment/shop/worker"]
+        assert finding["severity"] == "critical"
+        assert finding["suspects"][0]["details"] == ["container worker: env BATCH_SIZE 500 -> 2500"]
+        assert "incident_id" not in finding and finding["incident_key"] != first_key
+
+    def test_an_outage_getting_worse_for_the_same_cause_updates_its_incident(self):
+        c = shop()
+        state = learned(c)
+        c.set_env("worker", "BATCH_SIZE", "2500")
+        poll(c, state)  # the new revision's pod starts, then restarts now and then
+        found = []
+        for _ in range(2):
+            c.deployments["worker"]["restarts"] += 1
+            found += poll(c, state)
+        finding = state["open"]["Deployment/shop/worker"]
+        assert finding["severity"] == "high"
+        assert finding["suspects"][0]["details"] == ["container worker: env BATCH_SIZE 500 -> 2500"]
+        finding["incident_id"], key = "I1", finding["incident_key"]
+        c.crash("worker")
+        assert run(c, state, 4) == []  # not a new finding...
+        assert finding["severity"] == "critical" and finding["incident_key"] == key
+        assert "incident_id" not in finding  # ...but reported again, to update its incident
+
+    def test_a_steady_restart_cadence_is_one_finding_not_one_per_cycle(self):
+        c = shop()
+        state = learned(c)
+        found = []
+        for i in range(108):  # 3 hours of a restart every 8 minutes, polled every 100s
+            if i % 5 == 0:
+                c.deployments["worker"]["restarts"] += 1
+            found += poll(c, state, seconds=100)
+        # One finding (a notice, then incident-worthy at the second restart) that stays
+        # open between restarts, instead of closing and reopening every cycle.
+        assert {f["id"] for f in found} == {state["open"]["Deployment/shop/worker"]["id"]}
+        assert state["closed"] == []

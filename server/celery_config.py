@@ -131,6 +131,10 @@ celery_app.conf.update(
         "routes.slack.slack_onboarding.publish_home_task": {"queue": "high"},
         "routes.slack.slack_onboarding.send_welcome_dm_task": {"queue": "high"},
         "routes.teams.teams_channel_metadata.bulk_activate_channels_task": {"queue": "high"},
+        # Aurora Watch polls every minute and a poll expires after one: queued behind a
+        # backfill in the default queue, the watch would silently stop.
+        "services.watch.tasks.watch_tick": {"queue": "high"},
+        "services.watch.tasks.watch_cluster": {"queue": "high"},
     },
     # Explicitly include task modules from their new locations
     include=[

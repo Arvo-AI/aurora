@@ -15,6 +15,21 @@ from aiohttp import web
 
 RECONNECT_INTERVAL = 30
 HEARTBEAT_INTERVAL = 60
+# The backend accepts WebSocket frames up to 10 MiB. A larger command_response would
+# drop the connection, and every command in flight with it, so it is refused instead.
+MAX_RESPONSE_BYTES = 9 * 1024 * 1024
+
+
+def bounded_response(response: dict) -> dict:
+    """The command_response to send: the result, or an error when it would not fit a frame."""
+    size = len(json.dumps(response).encode())
+    if size <= MAX_RESPONSE_BYTES:
+        return response
+    return {
+        'type': response.get('type'), 'command_id': response.get('command_id'), 'success': False,
+        'error': f'output too large ({size} bytes); narrow the command, e.g. with -n <namespace>',
+        'return_code': 1, 'too_large': True,
+    }
 
 logging.basicConfig(
     level=logging.INFO,
@@ -132,7 +147,8 @@ class KubectlAgent:
                         timeout = message.get('timeout', 60)
                         logger.info(f"Executing kubectl command: {command[:100]}")
                         result = await self.execute_kubectl_command(command, timeout)
-                        await self.send_message({'type': 'command_response', 'command_id': command_id, **result})
+                        await self.send_message(bounded_response(
+                            {'type': 'command_response', 'command_id': command_id, **result}))
                     elif msg_type:
                         logger.warning(f"Unknown message type: {msg_type}")
                         

@@ -37,7 +37,7 @@ class Cluster:
 
     # -- building ------------------------------------------------------------
     def deployment(self, name: str, replicas: int = 1, env: dict[str, str] | None = None,
-                   configmap: str | None = None) -> None:
+                   configmap: str | None = None, strategy: dict[str, Any] | None = None) -> None:
         labels = {"app": name}
         container = {"name": name, "image": "python:3.12-alpine",
                      "env": [{"name": k, "value": v} for k, v in (env or {}).items()],
@@ -48,6 +48,9 @@ class Cluster:
             "template": {"metadata": {"labels": dict(labels)},
                          "spec": {"containers": [container], "volumes": volumes}},
             "updated": None, "fault": None, "restarts": 0, "replaced": 0, "unready": 0, "rolling": False,
+            # roll() takes one pod out of service at a time, as maxUnavailable: 1 allows.
+            "strategy": strategy or {"type": "RollingUpdate", "rollingUpdate": {"maxUnavailable": 1, "maxSurge": 1}},
+            "paused": False,
         }
 
     def service(self, name: str, selector: dict[str, str], port: int = 80, target: int = 80) -> None:
@@ -93,9 +96,19 @@ class Cluster:
         d["generation"] += 1
         d.update(updated=0, unready=unready, rolling=True, settle=settle_ticks)
 
+    def pause(self, deployment: str) -> None:
+        """``kubectl rollout pause``: the rollout waits where it is, on purpose."""
+        self.deployments[deployment]["paused"] = True
+
     def scale(self, deployment: str, replicas: int, unready: int = 0) -> None:
         d = self.deployments[deployment]
         d.update(replicas=replicas, unready=unready)
+
+    def restart(self, deployment: str) -> None:
+        """``kubectl rollout restart``: only the template's restartedAt annotation changes."""
+        d = self.deployments[deployment]
+        d["template"]["metadata"].setdefault("annotations", {})["kubectl.kubernetes.io/restartedAt"] = iso(self.now)
+        d["generation"] += 1
 
     def replace_pod(self, deployment: str) -> None:
         """Delete pod 0; its replacement runs the same template (not a rollout)."""
@@ -172,7 +185,8 @@ class Cluster:
                 "metadata": {"name": name, "namespace": NS, "generation": d["generation"],
                              "creationTimestamp": iso(d["created"])},
                 "spec": {"replicas": d["replicas"], "selector": {"matchLabels": d["labels"]},
-                         "template": copy.deepcopy(d["template"])},
+                         "template": copy.deepcopy(d["template"]), "strategy": copy.deepcopy(d["strategy"]),
+                         **({"paused": True} if d["paused"] else {})},
                 "status": {"readyReplicas": ready,
                            "updatedReplicas": d["replicas"] if d["updated"] is None else d["updated"],
                            "observedGeneration": d["generation"],
@@ -221,6 +235,14 @@ class Cluster:
     def kubectl_list(self) -> str:
         """The combined ``kubectl get <kinds> -A -o json`` output."""
         items = [i for value in self.render().values() for i in value["items"]]
+        return json.dumps({"kind": "List", "items": items})
+
+    def kubectl_get(self, command: str) -> str:
+        """``kubectl get <kinds> ... -o json`` as kubectl answers it: only the kinds asked
+        for, with v1 Endpoints (what the kubectl-agent's RBAC grants), as one List."""
+        kinds = set(command.split()[1].split(","))
+        items = [i for resource, value in self.render(endpoint_slices=False).items()
+                 if resource in kinds for i in value["items"]]
         return json.dumps({"kind": "List", "items": items})
 
 

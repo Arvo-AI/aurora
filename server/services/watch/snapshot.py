@@ -15,6 +15,7 @@ from __future__ import annotations
 import functools
 import hashlib
 import json
+import math
 import re
 from datetime import datetime
 from typing import Any
@@ -27,15 +28,41 @@ BAD_WAITING = frozenset({
 })
 
 _SENSITIVE_NAME = re.compile(r"pass|secret|token|key|credential|auth|private|cert|dsn|session", re.I)
-_URL_PASSWORD = re.compile(r"(\w+://[^:/@\s]+):[^@/\s]+@")
+# A URL's password, the user possibly empty (redis://:pw@host). It runs to the last
+# "@", so a password containing "/" or "@" is masked too (over-masking is fine).
+_URL_PASSWORD = re.compile(r"(\w[\w+.-]*://[^:/@\s]*):\S*@")
+# A credential-named flag and its value, joined or not: --requirepass x, --token=x.
+_FLAG = r"--?[\w.-]*(?:pass|secret|token|key|credential|auth)[\w.-]*"
+_SECRET_FLAG = re.compile(rf"^{_FLAG}$", re.I)
+_SECRET_FLAG_VALUE = re.compile(rf"(?<![\w-])({_FLAG})(=|\s+)(?!<redacted>|-)\S+", re.I)
 
 
 @functools.lru_cache(maxsize=20_000)  # pod specs barely change between polls
 def _clean(value: str) -> str:
-    """A literal from a pod spec, safe to store and show: URL passwords masked, credentials redacted."""
+    """A literal from the cluster (a spec value, an event message), safe to store and
+    show: NUL removed (jsonb cannot hold it), URL passwords and flag values masked,
+    other credentials redacted."""
     from utils.security.output_redaction import redact
 
-    return redact(_URL_PASSWORD.sub(r"\1:<redacted>@", value))[0]
+    value = _URL_PASSWORD.sub(r"\1:<redacted>@", value.replace("\x00", ""))
+    return redact(_SECRET_FLAG_VALUE.sub(r"\1\2<redacted>", value))[0]
+
+
+def _argv(values: Any) -> list[str] | None:
+    """A container's command or args, cleaned; the element after a credential-named
+    flag (["--requirepass", "<pw>"]) is masked as well."""
+    out: list[str] = []
+    mask_next = False
+    for value in values or []:
+        value = str(value)[:500]
+        out.append("<redacted>" if mask_next and not value.startswith("-") else _clean(value))
+        mask_next = bool(_SECRET_FLAG.match(value))
+    return out or None
+
+
+def _message(value: Any, default: str = "") -> str:
+    """A message the cluster wrote (an event, a waiting reason, a condition), cleaned."""
+    return _clean(str(value or default)[:MAX_MESSAGE_CHARS])
 
 # Kinds tracked as possible causes, besides workloads and Services.
 # kubectl resource name -> Kind.
@@ -54,6 +81,49 @@ MAX_MESSAGE_CHARS = 300
 # Deployment Progressing reasons while a rollout is replacing pods
 # ("NewReplicaSetAvailable" means it finished, "ProgressDeadlineExceeded" that it stalled).
 _ROLLING_REASONS = frozenset({"ReplicaSetUpdated", "FoundNewReplicaSet", "NewReplicaSetCreated"})
+
+
+def _pods_of(value: Any, total: int, round_up: bool) -> int | None:
+    """An int-or-percent rollout bound (``maxUnavailable: 25%``) as a number of pods."""
+    if isinstance(value, str) and value.endswith("%"):
+        try:
+            share = total * float(value[:-1]) / 100
+        except ValueError:
+            return None
+        return int(math.ceil(share) if round_up else math.floor(share))
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def rollout_strategy(kind: str, spec: dict[str, Any], desired: int, updated: int) -> tuple[bool, int]:
+    """(held, max_unavailable) for a workload, with Kubernetes' defaults and rounding.
+
+    ``held``: the rollout waits on purpose, so it is not stuck: a paused Deployment,
+    an OnDelete StatefulSet or DaemonSet, or a StatefulSet whose partition keeps the
+    rest of its pods on the old revision. ``max_unavailable``: how many pods a
+    rollout may take down at once; fewer ready than that is not the rollout's doing.
+    """
+    if kind == "Deployment":
+        strategy = spec.get("strategy") or {}
+        if strategy.get("type") == "Recreate":
+            return bool(spec.get("paused")), desired
+        rolling = strategy.get("rollingUpdate") or {}
+        surge = _pods_of(rolling.get("maxSurge", "25%"), desired, True) or 0
+        unavailable = _pods_of(rolling.get("maxUnavailable", "25%"), desired, False) or 0
+        if surge == 0 and unavailable == 0:
+            unavailable = 1  # what the Deployment controller does when both round down to zero
+        return bool(spec.get("paused")), unavailable
+    strategy = spec.get("updateStrategy") or {}
+    if strategy.get("type") == "OnDelete":
+        return True, 0
+    rolling = strategy.get("rollingUpdate") or {}
+    if kind == "StatefulSet":
+        partition = _pods_of(rolling.get("partition"), desired, False) or 0
+        return (partition > 0 and updated >= desired - partition,
+                max(1, _pods_of(rolling.get("maxUnavailable", 1), desired, False) or 1))
+    return False, max(1, _pods_of(rolling.get("maxUnavailable", 1), desired, True) or 1)
 
 
 def parse_ts(value: Any) -> float | None:
@@ -101,9 +171,13 @@ def _probe(probe: Any) -> Any:
     if not isinstance(probe, dict):
         return probe
     out = json.loads(json.dumps(probe))
-    for header in (out.get("httpGet") or {}).get("httpHeaders") or []:
+    http = out.get("httpGet") if isinstance(out.get("httpGet"), dict) else {}
+    for header in http.get("httpHeaders") or []:
         if isinstance(header, dict) and "value" in header:
             header["value"] = "<redacted>"
+    for field in ("path", "host"):  # /-/ready?token=...
+        if isinstance(http.get(field), str):
+            http[field] = _clean(http[field][:500])
     if isinstance(out.get("exec"), dict):
         out["exec"]["command"] = [_clean(str(a)[:500]) for a in out["exec"].get("command") or []]
     return out
@@ -121,8 +195,8 @@ def _container_summary(c: dict[str, Any]) -> dict[str, Any]:
         "env": {e.get("name"): _env_value(e) for e in c.get("env") or [] if isinstance(e, dict)},
         "envFrom": sorted(env_from),
         "resources": c.get("resources") or {},
-        "command": [_clean(str(a)[:500]) for a in c.get("command") or []] or None,
-        "args": [_clean(str(a)[:500]) for a in c.get("args") or []] or None,
+        "command": _argv(c.get("command")),
+        "args": _argv(c.get("args")),
         "ports": [[p.get("containerPort"), p.get("protocol", "TCP")] for p in c.get("ports") or []],
         "livenessProbe": _probe(c.get("livenessProbe")),
         "readinessProbe": _probe(c.get("readinessProbe")),
@@ -207,7 +281,7 @@ def _container_states(statuses: list[dict[str, Any]] | None, init: bool) -> list
             "running": "running" in state,
             "restarts": int(s.get("restartCount") or 0),
             "waiting": waiting.get("reason"),
-            "waiting_message": (waiting.get("message") or "")[:MAX_MESSAGE_CHARS] or None,
+            "waiting_message": _message(waiting.get("message")) or None,
             "last_reason": last.get("reason"),
             "last_exit_code": last.get("exitCode"),
         })
@@ -268,7 +342,7 @@ def build_snapshot(raw: dict[str, Any], taken_at: float) -> dict[str, Any]:
                 updated = status.get("updatedReplicas") or 0
             conditions = {
                 c.get("type"): {"status": c.get("status"), "reason": c.get("reason"),
-                                "message": (c.get("message") or "")[:MAX_MESSAGE_CHARS]}
+                                "message": _message(c.get("message"))}
                 for c in status.get("conditions") or []
             }
             # Kubernetes' own word that a rollout is under way (pods are being
@@ -281,6 +355,7 @@ def build_snapshot(raw: dict[str, Any], taken_at: float) -> dict[str, Any]:
                               or (status.get("updateRevision") or "") != (status.get("currentRevision") or ""))
             else:
                 converging = updated < desired
+            held, max_unavailable = rollout_strategy(kind, spec, int(desired), int(updated))
             workloads[key] = {
                 "kind": kind, "namespace": meta.get("namespace"), "name": meta.get("name"),
                 "desired": int(desired), "ready": int(ready), "updated": int(updated),
@@ -290,7 +365,9 @@ def build_snapshot(raw: dict[str, Any], taken_at: float) -> dict[str, Any]:
                 "selector": (spec.get("selector") or {}).get("matchLabels") or {},
                 "pod_labels": (template.get("metadata") or {}).get("labels") or {},
                 "conditions": conditions,
-                "converging": bool(converging),
+                "converging": bool(converging) and not held,
+                "held": held,
+                "max_unavailable": max_unavailable,
                 # How long Kubernetes itself lets this rollout go without progress.
                 "progress_deadline": spec.get("progressDeadlineSeconds") if kind == "Deployment" else None,
                 "last_write": _last_write(meta),
@@ -306,7 +383,7 @@ def build_snapshot(raw: dict[str, Any], taken_at: float) -> dict[str, Any]:
         scheduled = conditions.get("PodScheduled") or {}
         unschedulable = None
         if scheduled.get("reason") == "Unschedulable":
-            unschedulable = (scheduled.get("message") or "Unschedulable")[:MAX_MESSAGE_CHARS]
+            unschedulable = _message(scheduled.get("message"), "Unschedulable")
         pods[f"{meta.get('namespace')}/{meta.get('name')}"] = {
             "namespace": meta.get("namespace"), "name": meta.get("name"),
             "workload": _owner_workload(pod, rs_owner),
@@ -380,7 +457,7 @@ def build_snapshot(raw: dict[str, Any], taken_at: float) -> dict[str, Any]:
             "type": ev.get("type"), "reason": ev.get("reason"),
             "namespace": involved.get("namespace") or meta.get("namespace"),
             "kind": involved.get("kind"), "name": involved.get("name"),
-            "message": (ev.get("message") or ev.get("note") or "")[:MAX_MESSAGE_CHARS],
+            "message": _message(ev.get("message") or ev.get("note")),
             "count": int(ev.get("count") or (ev.get("series") or {}).get("count") or 1),
             "last": last,
         })
@@ -394,7 +471,7 @@ def build_snapshot(raw: dict[str, Any], taken_at: float) -> dict[str, Any]:
             if kind == "ConfigMap":
                 data = {**(obj.get("data") or {}), **(obj.get("binaryData") or {})}
                 content: Any = {k: stable_hash(v) for k, v in data.items()}
-                detail: Any = sorted(data.keys())
+                detail: Any = {"keys": len(data), "first": sorted(data.keys())[:10]}  # for "created"
             else:
                 content = stable_hash(obj.get("spec") or {})
                 detail = _object_detail(kind, obj)
