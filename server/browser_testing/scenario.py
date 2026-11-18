@@ -48,6 +48,53 @@ def _text(value: Any, field: str, maximum: int) -> str:
     return value.strip()
 
 
+def _normalize_incident(value: Any) -> dict[str, str]:
+    if not isinstance(value, dict) or set(value) != {"id", "reference"}:
+        raise ScenarioError("incident must contain only id and reference")
+    return {
+        "id": _text(value["id"], "incident.id", 128),
+        "reference": _text(value["reference"], "incident.reference", 2048),
+    }
+
+
+def _normalize_baseline(value: Any) -> str:
+    if not isinstance(value, str) or not COMMIT_RE.fullmatch(value):
+        raise ScenarioError("baselineCommit must be a full lowercase Git commit")
+    return value
+
+
+def _normalize_check(
+    check: Any, index: int, seen_ids: set[str]
+) -> dict[str, str]:
+    if not isinstance(check, dict) or set(check) != {
+        "id",
+        "rowText",
+        "expectedBadge",
+    }:
+        raise ScenarioError(f"checks[{index}] has unsupported fields")
+    check_id = _text(check["id"], f"checks[{index}].id", 64)
+    if not CHECK_ID_RE.fullmatch(check_id) or check_id in seen_ids:
+        raise ScenarioError(f"checks[{index}].id is invalid or duplicated")
+    seen_ids.add(check_id)
+    return {
+        "id": check_id,
+        "rowText": _text(check["rowText"], f"checks[{index}].rowText", 256),
+        "expectedBadge": _text(
+            check["expectedBadge"], f"checks[{index}].expectedBadge", 256
+        ),
+    }
+
+
+def _normalize_checks(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, list) or not 1 <= len(value) <= 16:
+        raise ScenarioError("checks must contain between 1 and 16 entries")
+    seen_ids: set[str] = set()
+    return [
+        _normalize_check(check, index, seen_ids)
+        for index, check in enumerate(value)
+    ]
+
+
 def behavior_body(value: dict[str, Any]) -> dict[str, Any]:
     required = {
         "schemaVersion",
@@ -67,46 +114,14 @@ def behavior_body(value: dict[str, Any]) -> dict[str, Any]:
     if value["runnerVersion"] != RUNNER_VERSION:
         raise ScenarioError("unsupported browser runner version")
 
-    incident = value["incident"]
-    if not isinstance(incident, dict) or set(incident) != {"id", "reference"}:
-        raise ScenarioError("incident must contain only id and reference")
-    incident_id = _text(incident["id"], "incident.id", 128)
-    incident_reference = _text(incident["reference"], "incident.reference", 2048)
-
-    baseline = value["baselineCommit"]
-    if not isinstance(baseline, str) or not COMMIT_RE.fullmatch(baseline):
-        raise ScenarioError("baselineCommit must be a full lowercase Git commit")
-
-    checks = value["checks"]
-    if not isinstance(checks, list) or not 1 <= len(checks) <= 16:
-        raise ScenarioError("checks must contain between 1 and 16 entries")
-    normalized_checks = []
-    seen_ids: set[str] = set()
-    for index, check in enumerate(checks):
-        if not isinstance(check, dict) or set(check) != {"id", "rowText", "expectedBadge"}:
-            raise ScenarioError(f"checks[{index}] has unsupported fields")
-        check_id = _text(check["id"], f"checks[{index}].id", 64)
-        if not CHECK_ID_RE.fullmatch(check_id) or check_id in seen_ids:
-            raise ScenarioError(f"checks[{index}].id is invalid or duplicated")
-        seen_ids.add(check_id)
-        normalized_checks.append(
-            {
-                "id": check_id,
-                "rowText": _text(check["rowText"], f"checks[{index}].rowText", 256),
-                "expectedBadge": _text(
-                    check["expectedBadge"], f"checks[{index}].expectedBadge", 256
-                ),
-            }
-        )
-
     body = {
         "schemaVersion": SCHEMA_VERSION,
         "runnerVersion": RUNNER_VERSION,
         "name": _text(value["name"], "name", 256),
-        "incident": {"id": incident_id, "reference": incident_reference},
+        "incident": _normalize_incident(value["incident"]),
         "brief": _text(value["brief"], "brief", 4096),
-        "baselineCommit": baseline,
-        "checks": normalized_checks,
+        "baselineCommit": _normalize_baseline(value["baselineCommit"]),
+        "checks": _normalize_checks(value["checks"]),
     }
     if len(canonical_json(body).encode("utf-8")) > 32768:
         raise ScenarioError("scenario exceeds 32 KiB")
