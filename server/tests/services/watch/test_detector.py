@@ -403,6 +403,32 @@ class TestCascades:
         assert redis["incident_key"] in keys and "Deployment/shop/redis" in redis["incident_key"]
 
 
+class TestDependencies:
+    def test_a_service_named_in_a_url_or_host_port_in_args_is_a_dependency(self):
+        from services.watch.detector import dependencies
+
+        c = shop()
+        loadgen = c.deployments["loadgen"]["template"]["spec"]["containers"][0]
+        loadgen["command"] = ["sh", "-c", "while true; do wget -q -O /dev/null -T 3 http://frontend/api/items; done"]
+        loadgen["args"] = ["--cache=redis:6379", "--image=python:3.12", "--listen=0.0.0.0:9000"]
+        snapshot = build_snapshot(c.render(), c.now)
+        assert dependencies(snapshot["workloads"]["Deployment/shop/loadgen"], snapshot) == ["shop/frontend", "shop/redis"]
+
+    def test_a_client_that_names_its_upstream_in_args_joins_the_upstream_incident(self):
+        c = shop()
+        loadgen = c.deployments["loadgen"]["template"]["spec"]["containers"][0]
+        loadgen["command"] = ["sh", "-c", "while true; do wget -q -O /dev/null -T 3 http://frontend/api/items; done"]
+        state = learned(c)
+        c.configmap("frontend-nginx", {"default.conf": "upstream api { server api:8081; }"})
+        # A frontend pod picked up the bad config (its replacement is not seen as a change here).
+        logs = healthy_logs()
+        logs["Deployment/shop/frontend"] = ['10.0.0.9 - - "GET /api/items HTTP/1.1" 502 157'] * 3
+        logs["Deployment/shop/loadgen"] = ["wget: server returned error: HTTP/1.1 502 Bad Gateway"] * 3
+        groups = [g for g in group_findings(run(c, state, 3, logs)) if g["opens_incident"]]
+        assert len(groups) == 1 and groups[0]["primary_suspect"]["key"] == "ConfigMap/shop/frontend-nginx"
+        assert {f["subject"] for f in groups[0]["findings"]} >= {"Deployment/shop/frontend", "Deployment/shop/loadgen"}
+
+
 class TestDependencyConfig:
     def test_a_dependency_s_config_edit_outranks_the_restart_that_applied_it(self):
         c = Cluster()

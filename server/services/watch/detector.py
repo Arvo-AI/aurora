@@ -737,8 +737,15 @@ def _service_symptoms(state: dict[str, Any], snapshot: dict[str, Any],
 # Attribution
 # ---------------------------------------------------------------------------
 
+# A host in a container's command or args: a URL's host, or host:port
+# (--upstream=http://api:8080, wget http://frontend/x, --redis=redis:6379).
+_ARG_URL_HOST = re.compile(r"\b[a-z][a-z0-9+.-]*://(?:[^\s/@]*@)?([a-z0-9-]+)", re.I)
+_ARG_HOST_PORT = re.compile(r"(?<![\w.:/@-])([a-z][a-z0-9-]*)(?:\.[a-z0-9-]+)*:\d{2,5}\b", re.I)
+
+
 def dependencies(workload: dict[str, Any], snapshot: dict[str, Any]) -> list[str]:
-    """Services this workload's env names as a host (REDIS_HOST=redis -> ns/redis)."""
+    """Services this workload names as a host: in its env (REDIS_HOST=redis -> ns/redis),
+    or in a URL or host:port in its command or args."""
     ns = workload["namespace"]
     by_name = {s["name"]: key for key, s in snapshot["services"].items() if s["namespace"] == ns}
     deps = set()
@@ -749,6 +756,11 @@ def dependencies(workload: dict[str, Any], snapshot: dict[str, Any]) -> list[str
                 host = re.split(r"[:/]", host)[0].split(".")[0]
                 if host in by_name:
                     deps.add(by_name[host])
+            for arg in (c.get("command") or []) + (c.get("args") or []):
+                for pattern in (_ARG_URL_HOST, _ARG_HOST_PORT):
+                    for m in pattern.finditer(str(arg)):
+                        if m.group(1).lower() in by_name:
+                            deps.add(by_name[m.group(1).lower()])
     return sorted(deps)
 
 
