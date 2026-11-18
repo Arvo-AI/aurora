@@ -139,7 +139,7 @@ def build_rca_prompt(
         serialized = json.dumps(payload, ensure_ascii=False, default=str)
         payload_size = len(serialized)
 
-        if source == "chat":
+        if source in ("chat", "upload"):
             if payload_size > CHAT_PAYLOAD_MAX:
                 json_content = serialized[:CHAT_PAYLOAD_MAX] + "\n... [message truncated]"
             else:
@@ -176,6 +176,18 @@ def build_rca_prompt(
         json_content,
         "</alert_payload>",
     ]
+
+    if source == "upload":
+        prompt_parts.extend([
+            "",
+            "## UPLOADED EVIDENCE:",
+            "The user uploaded the files listed in `uploaded_files` instead of connecting their systems. "
+            "Use `read_uploaded_file` to list, grep and read them: grep for errors, exceptions, timeouts "
+            "and OOM first, then read around each hit. Cite file name and line number for every claim. "
+            "If a connected provider above can confirm a finding, use it. End the report with a short "
+            "'What would confirm this' section naming the integrations (logs, metrics, deploys, code) "
+            "that would confirm or rule out the root cause.",
+        ])
 
     prompt = "\n".join(prompt_parts)
     rail_text = _extract_rail_text_from_payload(payload)

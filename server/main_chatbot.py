@@ -1607,7 +1607,20 @@ async def handle_connection(websocket) -> None:
                                 "file_data": file_data  # Already includes data:application/pdf;base64, prefix
                             }
                         })
-                
+                evidence_names = [a.get('filename', 'unknown') for a in attachments if a.get('is_server_path')]
+                if evidence_names:
+                    content_parts.append({
+                        "type": "text",
+                        "text": (
+                            "[ATTACHED EVIDENCE FILES]\n"
+                            + "\n".join(f"- {name}" for name in evidence_names)
+                            + "\nThese files are attached to this message. Use the read_uploaded_file tool "
+                            "('list', then 'grep' for errors, then 'read' around matches) and cite file name "
+                            "and line number. Do not ask the user for logs, errors or service names that "
+                            "these files already contain."
+                        ),
+                    })
+
                 # For multimodal content, we need to use the content parts format
                 human_message = HumanMessage(content=content_parts)
             else:
@@ -1635,7 +1648,12 @@ async def handle_connection(websocket) -> None:
                     "[RCA INVESTIGATION REQUESTED]\n"
                     "The user has explicitly requested a Root Cause Analysis investigation. "
                     "You MUST call the trigger_rca tool with their message as the issue_description. "
-                    "Extract a short title, affected service, and severity from their description.\n\n"
+                    "Extract a short title, affected service, and severity from their description. "
+                    "If evidence files are attached, after trigger_rca returns, use read_uploaded_file to "
+                    "inspect ALL attached files first, without writing any text between tool calls. "
+                    "Then reply ONCE with a short preliminary summary of what the files show (errors, "
+                    "timeline, likely culprit), citing file name and line number, instead of asking "
+                    "them for more details.\n\n"
                 )
 
             if routing_instruction:
@@ -1645,6 +1663,17 @@ async def handle_connection(websocket) -> None:
                     human_message = HumanMessage(
                         content=[{"type": "text", "text": routing_instruction}] + human_message.content
                     )
+            
+            # Remember what the user actually typed and which evidence files they attached,
+            # so the saved chat shows that instead of the LLM scaffolding.
+            evidence_files = [
+                {"filename": a.get('filename', 'unknown'), "size_bytes": a.get('size_bytes')}
+                for a in (attachments or []) if a.get('is_server_path')
+            ]
+            if question and human_message.content != question:
+                human_message.additional_kwargs["display_text"] = question
+            if evidence_files:
+                human_message.additional_kwargs["evidence_files"] = evidence_files
 
             messages_list = [human_message]
 

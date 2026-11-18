@@ -1956,6 +1956,27 @@ def continue_incident_investigation(user_id, incident_id: str):
         return jsonify({"error": "Failed to continue the investigation"}), 500
     return jsonify(result), 202
 
+def _dispatch_trigger_rca(**kwargs):
+    """Run the trigger_rca tool and turn its JSON string into a Flask response."""
+    from chat.backend.agent.tools.trigger_rca_tool import trigger_rca as _agent_trigger_rca
+    try:
+        raw = _agent_trigger_rca(**kwargs)
+    except Exception:
+        logger.exception("[INCIDENTS] trigger_rca tool raised")
+        return jsonify({"error": "RCA dispatch failed"}), 500
+
+    try:
+        payload = json.loads(raw) if isinstance(raw, str) else raw
+    except Exception:
+        logger.exception("[INCIDENTS] trigger_rca tool returned unparseable payload")
+        return jsonify({"error": "RCA dispatch returned an invalid response"}), 500
+
+    if not isinstance(payload, dict):
+        return jsonify({"error": "RCA dispatch returned an invalid response"}), 500
+
+    if payload.get("error") and not payload.get("incident_id"):
+        return jsonify(payload), 400
+    return jsonify(payload), 200
 
 @incidents_bp.route("/api/incidents/trigger-rca", methods=["POST"])
 @require_permission("incidents", "write")
@@ -1981,28 +2002,102 @@ def trigger_rca_from_chat(user_id):
             "error": f"Invalid severity. Must be one of: {', '.join(sorted(_ALLOWED_SEVERITIES))}"
         }), 400
 
-    from chat.backend.agent.tools.trigger_rca_tool import trigger_rca as _agent_trigger_rca
+    return _dispatch_trigger_rca(
+        issue_description=issue_description,
+        title=title,
+        service=service,
+        severity=severity,
+        user_id=user_id,
+    )
+
+# Evidence files: uploaded before an RCA, attached to the next chat message.
+_UPLOAD_MAX_FILES = 10
+_UPLOAD_MAX_FILE_BYTES = 10 * 1024 * 1024
+_UPLOAD_MAX_DECOMPRESSED_BYTES = 50 * 1024 * 1024
+_UPLOAD_ALLOWED_EXTENSIONS = {
+    ".log", ".txt", ".json", ".yaml", ".yml", ".csv", ".md", ".out", ".err", ".trace",
+}
+
+
+def _gunzip_bounded(data: bytes, limit: int) -> bytes:
+    """Decompress gzip data, refusing anything that inflates past limit (gzip-bomb guard)."""
+    import gzip
+    import io
+
+    with gzip.GzipFile(fileobj=io.BytesIO(data)) as gz:
+        out = gz.read(limit + 1)
+    if len(out) > limit:
+        raise ValueError("decompressed size over limit")
+    return out
+
+
+def _store_evidence_files(user_id, files):
+    """Validate evidence files, then store them under incident_uploads/<batch>/.
+    .gz files are decompressed here, so the agent only ever reads plain text.
+    Returns (uploaded_files, None) or (None, error_response).
+    """
+    import os
+    import uuid
+    from werkzeug.utils import secure_filename
+    from utils.storage.storage import get_storage_manager
+
+    files = [f for f in files if f and f.filename]
+    if not files:
+        return None, (jsonify({"error": "At least one file is required"}), 400)
+    if len(files) > _UPLOAD_MAX_FILES:
+        return None, (jsonify({"error": f"Too many files (max {_UPLOAD_MAX_FILES})"}), 400)
+
+    # Validate every file before storing any, so a rejected batch leaves nothing behind.
+    validated = []
+    seen_names = set()
+    for f in files:
+        name = secure_filename(f.filename) or "evidence.txt"
+        is_gzip = name.lower().endswith(".gz")
+        if is_gzip:
+            name = name[:-3] or "evidence.txt"  # api.log.gz is stored as api.log
+        if os.path.splitext(name)[1].lower() not in _UPLOAD_ALLOWED_EXTENSIONS:
+            return None, (jsonify({"error": f"Unsupported file type: {name}"}), 400)
+        data = f.read(_UPLOAD_MAX_FILE_BYTES + 1)
+        if len(data) > _UPLOAD_MAX_FILE_BYTES:
+            return None, (jsonify({"error": f"{f.filename} is larger than 10 MB"}), 400)
+        if is_gzip:
+            try:
+                data = _gunzip_bounded(data, _UPLOAD_MAX_DECOMPRESSED_BYTES)
+            except ValueError:
+                return None, (jsonify({"error": f"{f.filename} expands to more than 50 MB"}), 400)
+            except (OSError, EOFError):  # gzip.BadGzipFile is an OSError
+                return None, (jsonify({"error": f"{f.filename} is not a valid gzip file"}), 400)
+        if b"\x00" in data[:8192]:
+            return None, (jsonify({"error": f"{name} looks like a binary file"}), 400)
+        if name in seen_names:
+            name = f"{len(seen_names)}_{name}"
+        seen_names.add(name)
+        validated.append((name, data))
+
+    batch_id = uuid.uuid4().hex
+    storage = get_storage_manager(user_id)
+    uploaded_files = []
     try:
-        raw = _agent_trigger_rca(
-            issue_description=issue_description,
-            title=title,
-            service=service,
-            severity=severity,
-            user_id=user_id,
-        )
+        for name, data in validated:
+            path = f"incident_uploads/{batch_id}/{name}"
+            storage.upload_bytes(data, path, user_id=user_id, content_type="text/plain")
+            uploaded_files.append({"filename": name, "path": path, "size_bytes": len(data)})
     except Exception:
-        logger.exception("[INCIDENTS] trigger_rca tool raised")
-        return jsonify({"error": "RCA dispatch failed"}), 500
+        logger.exception("%s Failed to store uploaded evidence files", _LOG_PREFIX)
+        return None, (jsonify({"error": "Failed to store uploaded files"}), 500)
 
-    try:
-        payload = json.loads(raw) if isinstance(raw, str) else raw
-    except Exception:
-        logger.exception("[INCIDENTS] trigger_rca tool returned unparseable payload")
-        return jsonify({"error": "RCA dispatch returned an invalid response"}), 500
+    logger.info("%s Stored %d evidence files", _LOG_PREFIX, len(uploaded_files))
+    return uploaded_files, None
 
-    if not isinstance(payload, dict):
-        return jsonify({"error": "RCA dispatch returned an invalid response"}), 500
 
-    if payload.get("error") and not payload.get("incident_id"):
-        return jsonify(payload), 400
-    return jsonify(payload), 200
+@incidents_bp.route("/api/incidents/evidence", methods=["POST"])
+@require_permission("incidents", "write")
+def upload_incident_evidence(user_id):
+    """Store evidence files (logs, alert payloads, CI output) ahead of an RCA.
+    The chat attaches the returned paths to its next message; trigger_rca picks
+    them up and the investigation reads them with read_uploaded_file.
+    """
+    uploaded_files, error = _store_evidence_files(user_id, request.files.getlist("files"))
+    if error:
+        return error
+    return jsonify({"files": uploaded_files}), 200

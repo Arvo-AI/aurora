@@ -71,7 +71,13 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
     providers = rca_context.get('providers', [])
     integrations = rca_context.get('integrations', {})
 
-    source_display = "USER-REPORTED INCIDENT" if source == "chat" else f"{source.upper()} alert"
+    if source == "chat":
+        source_display = "USER-REPORTED INCIDENT"
+    elif source == "upload":
+        source_display = "USER-UPLOADED EVIDENCE"
+    else:
+        source_display = f"{source.upper()} alert"
+
     providers_display = ", ".join(providers) if providers else "None"
     providers_tools_display = ", ".join(providers) if providers else "none"
 

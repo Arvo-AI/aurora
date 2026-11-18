@@ -9,7 +9,7 @@ import { Loader2, Lock } from "lucide-react";
 import dynamic from "next/dynamic";
 // Core chat components
 import { MessageList } from "@/components/chat/message-list";
-import EnhancedChatInput from "@/components/chat/enhanced-chat-input";
+import EnhancedChatInput, { EvidenceFile } from "@/components/chat/enhanced-chat-input";
 import EmptyStateHeader from "@/components/chat/empty-state-header";
 
 // Dynamic imports for heavy components
@@ -34,6 +34,7 @@ import SubAgentDetailPanel from "@/components/chat/subagent-detail-panel";
 import { useSessionUsage } from '@/hooks/useSessionUsage';
 import { useChatSendHandlers } from "./useChatSendHandlers";
 import { useQuery } from "@/lib/query";
+import { useToast } from "@/hooks/use-toast";
 
 interface ChatClientProps {
   initialSessionId?: string;
@@ -63,6 +64,9 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [images, setImages] = useState<Array<{file: File, preview: string}>>([]);
+  const [evidenceFiles, setEvidenceFiles] = useState<EvidenceFile[]>([]);
+  const [isUploadingEvidence, setIsUploadingEvidence] = useState(false);
+  const { toast } = useToast();
   const [userId, setUserId] = useState<string | null>(null);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [isLoadingSessionMessages, setIsLoadingSessionMessages] = useState(false);
@@ -185,6 +189,7 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
     justCreatedSessionRef,
     onSessionCreated: refreshChatHistory,
     images,
+    evidenceFiles,
     availableActions,
     selectedAction,
     clearSelectedAction,
@@ -262,6 +267,23 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
 
   const [rcaActive, setRcaActive] = useState(false);
 
+  const handleEvidenceSelect = useCallback(async (files: File[]) => {
+    if (files.length === 0) return;
+    setIsUploadingEvidence(true);
+    const form = new FormData();
+    files.forEach(f => form.append('files', f));
+    try {
+      const res = await fetch('/api/incidents/evidence', { method: 'POST', body: form, credentials: 'include' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Upload failed');
+      setEvidenceFiles(prev => [...prev, ...data.files]);
+    } catch (e) {
+      toast({ description: e instanceof Error ? e.message : 'Upload failed', variant: 'destructive' });
+    } finally {
+      setIsUploadingEvidence(false);
+    }
+  }, [toast]);
+
   const handleSendWithInput = useCallback(async () => {
     let finalMessage = input.trim();
     
@@ -278,13 +300,16 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
       }
     }
     
-    const sent = await handleSend(finalMessage || input, chatWebSocket, undefined, rcaActive ? { triggerRca: true } : undefined);
+    const hasEvidence = evidenceFiles.length > 0;
+    const messageText = (finalMessage || input).trim() || (hasEvidence ? 'Investigate the attached files.' : '');
+    const sent = await handleSend(messageText, chatWebSocket, undefined, rcaActive ? { triggerRca: true } : undefined);
     if (sent) {
       setInput("");
       setImages([]);
+      setEvidenceFiles([]);
       setRcaActive(false);
     }
-  }, [chatWebSocket, handleSend, input, activeIncidentContext, rcaActive]);
+  }, [chatWebSocket, handleSend, input, activeIncidentContext, rcaActive, evidenceFiles]);
 
   const handlePromptClickWithSocket = useCallback((prompt: string) => {
     setInput(prompt);
@@ -616,6 +641,10 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
               onRemoveContext={() => setActiveIncidentContext(undefined)}
               images={images}
               onImagesChange={setImages}
+              evidenceFiles={evidenceFiles}
+              onEvidenceSelect={handleEvidenceSelect}
+              onRemoveEvidence={(i) => setEvidenceFiles(prev => prev.filter((_, idx) => idx !== i))}
+              isUploadingEvidence={isUploadingEvidence}
               actions={availableActions}
               selectedAction={selectedAction}
               onActionSelect={setSelectedAction}
@@ -670,6 +699,10 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
             onRemoveContext={() => setActiveIncidentContext(undefined)}
             images={images}
             onImagesChange={setImages}
+            evidenceFiles={evidenceFiles}
+            onEvidenceSelect={handleEvidenceSelect}
+            onRemoveEvidence={(i) => setEvidenceFiles(prev => prev.filter((_, idx) => idx !== i))}
+            isUploadingEvidence={isUploadingEvidence}
             actions={availableActions}
             selectedAction={selectedAction}
             onActionSelect={setSelectedAction}

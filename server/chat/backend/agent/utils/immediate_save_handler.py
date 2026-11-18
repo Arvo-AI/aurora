@@ -9,7 +9,7 @@ from typing import List, Dict, Any, Optional
 logger = logging.getLogger(__name__)
 
 
-def handle_immediate_save(session_id: str, user_id: str, question: str) -> bool:
+def handle_immediate_save(session_id: str, user_id: str, question: str, evidence_files: Optional[List[Dict[str, Any]]] = None) -> bool:
     """Append the user's UI message on receipt so a mid-turn websocket drop doesn't lose it.
 
     Does NOT touch llm_context_history: ContextManager._execute_actual_save
@@ -32,6 +32,8 @@ def handle_immediate_save(session_id: str, user_id: str, question: str) -> bool:
             'isCompleted': True,
             'timestamp': time.time()
         }]
+        if evidence_files:
+            ui_messages[0]['evidenceFiles'] = evidence_files
 
         # Try to load existing UI messages and append
         ui_save_success = _save_ui_message(session_id, user_id, ui_messages)
