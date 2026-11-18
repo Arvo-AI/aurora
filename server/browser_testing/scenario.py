@@ -139,7 +139,11 @@ def _normalize_targets(value: Any) -> list[dict[str, Any]]:
         }:
             raise ScenarioError(f"targets[{index}] has unsupported fields")
         target_id = _text(target["id"], f"targets[{index}].id", 64)
-        if not CHECK_ID_RE.fullmatch(target_id) or target_id in seen_ids:
+        if (
+            not CHECK_ID_RE.fullmatch(target_id)
+            or target_id == "preview"
+            or target_id in seen_ids
+        ):
             raise ScenarioError(f"targets[{index}].id is invalid or duplicated")
         seen_ids.add(target_id)
         if target["kind"] != "kubernetes-pod-label":

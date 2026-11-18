@@ -102,6 +102,30 @@ def test_targeted_check_rejects_unknown_target():
         freeze_scenario(value)
 
 
+def test_named_target_cannot_shadow_the_default_preview():
+    value = scenario()
+    value["targets"] = [
+        {
+            "id": "preview",
+            "kind": "kubernetes-pod-label",
+            "namespace": "shop",
+            "selector": "aurora.dev/replica=retained",
+            "port": 80,
+        }
+    ]
+    value["checks"] = [
+        {
+            "id": "items",
+            "target": "preview",
+            "path": "/api/items",
+            "expectedStatus": 200,
+        }
+    ]
+
+    with pytest.raises(ScenarioError, match="invalid"):
+        freeze_scenario(value)
+
+
 def test_scenario_rejects_duplicate_checks_and_unknown_fields():
     value = scenario()
     value["checks"][1]["id"] = value["checks"][0]["id"]

@@ -9,12 +9,11 @@ from pathlib import Path
 from typing import Any
 
 from .agent import run_tool_agent
-from .browser import BROWSER_TOOLS, BrowserSession, RowCandidate
+from .browser import BrowserWorkspace, RowCandidate, agent_browser_tools
 from .paths import (
     ARTIFACT_DIRECTORY,
     RESULT_FILE,
     RESULT_TEMPORARY_FILE,
-    SCREENSHOT_FILE,
 )
 from .scenario import load_scenario
 
@@ -26,28 +25,83 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _selection_schema(check_ids: list[str]) -> dict[str, Any]:
+def _agent_output_schema(check_ids: list[str]) -> dict[str, Any]:
     return {
         "type": "object",
         "properties": {
-            "observations": {
+            "inspectedCheckIds": {
                 "type": "array",
-                "minItems": len(check_ids),
+                "minItems": 1,
                 "maxItems": len(check_ids),
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "checkId": {"type": "string", "enum": check_ids},
-                        "candidateId": {"type": "string", "minLength": 1, "maxLength": 128},
-                    },
-                    "required": ["checkId", "candidateId"],
-                    "additionalProperties": False,
-                },
-            }
+                "items": {"type": "string", "enum": check_ids},
+            },
+            "summary": {"type": "string", "minLength": 1, "maxLength": 1000},
         },
-        "required": ["observations"],
+        "required": ["inspectedCheckIds", "summary"],
         "additionalProperties": False,
     }
+
+
+def _status_observations_from_evidence(
+    scenario: dict[str, Any], evidence: list[dict[str, Any]]
+) -> dict[str, dict[str, Any]]:
+    observations: dict[str, dict[str, Any]] = {}
+    for check in scenario["checks"]:
+        if "expectedStatus" not in check:
+            continue
+        target_id = check.get("target", "preview")
+        matches = [
+            item["result"]
+            for item in evidence
+            if item.get("tool") in {"navigate_browser", "read_http_status"}
+            and item.get("target") == target_id
+            and (item.get("result") or {}).get("path") == check["path"]
+        ]
+        if matches:
+            observations[check["id"]] = matches[-1]
+    return observations
+
+
+def _selections_from_candidates(
+    scenario: dict[str, Any], candidates: dict[str, RowCandidate]
+) -> dict[str, list[dict[str, str]]]:
+    observations = []
+    for check in scenario["checks"]:
+        if "expectedBadge" not in check:
+            continue
+        matches = [
+            candidate
+            for candidate in candidates.values()
+            if candidate.anchor_text == check["rowText"]
+        ]
+        if len(matches) == 1:
+            observations.append(
+                {"checkId": check["id"], "candidateId": matches[0].candidate_id}
+            )
+    return {"observations": observations}
+
+
+def _agent_prompt(
+    scenario: dict[str, Any], target_metadata: list[dict[str, Any]]
+) -> str:
+    context = {
+        "incident": scenario["incident"],
+        "brief": scenario["brief"],
+        "scenarioHash": scenario["scenarioHash"],
+        "checks": scenario["checks"],
+        "targets": target_metadata,
+    }
+    return f"""You are the browser evidence collector for a frozen incident regression test.
+Choose the inspection sequence yourself using the provided browser tools. The target IDs are the only previews you may access.
+
+For every expectedBadge check: navigate the relevant preview, inspect the exact rowText with inspect_row, and preserve a screenshot.
+For every expectedStatus check: inspect that exact target and path with navigate_browser or read_http_status, and preserve a screenshot of the navigated target.
+You may read visible text and interact with the page when needed. Do not infer observations, do not change expectations, and do not decide pass or fail. Ordinary runner code will calculate the verdict only from recorded tool results.
+Finish only after collecting direct evidence for every frozen check. In your final structured response, list the check IDs you inspected and briefly summarize the inspection steps without giving a verdict.
+
+Frozen incident context, expectations, and targets:
+{json.dumps(context, separators=(',', ':'), ensure_ascii=False)}
+"""
 
 
 def _compute_status_results(
@@ -69,8 +123,10 @@ def _compute_status_results(
             incomplete_reasons.append(f"{check['id']}: {error}")
         elif observed != check["expectedStatus"]:
             check_verdict = "failed"
+            target_prefix = f"{check.get('target', 'preview')} "
             mismatches.append(
-                f"{check['path']}: expected HTTP {check['expectedStatus']}, observed HTTP {observed}"
+                f"{target_prefix}{check['path']}: expected HTTP "
+                f"{check['expectedStatus']}, observed HTTP {observed}"
             )
         result = {
             "id": check["id"],
@@ -169,9 +225,11 @@ def run_scenario(
     started_at = _utc_now()
     ARTIFACT_DIRECTORY.mkdir(parents=True, exist_ok=True)
     result_path = RESULT_FILE
-    screenshot_path = SCREENSHOT_FILE
     scenario: dict[str, Any] | None = None
     result: dict[str, Any]
+    tool_evidence: list[dict[str, Any]] = []
+    screenshots: list[str] = []
+    agent_decision: dict[str, Any] | None = None
 
     try:
         scenario = load_scenario(scenario_path)
@@ -186,91 +244,41 @@ def run_scenario(
         if unknown_targets:
             raise ValueError(f"unknown target URLs: {', '.join(sorted(unknown_targets))}")
 
-        badge_checks = [check for check in scenario["checks"] if "expectedBadge" in check]
-        checks_json = json.dumps(badge_checks, separators=(",", ":"))
-        prompt = f"""You are collecting browser evidence for a frozen incident regression scenario.
-Use the read-only browser tools. Inspect each check's rowText exactly, then select the unique candidate ID for that row.
-Do not judge pass or fail and do not invent candidate IDs; the runner computes the verdict from browser readings.
-Frozen checks: {checks_json}
-"""
-        status_checks = [check for check in scenario["checks"] if "expectedStatus" in check]
-        status_observations: dict[str, dict[str, Any]] = {}
-        preview_origins: dict[str, str] = {}
-        screenshots: list[str] = []
-        grouped_checks: dict[str, list[dict[str, Any]]] = {}
-        for check in status_checks:
-            grouped_checks.setdefault(check.get("target", "preview"), []).append(check)
-
-        try:
-            for target_id, target_checks in grouped_checks.items():
-                target_url = preview_url if target_id == "preview" else supplied_targets[target_id]
-                screenshot_name = (
-                    "browser-evidence.png"
-                    if target_id == "preview"
-                    else f"browser-evidence-{target_id}.png"
+        workspace_urls = {"preview": preview_url, **supplied_targets}
+        target_metadata = [{"id": "preview", "kind": "preview"}, *scenario.get("targets", [])]
+        agent_error: Exception | None = None
+        with BrowserWorkspace(workspace_urls) as workspace:
+            try:
+                check_ids = [check["id"] for check in scenario["checks"]]
+                agent_decision = run_tool_agent(
+                    prompt=_agent_prompt(scenario, target_metadata),
+                    tools=agent_browser_tools(list(workspace_urls)),
+                    output_name="browser_inspection_complete",
+                    output_schema=_agent_output_schema(check_ids),
+                    execute_tool=workspace.execute_tool,
+                    model=model,
+                    max_turns=10,
+                    max_tool_calls=12,
                 )
-                with BrowserSession(target_url, open_preview=False) as status_browser:
-                    preview_origins[target_id] = status_browser.origin
-                    for index, check in enumerate(target_checks):
-                        status_observations[check["id"]] = status_browser.observe_status(
-                            check["path"], screenshot_name if index == 0 else None
-                        )
-                    screenshots.append(screenshot_name)
-
-            candidates: dict[str, RowCandidate] = {}
-            selections = {"observations": []}
-            if badge_checks:
-                with BrowserSession(preview_url) as browser:
-                    preview_origins.setdefault("preview", browser.origin)
-                    selections = run_tool_agent(
-                        prompt=prompt,
-                        tools=BROWSER_TOOLS,
-                        output_name="browser_evidence_selection",
-                        output_schema=_selection_schema([check["id"] for check in badge_checks]),
-                        execute_tool=browser.execute_tool,
-                        model=model,
-                    )
-                    candidates = dict(browser.candidates)
-                    if "browser-evidence.png" not in screenshots:
-                        browser.screenshot("browser-evidence.png")
-                        screenshots.append("browser-evidence.png")
-
-            verdict, reason, checks = compute_verdict(
-                scenario,
-                candidates,
-                selections,
-                status_observations,
+            except Exception as exc:
+                agent_error = exc
+            tool_evidence = list(workspace.evidence)
+            screenshots = list(workspace.screenshots)
+            preview_origins = workspace.origins
+            status_observations = _status_observations_from_evidence(
+                scenario, tool_evidence
             )
-        except Exception as exc:
+            selections = _selections_from_candidates(scenario, workspace.candidates)
+            verdict, reason, checks = compute_verdict(
+                scenario, workspace.candidates, selections, status_observations
+            )
+
+        if agent_error is not None:
             verdict = "inconclusive"
-            reason = f"browser agent did not complete: {type(exc).__name__}: {exc}"
-            checks = [
-                (
-                    {
-                        "id": check["id"],
-                        "path": check["path"],
-                        "expectedStatus": check["expectedStatus"],
-                        "observedStatus": None,
-                        "verdict": "inconclusive",
-                        "complete": False,
-                        "evidence": None,
-                        **({
-                            "target": check["target"],
-                            "targetSelector": configured_targets[check["target"]]["selector"],
-                        } if check.get("target") else {}),
-                    }
-                    if "expectedStatus" in check
-                    else {
-                        "id": check["id"],
-                        "rowText": check["rowText"],
-                        "expectedBadge": check["expectedBadge"],
-                        "observedBadge": None,
-                        "complete": False,
-                        "evidence": None,
-                    }
-                )
-                for check in scenario["checks"]
-            ]
+            reason = (
+                "browser agent did not complete: "
+                f"{type(agent_error).__name__}: {agent_error}"
+            )
 
         preview_origin = preview_origins.get("preview") or next(iter(preview_origins.values()), None)
 
@@ -287,6 +295,8 @@ Frozen checks: {checks_json}
             "verdict": verdict,
             "reason": reason,
             "checks": checks,
+            "agentDecision": agent_decision,
+            "toolEvidence": tool_evidence,
             "screenshot": screenshots[0] if screenshots else None,
             "screenshots": screenshots,
         }
@@ -303,7 +313,10 @@ Frozen checks: {checks_json}
             "verdict": "inconclusive",
             "reason": f"run did not complete: {type(exc).__name__}: {exc}",
             "checks": [],
-            "screenshot": screenshot_path.name if screenshot_path.exists() else None,
+            "agentDecision": agent_decision,
+            "toolEvidence": tool_evidence,
+            "screenshot": screenshots[0] if screenshots else None,
+            "screenshots": screenshots,
         }
 
     RESULT_TEMPORARY_FILE.write_text(

@@ -24,6 +24,7 @@ def run_tool_agent(
     execute_tool: ToolExecutor,
     model: str,
     max_turns: int = 8,
+    max_tool_calls: int = 12,
 ) -> dict[str, Any]:
     """Run a model with browser read tools and require structured final output."""
 
@@ -38,7 +39,7 @@ def run_tool_agent(
             tools=tools,
             tool_choice="auto",
             parallel_tool_calls=False,
-            max_tool_calls=8,
+            max_tool_calls=max_tool_calls,
             max_output_tokens=1600,
             store=False,
             text={
@@ -65,7 +66,7 @@ def run_tool_agent(
         outputs = []
         for call in calls:
             used_tools += 1
-            if used_tools > 8:
+            if used_tools > max_tool_calls:
                 raise AgentError("browser agent exceeded its tool-call limit")
             try:
                 arguments = json.loads(call.arguments)
