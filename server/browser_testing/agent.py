@@ -5,9 +5,6 @@ from __future__ import annotations
 import json
 from typing import Any, Callable
 
-from openai import OpenAI
-
-
 class AgentError(RuntimeError):
     """The model did not complete a valid browser task."""
 
@@ -27,6 +24,8 @@ def run_tool_agent(
     max_tool_calls: int = 12,
 ) -> dict[str, Any]:
     """Run a model with browser read tools and require structured final output."""
+
+    from openai import OpenAI
 
     client = OpenAI(timeout=30.0, max_retries=1)
     history: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
