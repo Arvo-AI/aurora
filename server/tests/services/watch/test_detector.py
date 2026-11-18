@@ -403,6 +403,87 @@ class TestCascades:
         assert redis["incident_key"] in keys and "Deployment/shop/redis" in redis["incident_key"]
 
 
+def redis_conf_shop(api_replicas: int = 2, redis_conf: str = "port 6379") -> Cluster:
+    """The shop app with redis reading a redis-conf ConfigMap."""
+    c = Cluster()
+    c.configmap("api-code", {"api.py": "print('api')", "worker.py": "print('worker')"})
+    c.configmap("frontend-nginx", {"default.conf": "upstream api { server api:8080; }"})
+    c.configmap("redis-conf", {"redis.conf": redis_conf})
+    c.deployment("redis", configmap="redis-conf")
+    c.deployment("api", replicas=api_replicas, env={"REDIS_HOST": "redis"}, configmap="api-code")
+    c.deployment("worker", env={"BATCH_SIZE": "500"}, configmap="api-code")
+    c.deployment("frontend", replicas=2, configmap="frontend-nginx")
+    c.deployment("loadgen")
+    c.service("redis", {"app": "redis"}, 6379, 6379)
+    c.service("api", {"app": "api"}, 8080, 8080)
+    c.service("frontend", {"app": "frontend"}, 80, 80)
+    return c
+
+
+def blamed_on_a_deploy(c: Cluster, state: dict) -> tuple[dict, str]:
+    """worker restarting after BATCH_SIZE 500 -> 2500, blamed on it, its incident open."""
+    c.set_env("worker", "BATCH_SIZE", "2500")
+    poll(c, state, seconds=60)
+    for _ in range(2):
+        c.deployments["worker"]["restarts"] += 1
+        poll(c, state, seconds=60)
+    finding = state["open"]["Deployment/shop/worker"]
+    assert finding["suspects"][0]["details"] == ["container worker: env BATCH_SIZE 500 -> 2500"]
+    finding["incident_id"] = "I1"
+    return finding, finding["incident_key"]
+
+
+def keep_restarting(c: Cluster, state: dict, finding: dict, minutes: int) -> None:
+    for i in range(minutes):
+        if i % 3 == 0:
+            c.deployments["worker"]["restarts"] += 1
+        assert not any(x is finding for x in poll(c, state, seconds=60))
+
+
+class TestNewerCauseAge:
+    def test_a_mitigation_whose_rollout_gets_stuck_is_not_a_newer_cause(self):
+        # The responder gives the crash-looping worker more memory; the new pod crash-loops
+        # too, so the rollout is stuck ten minutes later: the same outage, not a new one.
+        c = shop()
+        state = learned(c, seconds=60)
+        finding, key = blamed_on_a_deploy(c, state)
+        run(c, state, 2, seconds=60)
+        d = c.deployments["worker"]
+        d["template"]["spec"]["containers"][0]["resources"]["limits"]["memory"] = "512Mi"
+        d["generation"] += 1
+        d["updated"] = 0  # the new pod never becomes available
+        for i in range(14):
+            if i % 3 == 0:
+                d["restarts"] += 1
+            poll(c, state, seconds=60)
+        assert "rollout_stuck" in {s["kind"] for s in finding["symptoms"]}
+        assert finding["incident_key"] == key
+        assert finding["suspects"][0]["details"] == ["container worker: env BATCH_SIZE 500 -> 2500"]
+
+    def test_a_rollback_made_long_before_the_outage_got_worse_is_not_a_newer_cause(self):
+        c = shop()
+        state = learned(c, seconds=60)
+        finding, key = blamed_on_a_deploy(c, state)
+        keep_restarting(c, state, finding, 2)
+        c.set_env("worker", "BATCH_SIZE", "500")  # `kubectl rollout undo`; it does not help
+        keep_restarting(c, state, finding, 20)
+        c.crash("worker", reason="OOMKilled", exit_code=137)  # 20 minutes on: 0/1 ready
+        run(c, state, 4, seconds=60)
+        assert finding["severity"] == "critical" and finding["incident_key"] == key
+        assert "incident_id" not in finding  # its incident is sent the update
+
+    def test_a_broken_deploy_that_fails_a_few_polls_later_is_still_the_newer_cause(self):
+        c = shop()
+        state = learned(c, seconds=60)
+        finding, key = blamed_on_a_deploy(c, state)
+        c.set_env("worker", "BATCH_SIZE", "99999")
+        run(c, state, 2, seconds=60)  # its pods run two minutes before they fail
+        c.crash("worker", reason="OOMKilled", exit_code=137)
+        run(c, state, 4, seconds=60)
+        assert finding["suspects"][0]["details"] == ["container worker: env BATCH_SIZE 2500 -> 99999"]
+        assert finding["incident_key"] != key
+
+
 class TestDependencies:
     def test_a_service_named_in_a_url_or_host_port_in_args_is_a_dependency(self):
         from services.watch.detector import dependencies
@@ -452,6 +533,32 @@ class TestDependencyConfig:
         logs["Deployment/shop/api"] = ["redis.exceptions.ConnectionError: Error 111 connecting to redis:6379."] * 3
         f = by_subject(run(c, state, 3, logs))["Deployment/shop/api"]
         assert f["suspects"][0]["key"] == "ConfigMap/shop/redis-conf"
+
+    def test_an_edit_applied_long_ago_is_not_made_recent_by_a_later_restart(self):
+        c = redis_conf_shop(redis_conf="maxmemory 256mb")
+        state = learned(c)
+        c.configmap("redis-conf", {"redis.conf": "maxmemory 512mb"})
+        c.restart("redis")  # applied at once, as usual, and it runs fine
+        assert run(c, state, 120) == []  # twenty minutes
+        c.replace_pod("redis")  # a drained node: the same template, a new pod
+        c.crash("api", reason="Error", exit_code=1)
+        logs = healthy_logs()
+        logs["Deployment/shop/api"] = ["redis.exceptions.ConnectionError: Error 111 connecting to redis:6379."] * 3
+        f = by_subject(run(c, state, 3, logs))["Deployment/shop/api"]
+        assert f["suspects"][0]["key"] == "Deployment/shop/redis"
+
+    def test_an_edit_one_replaced_pod_picked_up_takes_effect_when_all_pods_roll(self):
+        c = shop()
+        state = learned(c)
+        c.configmap("api-code", {"api.py": "print('api v2')", "worker.py": "print('worker')"})
+        poll(c, state)
+        c.replace_pod("api")  # one of the two api pods picks it up
+        assert run(c, state, 114) == []  # nineteen minutes
+        c.restart("api")  # now both run it, and crash
+        c.crash("api", reason="Error", exit_code=1)
+        f = by_subject(run(c, state, 3))["Deployment/shop/api"]
+        assert f["suspects"][0]["key"] == "ConfigMap/shop/api-code"
+
 
 
 class TestLogs:
@@ -646,6 +753,52 @@ class TestLogs:
         (entry,) = template_counts([line]).values()
         assert entry["request_failure"] and "upstream timed out" in entry["sample"]
         assert "abc123" not in entry["sample"]
+
+    def test_a_request_failing_on_a_token_endpoint_still_pages(self):
+        # Spring 6 RestTemplate/RestClient: 'I/O error on POST request for "<url>": <cause>'.
+        # An OAuth2 token URL ends in "token", so 'token":' reads as a key, and the word
+        # after it is the failure the line classifier needs, not a value.
+        url = "http://keycloak.auth.svc:8080/realms/shop/protocol/openid-connect/token"
+        lines = [f'ERROR 1 --- [scheduling-1] c.s.TokenClient : Token refresh failed: I/O error on POST '
+                 f'request for "{url}": Connection refused',
+                 '{"level":"ERROR","message":"Token refresh failed: I/O error on POST request for \\"'
+                 + url + '\\": Connection refused"}',
+                 "ERROR refresh token: upstream connect error or disconnect/reset before headers",
+                 "ERROR fetch secret: timed out after 5s"]
+        for line in lines:
+            (entry,) = template_counts([line]).values()
+            assert entry["request_failure"], line
+        c = shop()
+        state = learned(c)
+        bad = healthy_logs()
+        bad["Deployment/shop/worker"] = bad["Deployment/shop/worker"] + lines[:1] * 3
+        groups = group_findings(run(c, state, 3, bad))
+        assert [g["opens_incident"] for g in groups] == [True]
+
+    def test_every_failure_word_the_classifier_reads_survives_the_line_mask(self):
+        # logs.normalize classifies the masked line: a failure word masked after "key:"
+        # would turn a failing request into a harmless line.
+        from services.watch import logs
+        from services.watch.detector import _mask_secrets
+
+        def alternatives(body: str) -> list[str]:
+            out, depth, cur = [], 0, ""
+            for ch in body:
+                depth += (ch == "(") - (ch == ")")
+                if ch == "|" and depth == 0:
+                    out, cur = out + [cur], ""
+                else:
+                    cur += ch
+            return out + [cur]
+
+        phrases = alternatives(logs._ERROR_WORDS.pattern[len(r"\b(?:"):-len(r")\b")])
+        phrases += [p for p in alternatives(logs._REQUEST_FAILURE.pattern) if not p.startswith("(")]
+        assert {"connection refused", "upstream", "timed out", "can't"} <= set(phrases)
+        for phrase in phrases:
+            for line in (f"get token: {phrase}", f"get token: {phrase.title()} error",
+                         f'POST request for "/oauth/token": {phrase.capitalize()}.'):
+                want, got = logs.normalize(line), logs.normalize(_mask_secrets(line))
+                assert (got.is_error, got.is_request_failure) == (want.is_error, want.is_request_failure), line
 
     def test_samples_quoted_as_evidence_go_through_the_full_secret_rules(self):
         c = shop()
@@ -881,6 +1034,48 @@ class TestLifecycle:
         run(c, state, 4)
         assert finding["suspects"][0]["details"] == ["container worker: env BATCH_SIZE 2500 -> 99999"]
         assert finding["incident_key"] != key
+
+    def test_the_failing_workload_scaled_down_mid_outage_is_not_a_newer_cause(self):
+        # Failing requests are cheap, so the broken workload's HPA (or the on-call) scales it
+        # down mid-outage. That answers the outage; it is not what made it worse.
+        c = shop()
+        c.scale("api", 4)
+        state = learned(c)
+        c.set_env("api", "REDIS_POOL", "0")  # the bad deploy: requests fail, pods stay ready
+        logs = healthy_logs()
+        logs["Deployment/shop/api"] = ['10.244.0.7 "GET /items HTTP/1.0" 503 -'] * 3
+        run(c, state, 3, logs, seconds=60)
+        finding = state["open"]["Deployment/shop/api"]
+        assert finding["suspects"][0]["details"] == ["container api: env REDIS_POOL added = 0"]
+        finding["incident_id"], key = "I1", finding["incident_key"]
+        run(c, state, 3, logs, seconds=60)
+        c.scale("api", 2)  # the HPA, past its five-minute scale-down window
+        run(c, state, 4, logs, seconds=60)
+        c.crash("api", reason="Error", exit_code=1)  # then it gets worse
+        run(c, state, 3, logs, seconds=60)
+        assert finding["severity"] == "critical"
+        assert finding["suspects"][0]["details"] == ["container api: env REDIS_POOL added = 0"]
+        assert finding["incident_key"] == key
+
+    def test_the_failing_workload_scaled_down_does_not_take_the_blame_from_a_dependency(self):
+        c = redis_conf_shop(api_replicas=4)
+        state = learned(c)
+        c.configmap("redis-conf", {"redis.conf": "port 6380"})
+        c.restart("redis")
+        logs = healthy_logs()
+        logs["Deployment/shop/api"] = ['10.244.0.7 "GET /items HTTP/1.0" 503 -'] * 3
+        run(c, state, 3, logs, seconds=60)
+        finding = state["open"]["Deployment/shop/api"]
+        assert finding["suspects"][0]["key"] == "ConfigMap/shop/redis-conf"
+        finding["incident_id"], key = "I1", finding["incident_key"]
+        run(c, state, 3, logs, seconds=60)
+        c.scale("api", 2)  # api's HPA: its failing requests use no CPU
+        run(c, state, 4, logs, seconds=60)
+        c.scale("api", 2, unready=1)  # one api pod starts failing readiness: a new symptom
+        run(c, state, 3, logs, seconds=60)
+        assert any(s["kind"] == "unavailable" for s in finding["symptoms"])
+        assert finding["suspects"][0]["key"] == "ConfigMap/shop/redis-conf"
+        assert finding["incident_key"] == key
 
     def test_a_deploy_made_during_a_gap_longer_than_the_change_window_is_still_the_suspect(self):
         c = shop()

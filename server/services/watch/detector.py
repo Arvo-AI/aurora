@@ -127,7 +127,10 @@ def poisson_tail(k: int, lam: float) -> float:
 
 # Bump when what a snapshot keeps (fields, redaction) or how log lines are templated
 # changes: a state saved by another version is learned again, not compared against.
-STATE_VERSION = 2
+# test_state_version.py pins the masking each version was made with.
+# 3: log lines are masked key first (credential pairs, query parameters, Authorization,
+# then tokens); credentials=/creds= and a credential query value holding "?" are masked.
+STATE_VERSION = 3
 
 
 def current_state(state: dict[str, Any] | None) -> dict[str, Any]:
@@ -236,6 +239,16 @@ _CREDENTIAL_PAIR = re.compile(
 _STATUS_WORDS = frozenset(
     "expired invalid missing required revoked malformed empty none null nil ok true false yes no set unset "
     "unknown denied rejected mismatch valid present absent provided incorrect wrong bad failed passed".split())
+# Prose after "key:" that is the failure: the words logs.normalize reads on the masked
+# line to call it an error or a failing request, alone or leading a phrase ("Connection
+# refused", "upstream connect error", "timed out", "can't"). Masked, a request failing on
+# a token endpoint ('... for "http://auth/oauth/token": Connection refused') would no
+# longer be one, and would not page.
+_FAILURE_WORDS = frozenset(
+    "error errors err exception traceback fail failed failing failure fatal panic refused timeout timed "
+    "unreachable unavailable denied forbidden cannot can unable emerg crit critical killed oom giving no "
+    "does not name connection broken segfault unhandled upstream while".split())
+_KEPT_WORDS = _STATUS_WORDS | _FAILURE_WORDS
 _AUTH_HEADER = re.compile(r"(?i)\b(authorization[\"']?[ \t]*[=:][ \t]*[\"']?(?:bearer|basic|token)[ \t]+)[^\s\"',;|)\]}>]+")
 
 
@@ -254,8 +267,9 @@ def _mask_pair(m: re.Match) -> str:
         return f"{prefix}{dquote}<redacted>"
     if squote is not None:
         return f"{prefix}'<redacted>"
-    # Prose ("token: expired", "pass: ok") keeps its word; any other value is masked.
-    if separator == ":" and bare.lower().rstrip(".!") in _STATUS_WORDS:
+    # Prose ("token: expired", "pass: ok", 'token": Connection refused') keeps its word;
+    # any other value is masked.
+    if separator == ":" and bare.lower().rstrip(".!:") in _KEPT_WORDS:
         return m.group(0)
     return f"{prefix}<redacted>"
 
@@ -783,9 +797,21 @@ def _scaled_up(change: dict[str, Any]) -> bool:
     return bool(counts) and all(m is not None and int(m.group(2)) > int(m.group(1)) for m in counts)
 
 
+def _scale_only(change: dict[str, Any]) -> bool:
+    """A change of replica count and nothing else, up or down."""
+    details = change.get("details") or []
+    return bool(details) and all(re.fullmatch(r"replicas \d+ -> \d+", d) for d in details)
+
+
 def _strength(suspect: dict[str, Any]) -> int:
     """How closely a suspect relates to its finding, without its recency."""
     return suspect.get("strength", suspect["score"] - 2)
+
+
+# A change found by one of the polls this recent can be what an outage just got worse
+# after, whatever its date: changes are dated to the start of the poll window (or gap)
+# that found them, so a deploy whose pods fail a few polls later looks older than it is.
+_NEWER_CAUSE_FOUND_SECONDS = 300
 
 
 def _relation(finding: dict[str, Any], change: dict[str, Any], snapshot: dict[str, Any]) -> tuple[int, str]:
@@ -880,7 +906,12 @@ def attribute(finding: dict[str, Any], changes: list[dict[str, Any]], snapshot: 
     """Up to three changes most likely to have caused ``finding``, best first."""
     ranked = []
     evidence = " ".join(finding.get("evidence") or [])
-    reapplies = [c for c in changes if reapplies_only(c)]
+    # Everything that started pods of a workload from its template: a restart, a replaced
+    # pod, or a template change (a deploy, or Reloader setting a ConfigMap-hash env var).
+    rolls = [c for c in changes
+             if c["kind"] in ("Deployment", "StatefulSet", "DaemonSet")
+             and (reapplies_only(c) or (c.get("action") in ("changed", "created")
+                                        and any(not d.startswith("replicas ") for d in c.get("details") or [])))]
     for change in changes:
         gap = finding["first_seen"] - change["at"]
         # Writes up to two minutes "after" the first symptom are still candidates:
@@ -896,14 +927,24 @@ def attribute(finding: dict[str, Any], changes: list[dict[str, Any]], snapshot: 
         took_effect = change["at"]
         if change["kind"] in ("ConfigMap", "Secret"):
             # The restart that matters is the failing workload's own, or that of a workload
-            # it depends on (the latest one before the symptom), not the first restart of any
-            # workload sharing the ConfigMap.
+            # it depends on, not the first restart of any workload sharing the ConfigMap.
+            # Each of them put the edit into effect the first time all its pods rolled after
+            # the edit (one replaced pod among running siblings only if nothing rolled them
+            # all later); a later roll (a drained node, another rollout restart) re-reads
+            # what was already running, so it does not make the edit recent again.
             users = _users_of(change, snapshot) & (_workloads_of(finding, snapshot)
                                                    | _dependency_backends(finding, snapshot))
-            applied = [r["at"] for r in reapplies
-                       if r["key"] in users and change["at"] <= r["at"] <= finding["first_seen"] + 120]
-            if applied:
-                took_effect = max(applied)
+            first: dict[str, float] = {}
+            first_full: dict[str, float] = {}
+            for r in rolls:
+                if r["key"] in users and change["at"] <= r["at"] <= finding["first_seen"] + 120:
+                    first[r["key"]] = min(first.get(r["key"], r["at"]), r["at"])
+                    partial = (r.get("action") == "pod_replaced"
+                               and "other replica(s) kept running" in (r.get("details") or [""])[0])
+                    if not partial:
+                        first_full[r["key"]] = min(first_full.get(r["key"], r["at"]), r["at"])
+            if first:
+                took_effect = max(first_full.get(k, at) for k, at in first.items())
         since = finding["first_seen"] - took_effect
         recency = 2 if since <= 180 else 1 if since <= 900 else 0
         seconds_before: int | None = round(gap)
@@ -1049,15 +1090,27 @@ def step(state: dict[str, Any], snapshot: dict[str, Any], logs: dict[str, list[s
                 fresh = attribute({**existing, "first_seen": now}, state["changes"], snapshot, cfg)
                 old = primary_suspect(existing)
                 # The newer cause is the best fresh suspect that is not routine (a restart, a
-                # replaced pod, a scale-up answering the outage), found since the finding was
-                # last blamed, and related to it at least as closely as the old suspect.
-                # Recency is left out of that comparison on both sides, so neither the old
-                # suspect aging nor a gap change's unknown time decides it.
-                new = next((s for s in fresh if not reapplies_only(s) and not _scaled_up(s)), None)
+                # replaced pod, a scale-up answering the outage, or any scale of the failing
+                # workload itself: its HPA, KEDA or the on-call answering the outage, often
+                # down because failing requests are cheap), found since the finding was last
+                # blamed, and related to it at least as closely as the old suspect. Recency
+                # is left out of that comparison on both sides, so neither the old suspect
+                # aging nor a gap change's unknown time decides it. It must also be what the
+                # outage got worse right after: ranking now as high as the old one did when
+                # blamed, or found by one of the last few polls. A change found long before,
+                # while the outage went on as it was (a rollback, a memory bump, more
+                # logging), is the responders' work; its rollout getting stuck, or the crash
+                # loop backing off further, is the same outage.
+                own = _workloads_of(existing, snapshot)
+                new = next((s for s in fresh if not reapplies_only(s) and not _scaled_up(s)
+                            and not (_scale_only(s) and s["key"] in own)), None)
                 if (new is not None and primary_suspect({"suspects": [new]}) is not None
                         and new.get("detected_at", new["at"]) > existing.get("blamed_at", existing["first_seen"])
                         and (old is None or ((new["key"], new["at"]) != (old["key"], old["at"])
-                                             and _strength(new) >= _strength(old)))):
+                                             and _strength(new) >= _strength(old)
+                                             and (new["score"] >= old["score"]
+                                                  or now - new.get("detected_at", new["at"])
+                                                  <= _NEWER_CAUSE_FOUND_SECONDS)))):
                     existing["suspects"] = [new] + [s for s in fresh if s is not new]
                     existing["blamed_at"] = now
                     existing.pop("incident_key", None)

@@ -68,3 +68,22 @@ def test_a_change_made_during_a_polling_gap_claims_no_time_before_the_symptom():
     assert "s before the first symptom" not in report.message(group, "prod")
     view = report.suspect_view(suspect)  # not dated to the gap's start
     assert view["at"] is None and view["made_between"] == ["1970-01-01T00:00:01Z", "1970-01-01T00:01:01Z"]
+
+
+def test_the_incident_leads_with_the_suspect_it_is_keyed_on():
+    # A newer cause can score below the restart it was chosen over.
+    from services.watch import report
+
+    newer = {"key": "Deployment/shop/worker", "action": "changed", "at": 50.0, "seconds_before": 50,
+             "relation": "same object", "details": ["env BATCH_SIZE 2500 -> 99999"], "score": 5}
+    restart = {"key": "Deployment/shop/worker", "action": "changed", "at": 90.0, "seconds_before": 10,
+               "relation": "same object (a restart)", "details": ["rollout restart requested"], "score": 6}
+    finding = {"subject": "Deployment/shop/worker", "name": "worker", "severity": "critical",
+               "summary": "deployment/worker has 0/1 replicas ready", "first_seen": 100.0, "symptoms": [],
+               "evidence": [], "suspects": [newer, restart]}
+    group = {"key": "k", "namespace": "shop", "severity": "critical", "title": finding["summary"],
+             "findings": [finding], "primary_suspect": newer}
+    assert "BATCH_SIZE 2500 -> 99999" in report.message(group, "prod")
+    payload = report.rca_payload(group, {"cluster_id": "c1", "name": "prod"})
+    assert [s["details"] for s in payload["suspected_changes"]][:2] == [
+        ["env BATCH_SIZE 2500 -> 99999"], ["rollout restart requested"]]

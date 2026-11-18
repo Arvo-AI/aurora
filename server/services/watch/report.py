@@ -78,11 +78,14 @@ def finding_view(finding: dict[str, Any]) -> dict[str, Any]:
 
 
 def _suspects(group: dict[str, Any]) -> list[dict[str, Any]]:
-    """The group's suspects, best first, deduplicated across its findings."""
+    """The group's suspects, deduplicated across its findings: the one its incident is
+    keyed on first (a newer cause can score below the restart it was chosen over), then
+    the rest, best first."""
     seen, out = set(), []
     ranked = sorted((s for f in group["findings"] for s in f.get("suspects") or []),
                     key=lambda s: -s.get("score", 0))
-    for s in ranked:
+    lead = group.get("primary_suspect")
+    for s in ([lead] if lead else []) + ranked:
         ident = (s["key"], int(s.get("at") or 0))
         if ident not in seen:
             seen.add(ident)
