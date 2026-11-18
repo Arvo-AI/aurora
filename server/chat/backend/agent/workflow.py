@@ -1064,7 +1064,12 @@ class Workflow:
 
             if input_state.session_id and input_state.user_id and not is_scaffold:
                 from chat.backend.agent.utils.immediate_save_handler import handle_immediate_save
-                handle_immediate_save(input_state.session_id, input_state.user_id, msg_text or last_msg.content)
+                handle_immediate_save(
+                    input_state.session_id,
+                    input_state.user_id,
+                    msg_text or last_msg.content,
+                    (getattr(last_msg, 'additional_kwargs', {}) or {}).get('evidence_files'),
+                )
 
         # Log initial state
         logger.info(f"Starting workflow with session_id={input_state.session_id}, user_id={input_state.user_id}")
