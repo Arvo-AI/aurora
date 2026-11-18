@@ -7,14 +7,21 @@ from dataclasses import asdict, dataclass
 from typing import Any
 from urllib.parse import urlsplit
 
-from playwright.sync_api import (
-    Browser,
-    BrowserContext,
-    Page,
-    Playwright,
-    TimeoutError as PlaywrightTimeoutError,
-    sync_playwright,
-)
+try:
+    from playwright.sync_api import (
+        Browser,
+        BrowserContext,
+        Page,
+        Playwright,
+        TimeoutError as PlaywrightTimeoutError,
+        sync_playwright,
+    )
+except ModuleNotFoundError:  # The core Aurora test environment omits runner extras.
+    Browser = BrowserContext = Page = Playwright = Any
+    sync_playwright = None
+
+    class PlaywrightTimeoutError(Exception):
+        pass
 
 from .paths import artifact_file
 
@@ -63,6 +70,8 @@ class BrowserSession:
         self.page: Page | None = None
 
     def __enter__(self) -> "BrowserSession":
+        if sync_playwright is None:
+            raise RuntimeError("Playwright is required to collect browser evidence")
         self._playwright = sync_playwright().start()
         self._browser = self._playwright.chromium.launch(headless=True)
         self._context = self._browser.new_context(viewport={"width": 1440, "height": 1000})
@@ -365,6 +374,8 @@ class BrowserWorkspace:
         return {target_id: target.origin for target_id, target in self._targets.items()}
 
     def __enter__(self) -> "BrowserWorkspace":
+        if sync_playwright is None:
+            raise RuntimeError("Playwright is required to collect browser evidence")
         self._playwright = sync_playwright().start()
         self._browser = self._playwright.chromium.launch(headless=True)
         for target_id, url in self.target_urls.items():
