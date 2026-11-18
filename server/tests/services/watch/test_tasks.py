@@ -207,3 +207,30 @@ def test_a_nul_in_a_log_line_or_an_event_never_reaches_the_stored_state(env):
     state = env["stored"]["state"]
     assert {"Deployment/shop/loadgen", "Deployment/shop/api"} <= set(state["open"])
     assert "\u0000" not in json.dumps(state)
+
+
+def test_changing_the_settings_ends_a_backoff(env):
+    # The error says to list namespaces; doing so is tried on the next tick.
+    c = shop()
+
+    def too_big(command, timeout):
+        raise KubectlError("output too large (12000000 bytes); narrow the command, e.g. with -n <namespace>")
+
+    statuses = []
+    for _ in range(4):
+        statuses.append(tasks.poll_cluster(ORG, CLUSTER, runner=too_big, clock=lambda: c.now)["status"])
+        c.tick(tasks.POLL_SECONDS)
+    assert statuses == ["unreachable", "unreachable", "backing_off", "unreachable"]  # next try in 4 min
+    env["settings"]["namespaces"] = ["shop"]
+    assert tasks.poll_cluster(ORG, CLUSTER, runner=fake_kubectl(c, healthy()), clock=lambda: c.now)["status"] == "ok"
+
+
+def test_a_tick_slightly_early_still_retries(env):
+    c = shop()
+
+    def down(command, timeout):
+        raise KubectlError("No response from agent")
+
+    assert tasks.poll_cluster(ORG, CLUSTER, runner=down, clock=lambda: c.now)["status"] == "unreachable"
+    c.now += tasks.POLL_SECONDS - 0.5  # beat drift: the next tick lands a little early
+    assert tasks.poll_cluster(ORG, CLUSTER, runner=fake_kubectl(c, healthy()), clock=lambda: c.now)["status"] == "ok"

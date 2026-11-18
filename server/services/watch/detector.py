@@ -124,9 +124,24 @@ def poisson_tail(k: int, lam: float) -> float:
     return max(0.0, 1.0 - cdf)
 
 
+# Bump when what a snapshot keeps (fields, redaction) or how log lines are templated
+# changes: a state saved by another version is learned again, not compared against.
+STATE_VERSION = 2
+
+
+def current_state(state: dict[str, Any] | None) -> dict[str, Any]:
+    """The stored state, or a fresh one when it is missing or from another version. An
+    old snapshot was cleaned and templated under other rules, so diffing against it
+    would report changes and new log lines that never happened (quoting whatever the
+    old rules kept)."""
+    if not state or state.get("version") != STATE_VERSION:
+        return new_state()
+    return state
+
+
 def new_state(config: dict[str, Any] | None = None) -> dict[str, Any]:
     return {
-        "version": 1,
+        "version": STATE_VERSION,
         "config": {**DEFAULTS, **(config or {})},
         "polls": 0,
         "prev": None,
@@ -195,21 +210,49 @@ def _event_deltas(state: dict[str, Any], snapshot: dict[str, Any]) -> list[dict[
     return out
 
 
-def template_counts(lines: list[str]) -> dict[str, dict[str, Any]]:
+# Before templating, in linear time on every line: a long run mixing letters and
+# digits (a token, a key, a JWT segment) and the value of a credential-named pair.
+# The full secret rules run once per new template, on its template and sample.
+_TOKEN_RUN = re.compile(r"[A-Za-z0-9+_=-]{20,}")
+_CREDENTIAL_PAIR = re.compile(
+    r"(?i)\b((?:pass(?:word|wd)?|pwd|secret|token|api[_-]?key|apikey|access[_-]?key|auth|session|sig(?:nature)?)"
+    r"[\w.-]{0,30}[ \t]*[=:][ \t]*)[^\s&\"',;]+")
+_REDACTION_BUDGET = 100  # full secret scans per poll, of new error templates and their samples
+
+
+def _mask_secrets(line: str) -> str:
+    def token(m: re.Match) -> str:
+        run = m.group(0)
+        mixed = any(c.isdigit() for c in run) and any(c.isalpha() for c in run)
+        return "<token>" if mixed else run
+
+    return _CREDENTIAL_PAIR.sub(r"\1<redacted>", _TOKEN_RUN.sub(token, line))
+
+
+def template_counts(lines: list[str], budget: dict[str, int] | None = None) -> dict[str, dict[str, Any]]:
+    """Log lines by template. Every line is masked in linear time before templating:
+    normalize() masks digits and hex, which would hide a token from the secret rules
+    and keep the rest of it in the template, and a token that differs per request
+    would mint a new template per request. The full secret rules then run on error
+    templates, whose samples evidence quotes, at most ``budget`` times a poll, so a
+    client that fills access logs with keyword soup cannot stall the poll."""
+    budget = {"left": _REDACTION_BUDGET} if budget is None else budget
     counts: dict[str, dict[str, Any]] = {}
     for line in lines:
-        # Redacted before templating: masking digits and hex first would hide a token
-        # from the secret patterns and store the rest of it in the template, and a
-        # token that differs per request would mint a new template per request.
-        clean = _scrubbed(line.replace("\x00", ""))
-        t = normalize(clean)
+        line = line.replace("\x00", "")
+        masked = _mask_secrets(line)
+        t = normalize(masked)
         if t is None:
             continue
         entry = counts.get(t.fingerprint)
         if entry is None:
+            template, sample = t.template, masked.strip()[:300]
+            if t.is_error and budget["left"] > 0:
+                budget["left"] -= 1
+                template, sample = _scrubbed(template), _scrubbed(line.strip()[:300])
             entry = counts[t.fingerprint] = {
-                "template": t.template, "error": t.is_error, "request_failure": t.is_request_failure,
-                "http_class": t.http_class, "count": 0, "sample": clean.strip()[:300],
+                "template": template, "error": t.is_error, "request_failure": t.is_request_failure,
+                "http_class": t.http_class, "count": 0, "sample": sample,
             }
         entry["count"] += 1
     return counts
@@ -445,8 +488,11 @@ def _workload_symptoms(state: dict[str, Any], snapshot: dict[str, Any], events: 
         # than it was then. Fewer ready replicas or more failing pods than at start is.
         if b.get("broken_at_start"):
             if _failing_now(key, snapshot, prev):
+                # No floor recorded (an older baseline): unknown, so quiet until it has been
+                # healthy once, not "nothing was failing". Not filled in from this poll,
+                # which may catch a crash-looping pod while it is briefly up.
                 if (w["ready"] >= b.get("min_ready", 0)
-                        and _failing_pods(pods) <= b.get("max_failing_pods", 0)):
+                        and _failing_pods(pods) <= b.get("max_failing_pods", math.inf)):
                     continue
                 if capacity is None:
                     capacity = b.get("min_ready")  # what it still had at its worst while learning
@@ -511,8 +557,9 @@ def _workload_symptoms(state: dict[str, Any], snapshot: dict[str, Any], events: 
             state["restarts"].pop(key, None)
 
         # A rollout that stopped progressing: the controller has seen the new
-        # generation, but no pod of it got updated or became ready for a while.
-        if stalled_for is not None:
+        # generation, but no pod of it got updated or became ready for a while. One
+        # Kubernetes holds on purpose (paused, OnDelete, a partition) waits, not stalls.
+        if stalled_for is not None and not w.get("held"):
             progressing = w["conditions"].get("Progressing") or {}
             if stalled_for >= deadline or progressing.get("reason") == "ProgressDeadlineExceeded":
                 out.append(_symptom(
@@ -546,19 +593,27 @@ def _workload_symptoms(state: dict[str, Any], snapshot: dict[str, Any], events: 
 def _rollout_stalled_for(state: dict[str, Any], key: str, w: dict[str, Any], now: float) -> float | None:
     """Seconds since a workload's in-flight rollout last made progress, by this watcher's clock.
 
-    ``None`` when no rollout is in flight, which includes one Kubernetes holds on
-    purpose (a paused Deployment, an OnDelete or partitioned StatefulSet). Progress
-    is a new generation, or more replicas updated or ready than this rollout has had
-    so far: pods going unready again is not progress, so readiness that flaps cannot
-    keep a stalled rollout looking alive. The object's own timestamps are not used
-    (kubectl omits managedFields, so they only say when the workload was created).
+    ``None`` when no rollout is in flight. A rollout Kubernetes holds on purpose (a
+    paused Deployment, an OnDelete or partitioned StatefulSet) is still in flight
+    while it replaces pods, so it keeps its maxUnavailable allowance; it is just never
+    reported as stuck. Progress is a new generation, or more replicas updated or
+    ready than this rollout has had so far: pods going unready again is not
+    progress, so readiness that flaps cannot keep a stalled rollout looking alive.
+    The object's own timestamps are not used (kubectl omits managedFields, so they
+    only say when the workload was created).
     """
     rollouts = state.setdefault("rollouts", {})
     entry = rollouts.get(key)
     converging = w.get("converging", w["updated"] < w["desired"])
+    if w.get("held"):
+        # Its revisions may never converge on their own (OnDelete, a partition), so it
+        # is in flight only while it visibly replaces pods; at rest, a fault in it is
+        # reported at once.
+        before = ((state.get("prev") or {}).get("workloads") or {}).get(key) or {}
+        converging = (w["updated"], w.get("generation")) != (before.get("updated"), before.get("generation"))
     # Once under way, a rollout stays in flight until every replica is ready: the
     # last new pod counts as "updated" as soon as it is scheduled (DaemonSets).
-    in_flight = not w.get("held") and w.get("observed_generation") == w.get("generation") and (
+    in_flight = w.get("observed_generation") == w.get("generation") and (
         converging or (entry is not None and w["ready"] < w["desired"]))
     if not in_flight:
         rollouts.pop(key, None)
@@ -713,11 +768,19 @@ def _relation(finding: dict[str, Any], change: dict[str, Any], snapshot: dict[st
     return 1, "same namespace"
 
 
+def _users_of(change: dict[str, Any], snapshot: dict[str, Any]) -> set[str]:
+    """Workloads whose pod template references the changed ConfigMap or Secret."""
+    return {key for key, w in snapshot["workloads"].items()
+            if w["namespace"] == change["namespace"]
+            and change["name"] in (w.get("references") or {}).get(change["kind"], [])}
+
+
 def attribute(finding: dict[str, Any], changes: list[dict[str, Any]], snapshot: dict[str, Any],
               config: dict[str, Any]) -> list[dict[str, Any]]:
     """Up to three changes most likely to have caused ``finding``, best first."""
     ranked = []
     evidence = " ".join(finding.get("evidence") or [])
+    reapplies = [c for c in changes if reapplies_only(c)]
     for change in changes:
         gap = finding["first_seen"] - change["at"]
         # Writes up to two minutes "after" the first symptom are still candidates:
@@ -727,7 +790,17 @@ def attribute(finding: dict[str, Any], changes: list[dict[str, Any]], snapshot: 
         weight, why = _relation(finding, change, snapshot)
         if weight <= 0:
             continue
-        recency = 2 if gap <= 180 else 1 if gap <= 900 else 0
+        # Pods read a ConfigMap when they start: an edit that a later restart (or
+        # replaced pod) of a workload using it put into effect took effect then, so it
+        # is as recent as that restart and ranks above it.
+        took_effect = change["at"]
+        if change["kind"] in ("ConfigMap", "Secret"):
+            users = _users_of(change, snapshot)
+            applied = [r["at"] for r in reapplies if r["key"] in users and r["at"] >= change["at"]]
+            if applied:
+                took_effect = min(applied)
+        since = finding["first_seen"] - took_effect
+        recency = 2 if since <= 180 else 1 if since <= 900 else 0
         # The error names the object ("exceeded quota: compute-resources"). Not for
         # workloads: their names are in every pod name.
         named = (change["kind"] in _NAMEABLE_KINDS and len(change["name"]) >= 4
@@ -757,13 +830,18 @@ def step(state: dict[str, Any], snapshot: dict[str, Any], logs: dict[str, list[s
     is reported once; later polls extend it (new symptoms, escalation) or close
     it after ``resolve_polls`` clean polls.
     """
+    if state.get("version") != STATE_VERSION:  # saved by another version: learn again, in place
+        fresh = new_state()
+        state.clear()
+        state.update(fresh)
     cfg = state["config"]
     first_poll = state["prev"] is None
     if not first_poll and snapshot["taken_at"] - state["prev"]["taken_at"] > cfg.get("max_gap_seconds", 600):
         _rebaseline_after_gap(state, snapshot)
         return state, []
     # Lines from before the first poll are history, not behaviour to learn.
-    templates = {} if first_poll else {w: template_counts(lines) for w, lines in (logs or {}).items()}
+    redaction_budget = {"left": _REDACTION_BUDGET}  # shared by every workload this poll
+    templates = {} if first_poll else {w: template_counts(lines, redaction_budget) for w, lines in (logs or {}).items()}
     events_readable = _carry_forward_blind(state, snapshot)
     events = _event_deltas(state, snapshot) if events_readable else []
     now = snapshot["taken_at"]
@@ -833,25 +911,37 @@ def step(state: dict[str, Any], snapshot: dict[str, Any], logs: dict[str, list[s
             existing["evidence"] = [e for s in existing["symptoms"] for e in s["evidence"]][:12]
             existing["traffic"] = existing.get("traffic") or traffic
             was, incident_rank = SEVERITY_RANK[existing["severity"]], SEVERITY_RANK[INCIDENT_MIN_SEVERITY]
-            if SEVERITY_RANK[top["severity"]] > was:
+            rose = SEVERITY_RANK[top["severity"]] > was
+            if rose:
                 existing.update(severity=top["severity"], summary=top["summary"], escalated_at=now)
-            crossed = was < incident_rank <= SEVERITY_RANK[existing["severity"]]
-            worse = SEVERITY_RANK[existing["severity"]] > was or any(
-                SEVERITY_RANK[s["severity"]] >= incident_rank for s in new_syms)
-            if crossed or (worse and was >= incident_rank):
-                # It became, or already was, an outage and just got worse: blame it as of
-                # now, since the change that made it worse may be newer than the finding.
-                # A notice that became an outage, or an outage with a newer cause, is
-                # reported again with a new incident key. Worse for the same cause, it
-                # stays on its incident, which is updated (severity, findings).
+            if was < incident_rank <= SEVERITY_RANK[existing["severity"]]:
+                # A notice that became an outage is reported again, now as incident-worthy,
+                # and blamed as of now: the change that turned it into an outage may be
+                # newer than the notice. It never had an incident, so it gets a new key.
+                existing["suspects"] = attribute({**existing, "first_seen": now}, state["changes"], snapshot, cfg)
+                existing["blamed_at"] = now
+                existing.pop("incident_key", None)
+                confirmed.append(existing)
+            elif was >= incident_rank and rose:
+                # An outage that got worse. If a change found since it was last blamed is
+                # the cause now, that is a new incident blaming that change; otherwise it
+                # stays on its incident, which is updated (severity, findings). Re-ranking
+                # the changes it was already blamed among only moves them between
+                # recency buckets, so that is never a newer cause.
                 fresh = attribute({**existing, "first_seen": now}, state["changes"], snapshot, cfg)
                 old, new = primary_suspect(existing), primary_suspect({"suspects": fresh})
-                newer_cause = new is not None and (old is None or (new["key"], new["at"]) != (old["key"], old["at"]))
-                if crossed or newer_cause:
+                if (new is not None and not reapplies_only(new)
+                        and new.get("detected_at", new["at"]) > existing.get("blamed_at", existing["first_seen"])
+                        and (old is None or (new["key"], new["at"]) != (old["key"], old["at"]))):
                     existing["suspects"] = fresh
+                    existing["blamed_at"] = now
                     existing.pop("incident_key", None)
                     confirmed.append(existing)
                 existing.pop("incident_id", None)  # so its incident is opened or updated again
+            elif was >= incident_rank and any(SEVERITY_RANK[s["severity"]] >= incident_rank for s in new_syms):
+                # More of the same outage (a second symptom confirming a poll later):
+                # same suspects and incident, which is sent the new evidence.
+                existing.pop("incident_id", None)
             continue
         kind, ns, name = subject.split("/", 2)
         finding = {
@@ -922,11 +1012,18 @@ def _bounded_changes(changes: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _rebaseline_after_gap(state: dict[str, Any], snapshot: dict[str, Any]) -> None:
     """Polling stopped for longer than the windows measure (Watch turned off, a worker
-    backlog, an unreachable cluster). What piled up meanwhile (restarts, Warning
-    events, log lines, changes) cannot be placed in time, so this poll is history: it
-    becomes the previous poll and every window starts over. The learned baseline and
-    the open findings are kept."""
+    backlog, an unreachable cluster). Restarts, Warning events and log lines that
+    piled up meanwhile cannot be placed in time, so every window starts over and this
+    poll becomes the previous one. Changes are still recorded (a deploy made during
+    the gap may be what breaks next), dated to the gap; replaced pods are not, since a
+    long gap replaces pods for reasons nobody needs to hear about. The learned
+    baseline and the open findings are kept."""
+    cfg = state["config"]
     _carry_forward_blind(state, snapshot)
+    cutoff = snapshot["taken_at"] - cfg["change_window_seconds"]
+    gap_changes = [c for c in detect_changes(state["prev"], snapshot) if c["action"] != "pod_replaced"]
+    state["changes"] = _bounded_changes([c for c in gap_changes + state["changes"]
+                                         if c["at"] >= cutoff][: cfg["max_changes"]])
     _event_deltas(state, snapshot)  # the gap's event counts become the counts seen
     for table in ("restarts", "held", "rollouts", "pending"):
         state[table] = {}

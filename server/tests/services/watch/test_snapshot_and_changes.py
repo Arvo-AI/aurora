@@ -25,7 +25,20 @@ def test_credentials_in_env_are_redacted_and_configmap_values_are_never_kept():
     blob = json.dumps(snap)
     assert "hunter2" not in blob and "sk-live-123" not in blob
     env = snap["workloads"]["Deployment/shop/api"]["template"]["containers"]["api"]["env"]
-    assert env["DB_PASSWORD"] == "<redacted>" and env["REDIS_HOST"] == "redis"
+    assert env["DB_PASSWORD"].startswith("<redacted #") and env["REDIS_HOST"] == "redis"
+
+
+def test_a_rotated_credential_is_still_a_change_without_its_value_being_kept():
+    # The outage after a password rotation must still blame the rotation.
+    c = shop()
+    c.set_env("api", "DB_PASSWORD", "old-pw-2025")
+    prev = build_snapshot(c.render(), c.now)
+    c.set_env("api", "DB_PASSWORD", "new-pw-2026")
+    cur = build_snapshot(c.render(), c.now + 60)
+    [change] = [ch for ch in detect_changes(prev, cur) if ch["key"] == "Deployment/shop/api"]
+    detail = change["details"][0]
+    assert "env DB_PASSWORD <redacted #" in detail and "-> <redacted #" in detail
+    assert "old-pw-2025" not in json.dumps(change) and "new-pw-2026" not in json.dumps(cur)
 
 
 def test_credentials_inside_innocently_named_values_and_args_are_redacted():
@@ -35,7 +48,7 @@ def test_credentials_inside_innocently_named_values_and_args_are_redacted():
     fake_pat = "ghp_" + "q83Xa2nLv9P4f7Jv6TmRzW8b1K2cDhG5sY0i"  # synthetic; split so none is committed whole
     container["args"] = ["--github-token", fake_pat]
     blob = json.dumps(build_snapshot(c.render(), c.now))
-    assert "s3cr3t-pa55" not in blob and "postgres://shop:<redacted>@db.internal" in blob
+    assert "s3cr3t-pa55" not in blob and "postgres://shop:<redacted #" in blob
     assert fake_pat not in blob
 
 
@@ -112,14 +125,23 @@ def test_password_only_urls_flag_values_and_probe_tokens_are_redacted():
     from services.watch.snapshot import _argv, _env_value, _probe
 
     pw = "Zq8vN3xL2pR7tK9wM4bY"
-    assert _env_value({"name": "REDIS_URL", "value": f"redis://:{pw}@redis:6379/0"}) == "redis://:<redacted>@redis:6379/0"
+    url = _env_value({"name": "REDIS_URL", "value": f"redis://:{pw}@redis:6379/0"})
+    assert url.startswith("redis://:<redacted #") and url.endswith(">@redis:6379/0")
     assert pw not in _env_value({"name": "DB_URL", "value": f"postgres://app:Zq8v/{pw}@db:5432/app"})
-    assert _argv(["redis-server", "--requirepass", pw]) == ["redis-server", "--requirepass", "<redacted>"]
-    assert _argv(["sh", "-c", f"redis-server --requirepass {pw} --port 6379"]) == [
-        "sh", "-c", "redis-server --requirepass <redacted> --port 6379"]
-    # A flag after a credential-named one is not its value.
-    assert _argv(["--token=abc123", "--disable-auth", "--port", "80"]) == ["--token=<redacted>", "--disable-auth", "--port", "80"]
-    assert pw not in json.dumps(_probe({"httpGet": {"path": f"/-/readiness?token={pw}", "port": 8080}}))
+    args = _argv(["redis-server", "--requirepass", pw])
+    assert args[:2] == ["redis-server", "--requirepass"] and args[2].startswith("<redacted #")
+    joined = _argv(["sh", "-c", f"redis-server --requirepass {pw} --port 6379"])[2]
+    assert pw not in joined and joined.startswith("redis-server --requirepass <redacted #") and joined.endswith("--port 6379")
+    # A flag after a credential-named one is not its value; a flag that only mentions a
+    # credential word (--token-ttl, --keyspace) is not a credential.
+    flags = _argv(["--token=abc123", "--disable-auth", "--port", "80", "--token-ttl", "3600", "--keyspace", "orders"])
+    assert flags[0].startswith("--token=<redacted #") and flags[1:] == [
+        "--disable-auth", "--port", "80", "--token-ttl", "3600", "--keyspace", "orders"]
+    # Query credentials in a probe path, short or long, and a probe's own exec flags.
+    probe = _probe({"httpGet": {"path": "/-/ready?token=hunter2&verbose=1", "port": 8080},
+                    "exec": {"command": ["redis-cli", "--pass", "hunter2-prod-pw", "ping"]}})
+    assert "hunter2" not in json.dumps(probe) and "&verbose=1" in probe["httpGet"]["path"]
+    assert probe["exec"]["command"][3] == "ping"
     assert _env_value({"name": "API_BASE", "value": "https://api.example.com/v1/items"}) == "https://api.example.com/v1/items"
 
 

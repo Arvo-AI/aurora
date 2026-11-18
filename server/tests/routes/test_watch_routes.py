@@ -101,3 +101,17 @@ def test_operator_switch_wins(call, monkeypatch):
     monkeypatch.setattr("utils.flags.feature_flags.is_aurora_watch_enabled", lambda: False)
     assert run("put_aurora_watch", "admin-1", "PUT", {"enabled": True})[1] == 409
     assert run("put_aurora_watch", "admin-1", "PUT", {"enabled": False})[1] == 200
+
+
+def test_the_view_says_when_the_user_watch_acts_as_left(monkeypatch):
+    import routes.watch_routes as mod
+
+    monkeypatch.setattr("services.watch.store.get_settings", lambda org: {
+        "enabled": True, "owner_user_id": "gone-1", "namespaces": None, "updated_at": "2026-11-17T00:00:00+00:00"})
+    monkeypatch.setattr("services.watch.store.list_clusters", lambda user: [{"cluster_id": "kc-1", "name": "prod"}])
+    monkeypatch.setattr("services.watch.store.status", lambda user: [{"cluster_id": "kc-1", "seconds_since_poll": 3600}])
+    monkeypatch.setattr("services.watch.tasks._owner_in_org", lambda user, org: False)
+    monkeypatch.setattr("utils.flags.feature_flags.is_aurora_watch_enabled", lambda: True)
+    view = mod._view("admin-1", "org-1")
+    # Not "the workers are busy": polls are skipped on purpose until Watch is turned on again.
+    assert view["owner_left"] is True and view["clusters"][0]["stale"] is False

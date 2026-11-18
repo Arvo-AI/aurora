@@ -44,6 +44,11 @@ def _enabled_orgs() -> list[tuple[str, dict[str, Any]]]:
     return out
 
 
+def _settings_key(settings: dict[str, Any]) -> str:
+    """What a failed read depends on: which namespaces are read, and as whom."""
+    return f"{settings.get('owner_user_id')}|{','.join(settings.get('namespaces') or [])}"
+
+
 def _owner_in_org(user_id: str, org_id: str) -> bool:
     from utils.db.connection_pool import db_pool
 
@@ -98,7 +103,7 @@ def watch_cluster(org_id: str, cluster_id: str, cluster_name: str | None = None)
 def poll_cluster(org_id: str, cluster: dict[str, Any], runner=None, clock=time.time) -> dict[str, Any]:
     """One poll of one cluster. ``runner`` and ``clock`` are injectable for tests."""
     from services.watch.collector import CommandBlocked, KubectlError, collect_logs, collect_state, internal_api_runner
-    from services.watch.detector import group_findings, new_state, step
+    from services.watch.detector import current_state, group_findings, step
     from services.watch.snapshot import build_snapshot
     from services.watch.store import get_settings, load_state, save_state
 
@@ -115,14 +120,16 @@ def poll_cluster(org_id: str, cluster: dict[str, Any], runner=None, clock=time.t
         return {"status": "owner_gone"}
 
     run = runner or internal_api_runner(owner, org_id, cluster_id)
-    state = load_state(owner, cluster_id) or new_state()
+    state = current_state(load_state(owner, cluster_id))
     # Thresholds are counted in polls: polls must stay a poll interval apart, start to
     # start (a slow read must not make the next on-time tick look early).
     started = clock()
     last = state.get("started_at") or (state.get("prev") or {}).get("taken_at")
     if last and started - last < POLL_SECONDS * 0.8:
         return {"status": "too_soon"}
-    if started < state.get("retry_at", 0):
+    # Backing off after failed reads, unless the settings changed since (the error may
+    # have said to list namespaces). The same slack as above absorbs tick jitter.
+    if started < state.get("retry_at", 0) - POLL_SECONDS * 0.2 and state.get("retry_for") == _settings_key(settings):
         return {"status": "backing_off"}
     try:
         raw, blind = collect_state(run, settings.get("namespaces"))
@@ -131,12 +138,12 @@ def poll_cluster(org_id: str, cluster: dict[str, Any], runner=None, clock=time.t
         # must not cost its agent a dropped connection every minute.
         failures = state.get("read_failures", 0) + 1
         delay = min(MAX_BACKOFF_SECONDS, POLL_SECONDS * 2 ** (failures - 1))
-        state.update(read_failures=failures, retry_at=started + delay)
+        state.update(read_failures=failures, retry_at=started + delay, retry_for=_settings_key(settings))
         save_state(owner, cluster_id, state,
                    error=f"cluster not readable: {str(exc)[:200]} (next try in {max(1, round(delay / 60))} min)")
         return {"status": "unreachable"}
-    state.pop("read_failures", None)
-    state.pop("retry_at", None)
+    for field in ("read_failures", "retry_at", "retry_for"):
+        state.pop(field, None)
 
     try:
         snapshot = build_snapshot(raw, clock())

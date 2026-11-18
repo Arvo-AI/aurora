@@ -89,13 +89,15 @@ installation with `NEXT_PUBLIC_ENABLE_AURORA_WATCH=false`.
   as **Not polling**.
 * **Secrets are never read.** ConfigMap values are reduced to a hash per key, so
   Aurora can say "key `default.conf` changed" without storing its content. Env
-  values whose name looks like a credential are stored as `<redacted>`; other env
-  values, container arguments, probe commands and paths, and the messages the
-  cluster writes (events, waiting reasons, conditions) go through Aurora's secret
-  redaction. URL passwords and the value after a credential-named flag
-  (`--requirepass`) are masked, and probe header values are dropped.
-* Log lines are redacted before Aurora learns or quotes them, and evidence goes
-  through the prompt-injection rail before it reaches the investigation.
+  values whose name looks like a credential, URL passwords, the value after a
+  credential flag (`--requirepass`), credential query parameters and probe header
+  values are stored as a keyed digest (`<redacted #1a2b3c4d>`): a rotated password
+  still shows as a change, and neither value is kept. Other env values, container
+  arguments, probe commands and paths, and the messages the cluster writes (events,
+  waiting reasons, conditions) go through Aurora's secret redaction.
+* Tokens and credential values in log lines are masked before Aurora learns them,
+  quoted lines are redacted, and evidence goes through the prompt-injection rail
+  before it reaches the investigation.
 * State per cluster (the learned baseline, open findings, the last hour of
   changes) is stored in the `aurora_watch_state` table, scoped to your
   organization.

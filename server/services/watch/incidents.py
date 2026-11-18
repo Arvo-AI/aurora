@@ -35,7 +35,8 @@ def _rank(severity: Any) -> int:
 
 def _merge_payload(existing: dict[str, Any] | None, new: dict[str, Any]) -> dict[str, Any]:
     """Fold a group's findings into an incident that is already open: a finding seen
-    again (it got worse) replaces its older copy, new ones and new suspects are added."""
+    again (it got worse) replaces its older copy, new ones are added, and the group's
+    suspects (the latest attribution) lead the incident's."""
     if not existing:
         return new
     merged = dict(existing)
@@ -46,9 +47,14 @@ def _merge_payload(existing: dict[str, Any] | None, new: dict[str, Any]) -> dict
     def ident(s: dict[str, Any]) -> tuple:
         return s.get("object"), s.get("at")
 
-    known = {ident(s) for s in existing.get("suspected_changes") or []}
-    merged["suspected_changes"] = ((existing.get("suspected_changes") or []) + [
-        s for s in new.get("suspected_changes") or [] if ident(s) not in known])[: report.MAX_SUSPECTS]
+    suspects, seen = [], set()
+    for s in (new.get("suspected_changes") or []) + (existing.get("suspected_changes") or []):
+        if ident(s) not in seen:
+            seen.add(ident(s))
+            suspects.append(s)
+    merged["suspected_changes"] = suspects[: report.MAX_SUSPECTS]
+    if new.get("suspected_changes"):
+        merged["message"] = new.get("message") or existing.get("message")
     if _rank(new.get("severity")) > _rank(existing.get("severity")):
         merged["severity"] = new["severity"]
     merged["updated_at"] = new.get("first_seen")

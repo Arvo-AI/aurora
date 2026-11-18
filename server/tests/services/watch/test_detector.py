@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 
-from services.watch.detector import DEFAULTS, group_findings, new_state, step
+from services.watch.detector import DEFAULTS, group_findings, new_state, step, template_counts
 from services.watch.snapshot import build_snapshot
 
 from .k8s import Cluster, healthy_logs, shop
@@ -82,6 +82,29 @@ class TestQuietWhenNothingRegresses:
         c.stall("api", updated=1)  # 1 of 2 on the new revision, then paused on purpose
         c.pause("api")
         assert run(c, state, DEFAULTS["rollout_stuck_seconds"] // 10 + 4) == []
+
+    def test_a_held_rollout_replacing_a_pod_keeps_its_allowance(self):
+        # Held means "not stuck", not "not a rollout": a pod of a paused (or OnDelete)
+        # rollout still starting, within maxUnavailable, is not an outage.
+        c = shop()
+        state = learned(c)
+        c.stall("api", updated=1)
+        c.pause("api")
+        c.scale("api", 2, unready=1)
+        assert run(c, state, 6) == []
+
+    def test_a_broken_at_start_baseline_without_a_floor_keeps_the_old_rule(self):
+        # No floor recorded: quiet until healthy once, then breaking again is reported.
+        c = shop()
+        c.crash("worker")
+        state = learned(c)
+        baseline = state["baseline"]["workloads"]["Deployment/shop/worker"]
+        del baseline["min_ready"], baseline["max_failing_pods"]  # as a baseline from before they existed
+        assert run(c, state, 8) == []
+        c.heal("worker")
+        assert run(c, state, 3) == []
+        c.crash("worker")
+        assert "Deployment/shop/worker" in by_subject(run(c, state, 3))
 
     def test_the_last_pod_of_a_rollout_starting_slowly_is_quiet(self):
         # Everything is "updated" once the last pod is scheduled; it may take minutes to be ready.
@@ -298,6 +321,18 @@ class TestWorkloadRegression:
         assert f["suspects"][0]["key"] == "Deployment/shop/api"
         assert f["suspects"][0]["relation"] == "same object (a restart)"
 
+    def test_a_configmap_edit_outranks_a_restart_made_minutes_later(self):
+        # Edit the ConfigMap, see nothing reload, restart five minutes later: the edit is
+        # the cause, put into effect by the restart.
+        c = shop()
+        state = learned(c)
+        c.configmap("frontend-nginx", {"default.conf": "upstream api { server api:8000; }"})
+        assert run(c, state, 30) == []
+        c.restart("frontend")
+        c.crash("frontend", reason="Error", exit_code=1)
+        f = by_subject(run(c, state, 3))["Deployment/shop/frontend"]
+        assert [s["key"] for s in f["suspects"][:2]] == ["ConfigMap/shop/frontend-nginx", "Deployment/shop/frontend"]
+
 
 class TestTwoFaultsAtOnce:
     """Aurora Lab scenario 12: the alert only covered the worker, and the RCA called the frontend healthy."""
@@ -470,6 +505,17 @@ class TestLogs:
         found = by_subject(run(c, state, 2, surge))
         assert {s["kind"] for s in found["Deployment/shop/api"]["symptoms"]} >= {"error_log_surge"}
 
+    def test_hostile_log_lines_cost_little(self):
+        # A client can make every access-log line 4 KB of keyword soup; a poll must not
+        # spend a minute on it.
+        import time
+
+        line = ('10.0.0.1 - - [17/Nov/2026:21:44:51 +0000] "GET / HTTP/1.1" 200 38 "-" "'
+                + "key" * 1300 + '"')
+        start = time.perf_counter()
+        template_counts([line] * 640)
+        assert time.perf_counter() - start < 3
+
 
 class TestEvents:
     def test_a_warning_that_fired_all_through_learning_is_background_noise(self):
@@ -592,3 +638,30 @@ class TestLifecycle:
         # open between restarts, instead of closing and reopening every cycle.
         assert {f["id"] for f in found} == {state["open"]["Deployment/shop/worker"]["id"]}
         assert state["closed"] == []
+
+    def test_a_second_symptom_of_the_same_outage_keeps_its_incident(self):
+        # The kinds of one crash loop confirm polls apart (pods failing, then restarts):
+        # more of the same outage, not a newer cause with an incident of its own.
+        c = shop()
+        state = learned(c)
+        c.configmap("api-code", {"api.py": "print('api')", "worker.py": "raise SystemExit(1)"})
+        poll(c, state, seconds=60)
+        c.restart("worker")
+        c.crash("worker", reason="Error", exit_code=1)
+        keys = set()
+        for _ in range(6):
+            poll(c, state, seconds=60)
+            finding = state["open"].get("Deployment/shop/worker")
+            if finding:
+                keys.add(finding["incident_key"])
+        assert len(keys) == 1
+
+    def test_a_deploy_made_during_a_polling_gap_is_still_the_suspect(self):
+        c = shop()
+        state = learned(c)
+        run(c, state, 3)
+        c.tick(12 * 60)  # no poll for 12 minutes (a worker backlog, a backoff)
+        c.set_env("worker", "BATCH_SIZE", "2500")
+        c.crash("worker")
+        f = by_subject(run(c, state, 4))["Deployment/shop/worker"]
+        assert f["suspects"][0]["details"] == ["container worker: env BATCH_SIZE 500 -> 2500"]

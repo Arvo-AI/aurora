@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, request
 
@@ -15,17 +16,31 @@ logger = logging.getLogger(__name__)
 watch_bp = Blueprint("aurora_watch", __name__)
 
 
+def _age_seconds(iso: str | None) -> float | None:
+    try:
+        return (datetime.now(timezone.utc) - datetime.fromisoformat(iso)).total_seconds()
+    except (TypeError, ValueError):
+        return None
+
+
 def _view(user_id: str, org_id: str) -> dict:
     from services.watch.detector import DEFAULTS
     from services.watch.store import get_settings, list_clusters, status
-    from services.watch.tasks import POLL_SECONDS
+    from services.watch.tasks import POLL_SECONDS, _owner_in_org
     from utils.flags.feature_flags import is_aurora_watch_enabled
 
     settings = get_settings(org_id)
+    owner = settings.get("owner_user_id")
+    # Polls are skipped while the user Watch acts as is not in the org any more.
+    owner_left = bool(settings["enabled"] and owner and not _owner_in_org(owner, org_id))
+    settings_age = _age_seconds(settings.get("updated_at"))
     by_cluster = {s["cluster_id"]: s for s in status(user_id)}
     clusters = []
     for c in list_clusters(user_id):
         s = by_cluster.get(c["cluster_id"]) or {}
+        # No poll for three intervals since the last poll or since Watch was last turned
+        # on: the workers are busy (investigations) or down.
+        ages = [a for a in (s.get("seconds_since_poll"), settings_age) if a is not None]
         clusters.append({
             "cluster_id": c["cluster_id"],
             "name": c.get("name"),
@@ -33,8 +48,7 @@ def _view(user_id: str, org_id: str) -> dict:
             "polls": s.get("polls", 0),
             "learning": s.get("learning", True),
             "last_poll_at": s.get("last_poll_at"),
-            # No poll for three intervals: the workers are busy (investigations) or down.
-            "stale": (s.get("seconds_since_poll") or 0) > POLL_SECONDS * 3,
+            "stale": not owner_left and bool(ages) and min(ages) > POLL_SECONDS * 3,
             "last_error": s.get("last_error"),
             "blind_spots": s.get("blind_spots", []),
             "open_findings": s.get("open_findings", []),
@@ -44,7 +58,8 @@ def _view(user_id: str, org_id: str) -> dict:
         "enabled": settings["enabled"],
         "namespaces": settings["namespaces"],
         "updated_at": settings["updated_at"],
-        "acting_as_you": settings.get("owner_user_id") == user_id,
+        "acting_as_you": owner == user_id,
+        "owner_left": owner_left,
         "poll_seconds": POLL_SECONDS,
         "learning_polls": DEFAULTS["learning_polls"],
         "clusters": clusters,

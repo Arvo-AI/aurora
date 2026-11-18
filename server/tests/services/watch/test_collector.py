@@ -191,3 +191,9 @@ def test_gate_requires_read_only_and_org_policy():
         assert collector.gate_command("org-1", "logs -n shop -l app=api") is None
     with patch("utils.security.read_only_classifier.is_read_only_command", return_value=False):
         assert collector.gate_command("org-1", "delete pod x") == "not a read-only command"
+
+
+def test_namespaces_that_together_exceed_the_poll_budget_say_so():
+    each = json.dumps({"kind": "List", "items": [{"kind": "Pod", "pad": "x" * (5 * 1024 * 1024)}]})
+    with pytest.raises(StateTooLarge, match="watch fewer namespaces"):
+        collect_state(lambda cmd, t: each, [f"ns{i}" for i in range(8)])

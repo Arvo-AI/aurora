@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import functools
 import hashlib
+import hmac
 import json
 import math
+import os
 import re
 from datetime import datetime
 from typing import Any
@@ -30,22 +32,39 @@ BAD_WAITING = frozenset({
 _SENSITIVE_NAME = re.compile(r"pass|secret|token|key|credential|auth|private|cert|dsn|session", re.I)
 # A URL's password, the user possibly empty (redis://:pw@host). It runs to the last
 # "@", so a password containing "/" or "@" is masked too (over-masking is fine).
-_URL_PASSWORD = re.compile(r"(\w[\w+.-]*://[^:/@\s]*):\S*@")
-# A credential-named flag and its value, joined or not: --requirepass x, --token=x.
-_FLAG = r"--?[\w.-]*(?:pass|secret|token|key|credential|auth)[\w.-]*"
+_URL_PASSWORD = re.compile(r"(\w[\w+.-]*://[^:/@\s]*):(\S*)@")
+# A flag whose name ends in a credential word, and its value, joined or not:
+# --requirepass x, --db-password=x, --github-token x. Not --token-ttl or --keyspace.
+_FLAG = (r"--?[\w.-]*?(?:password|passwd|pass|pwd|secret|token|api[-_]?key|access[-_]?key|"
+         r"secret[-_]?key|credentials?|auth)")
 _SECRET_FLAG = re.compile(rf"^{_FLAG}$", re.I)
-_SECRET_FLAG_VALUE = re.compile(rf"(?<![\w-])({_FLAG})(=|\s+)(?!<redacted>|-)\S+", re.I)
+_SECRET_FLAG_VALUE = re.compile(rf"(?<![\w-])({_FLAG})(=|\s+)(?!<redacted|-)(\S+)", re.I)
+# A query parameter named like a credential: /-/ready?token=x, ?access_token=x, &sig=x.
+_QUERY_SECRET = re.compile(r"([?&][^=&#\s]*(?:token|key|pass|secret|auth|sig)[^=&#\s]*=)([^&#\s]+)", re.I)
+# Masked values keep a keyed digest, so a rotated password still shows as a change
+# without the value (or an offline-guessable hash of it) ever being stored.
+_DIGEST_KEY = (os.getenv("INTERNAL_API_SECRET") or "aurora-watch").encode()
+
+
+def _masked(value: str) -> str:
+    return f"<redacted #{hmac.new(_DIGEST_KEY, value.encode('utf-8', 'replace'), hashlib.sha256).hexdigest()[:8]}>"
 
 
 @functools.lru_cache(maxsize=20_000)  # pod specs barely change between polls
-def _clean(value: str) -> str:
+def _clean(value: str, digest: bool = True) -> str:
     """A literal from the cluster (a spec value, an event message), safe to store and
-    show: NUL removed (jsonb cannot hold it), URL passwords and flag values masked,
-    other credentials redacted."""
+    show: NUL removed (jsonb cannot hold it), URL passwords, credential flag values and
+    credential query parameters masked, other credentials redacted. With ``digest``, a
+    masked or redacted value carries a keyed digest, so changing it is still a change."""
     from utils.security.output_redaction import redact
 
-    value = _URL_PASSWORD.sub(r"\1:<redacted>@", value.replace("\x00", ""))
-    return redact(_SECRET_FLAG_VALUE.sub(r"\1\2<redacted>", value))[0]
+    tag = _masked if digest else (lambda _: "<redacted>")
+    value = value.replace("\x00", "")
+    masked = _URL_PASSWORD.sub(lambda m: f"{m.group(1)}:{tag(m.group(2))}@", value)
+    masked = _SECRET_FLAG_VALUE.sub(lambda m: f"{m.group(1)}{m.group(2)}{tag(m.group(3))}", masked)
+    masked = _QUERY_SECRET.sub(lambda m: f"{m.group(1)}{tag(m.group(2))}", masked)
+    out, findings = redact(masked)
+    return f"{out} {_masked(value)}" if findings and digest else out
 
 
 def _argv(values: Any) -> list[str] | None:
@@ -55,14 +74,14 @@ def _argv(values: Any) -> list[str] | None:
     mask_next = False
     for value in values or []:
         value = str(value)[:500]
-        out.append("<redacted>" if mask_next and not value.startswith("-") else _clean(value))
+        out.append(_masked(value) if mask_next and not value.startswith("-") else _clean(value))
         mask_next = bool(_SECRET_FLAG.match(value))
     return out or None
 
 
 def _message(value: Any, default: str = "") -> str:
     """A message the cluster wrote (an event, a waiting reason, a condition), cleaned."""
-    return _clean(str(value or default)[:MAX_MESSAGE_CHARS])
+    return _clean(str(value or default)[:MAX_MESSAGE_CHARS], digest=False)
 
 # Kinds tracked as possible causes, besides workloads and Services.
 # kubectl resource name -> Kind.
@@ -100,9 +119,10 @@ def _pods_of(value: Any, total: int, round_up: bool) -> int | None:
 def rollout_strategy(kind: str, spec: dict[str, Any], desired: int, updated: int) -> tuple[bool, int]:
     """(held, max_unavailable) for a workload, with Kubernetes' defaults and rounding.
 
-    ``held``: the rollout waits on purpose, so it is not stuck: a paused Deployment,
-    an OnDelete StatefulSet or DaemonSet, or a StatefulSet whose partition keeps the
-    rest of its pods on the old revision. ``max_unavailable``: how many pods a
+    ``held``: the rollout waits on purpose, so it is never "stuck": a paused
+    Deployment, an OnDelete StatefulSet or DaemonSet (someone deletes the pods), or a
+    StatefulSet whose partition keeps the rest of its pods on the old revision. It is
+    still a rollout while it replaces pods. ``max_unavailable``: how many pods a
     rollout may take down at once; fewer ready than that is not the rollout's doing.
     """
     if kind == "Deployment":
@@ -117,7 +137,7 @@ def rollout_strategy(kind: str, spec: dict[str, Any], desired: int, updated: int
         return bool(spec.get("paused")), unavailable
     strategy = spec.get("updateStrategy") or {}
     if strategy.get("type") == "OnDelete":
-        return True, 0
+        return True, 1  # pods replaced by hand, conventionally one at a time
     rolling = strategy.get("rollingUpdate") or {}
     if kind == "StatefulSet":
         partition = _pods_of(rolling.get("partition"), desired, False) or 0
@@ -151,7 +171,7 @@ def _env_value(entry: dict[str, Any]) -> str:
     name = entry.get("name") or ""
     if "value" in entry:
         if _SENSITIVE_NAME.search(name):
-            return "<redacted>"
+            return _masked(str(entry.get("value")))
         value = _clean(str(entry.get("value"))[:1000])
         return value if len(value) <= 120 else value[:117] + "..."
     ref = entry.get("valueFrom") or {}
@@ -167,19 +187,20 @@ def _env_value(entry: dict[str, Any]) -> str:
 
 
 def _probe(probe: Any) -> Any:
-    """A probe with its credentials removed: header values and exec arguments."""
+    """A probe with its credentials removed: header values, query credentials in the
+    path, and exec arguments (masked the way container args are)."""
     if not isinstance(probe, dict):
         return probe
     out = json.loads(json.dumps(probe))
     http = out.get("httpGet") if isinstance(out.get("httpGet"), dict) else {}
     for header in http.get("httpHeaders") or []:
         if isinstance(header, dict) and "value" in header:
-            header["value"] = "<redacted>"
+            header["value"] = _masked(str(header["value"]))
     for field in ("path", "host"):  # /-/ready?token=...
         if isinstance(http.get(field), str):
             http[field] = _clean(http[field][:500])
     if isinstance(out.get("exec"), dict):
-        out["exec"]["command"] = [_clean(str(a)[:500]) for a in out["exec"].get("command") or []]
+        out["exec"]["command"] = _argv(out["exec"].get("command")) or []
     return out
 
 

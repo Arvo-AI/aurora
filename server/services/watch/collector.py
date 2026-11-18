@@ -142,6 +142,8 @@ class StateTooLarge(KubectlError):
 
 _TOO_LARGE = (f"cluster state is too large to read every minute (over {MAX_STATE_BYTES // (1024 * 1024)} MB "
               "in one response); list the namespaces to watch")
+_OVER_BUDGET = (f"the watched namespaces return over {MAX_POLL_BYTES // (1024 * 1024)} MB together, more than "
+                "one poll reads; watch fewer namespaces")
 
 
 def _read(run: Runner, command: str, budget: dict[str, int]) -> dict[str, Any]:
@@ -152,10 +154,13 @@ def _read(run: Runner, command: str, budget: dict[str, int]) -> dict[str, Any]:
             raise StateTooLarge(_TOO_LARGE) from exc
         raise
     size = len(text.encode("utf-8"))
-    budget["left"] = budget.get("left", MAX_POLL_BYTES) - size
-    if size > MAX_STATE_BYTES or budget["left"] < 0:
+    if size > MAX_STATE_BYTES:
         raise StateTooLarge(_TOO_LARGE)
-    return json.loads(text)
+    data = json.loads(text)  # a response that does not parse is read again kind by kind: not counted
+    budget["left"] = budget.get("left", MAX_POLL_BYTES) - size
+    if budget["left"] < 0:
+        raise StateTooLarge(_OVER_BUDGET)
+    return data
 
 
 def _collect_scope(run: Runner, scope: str, blind: dict[str, str], budget: dict[str, int],

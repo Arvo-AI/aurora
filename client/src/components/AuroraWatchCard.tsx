@@ -35,6 +35,7 @@ interface WatchStatus {
   enabled: boolean;
   namespaces: string[] | null;
   acting_as_you: boolean;
+  owner_left: boolean;
   poll_seconds: number;
   learning_polls: number;
   clusters: WatchCluster[];
@@ -170,6 +171,12 @@ export function AuroraWatchCard() {
           </Button>
         </div>
 
+        {data.enabled && data.owner_left && (
+          <p className="text-sm text-red-400">
+            The person Aurora Watch acts as is no longer in this organization, so it is paused. Turn it off and on
+            again to make it act as you.
+          </p>
+        )}
         {data.enabled && data.clusters.length === 0 && (
           <p className="text-sm text-zinc-500">Connect a cluster above and Aurora Watch starts on the next minute.</p>
         )}
