@@ -26,6 +26,21 @@ except ModuleNotFoundError:  # The core Aurora test environment omits runner ext
 from .paths import artifact_file
 
 
+BLANK_PAGE_URL = "about:blank"
+NOT_NAVIGATED_ERROR = "target has not been navigated"
+ROW_EVALUATION_SCRIPT = """element => {
+  let root = element.closest('article, tr, li, [role="row"]');
+  if (!root) root = element.parentElement;
+  for (let i = 0; root && i < 3 && root.parentElement &&
+       root.innerText.trim() === element.innerText.trim(); i++) root = root.parentElement;
+  root = root || element;
+  const badges = [...root.querySelectorAll('.badge, [data-testid*="badge"], [class*="badge"]')]
+    .filter(node => node instanceof HTMLElement && node.offsetParent !== null)
+    .map(node => node.textContent.trim()).filter(Boolean).slice(0, 10);
+  return { tag: root.tagName.toLowerCase(), text: root.innerText.trim(), badges };
+}"""
+
+
 @dataclass(frozen=True)
 class RowCandidate:
     candidate_id: str
@@ -39,6 +54,52 @@ class RowCandidate:
         value = asdict(self)
         value["badge_texts"] = list(self.badge_texts)
         return value
+
+
+def _collect_row_candidates(
+    *,
+    page: Page,
+    anchor_text: str,
+    seed_prefix: str,
+    candidates: dict[str, RowCandidate],
+) -> dict[str, Any]:
+    anchor = anchor_text.strip()
+    locator = page.get_by_text(anchor, exact=True)
+    total = locator.count()
+    if total > 20:
+        return {
+            "anchorText": anchor,
+            "exactMatchCount": total,
+            "candidates": [],
+            "tooMany": True,
+        }
+
+    found = []
+    for index in range(total):
+        element = locator.nth(index)
+        if not element.is_visible():
+            continue
+        data = element.evaluate(ROW_EVALUATION_SCRIPT)
+        container_text = str(data.get("text", ""))[:2_000]
+        badge_texts = tuple(str(item)[:256] for item in data.get("badges", []))
+        seed = f"{seed_prefix}\0{index}\0{container_text}\0{badge_texts}"
+        candidate_id = "row-" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:12]
+        candidate = RowCandidate(
+            candidate_id=candidate_id,
+            anchor_text=anchor,
+            exact_match_count=total,
+            container_tag=str(data.get("tag", ""))[:32],
+            container_text=container_text,
+            badge_texts=badge_texts,
+        )
+        candidates[candidate_id] = candidate
+        found.append(candidate.public())
+    return {
+        "anchorText": anchor,
+        "exactMatchCount": total,
+        "candidates": found,
+        "tooMany": False,
+    }
 
 
 def _origin(url: str) -> str:
@@ -151,49 +212,12 @@ class BrowserSession:
         if not isinstance(anchor_text, str) or not anchor_text.strip() or len(anchor_text) > 256:
             raise ValueError("anchorText must be non-empty text up to 256 characters")
         assert self.page is not None
-        locator = self.page.get_by_text(anchor_text.strip(), exact=True)
-        total = locator.count()
-        if total > 20:
-            return {"anchorText": anchor_text, "exactMatchCount": total, "candidates": [], "tooMany": True}
-
-        found = []
-        for index in range(total):
-            element = locator.nth(index)
-            if not element.is_visible():
-                continue
-            data = element.evaluate(
-                """element => {
-                  let root = element.closest('article, tr, li, [role="row"]');
-                  if (!root) root = element.parentElement;
-                  for (let i = 0; root && i < 3 && root.parentElement &&
-                       root.innerText.trim() === element.innerText.trim(); i++) root = root.parentElement;
-                  root = root || element;
-                  const badges = [...root.querySelectorAll('.badge, [data-testid*="badge"], [class*="badge"]')]
-                    .filter(node => node instanceof HTMLElement && node.offsetParent !== null)
-                    .map(node => node.textContent.trim()).filter(Boolean).slice(0, 10);
-                  return { tag: root.tagName.toLowerCase(), text: root.innerText.trim(), badges };
-                }"""
-            )
-            container_text = str(data.get("text", ""))[:2_000]
-            badge_texts = tuple(str(item)[:256] for item in data.get("badges", []))
-            seed = f"{anchor_text}\0{index}\0{container_text}\0{badge_texts}"
-            candidate_id = "row-" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:12]
-            candidate = RowCandidate(
-                candidate_id=candidate_id,
-                anchor_text=anchor_text.strip(),
-                exact_match_count=total,
-                container_tag=str(data.get("tag", ""))[:32],
-                container_text=container_text,
-                badge_texts=badge_texts,
-            )
-            self.candidates[candidate_id] = candidate
-            found.append(candidate.public())
-        return {
-            "anchorText": anchor_text.strip(),
-            "exactMatchCount": total,
-            "candidates": found,
-            "tooMany": False,
-        }
+        return _collect_row_candidates(
+            page=self.page,
+            anchor_text=anchor_text,
+            seed_prefix=anchor_text,
+            candidates=self.candidates,
+        )
 
     def execute_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         if name == "read_visible_page":
@@ -450,48 +474,27 @@ class BrowserWorkspace:
                 page.close()
 
     def _visible_text(self, target: _TargetPage) -> dict[str, Any]:
-        if target.page.url == "about:blank":
-            return {"url": target.page.url, "visibleText": "", "error": "target has not been navigated"}
+        if target.page.url == BLANK_PAGE_URL:
+            return {"url": target.page.url, "visibleText": "", "error": NOT_NAVIGATED_ERROR}
         if _origin(target.page.url) != target.origin:
             raise RuntimeError("browser left the configured origin")
         text = target.page.locator("body").inner_text(timeout=self.timeout_ms)
         return {"url": target.page.url, "visibleText": text[:12_000], "truncated": len(text) > 12_000, "error": None}
 
     def _inspect_row(self, target_id: str, target: _TargetPage, anchor_text: str) -> dict[str, Any]:
-        if target.page.url == "about:blank":
-            return {"anchorText": anchor_text, "exactMatchCount": 0, "candidates": [], "error": "target has not been navigated"}
-        locator = target.page.get_by_text(anchor_text.strip(), exact=True)
-        total = locator.count()
-        if total > 20:
-            return {"anchorText": anchor_text, "exactMatchCount": total, "candidates": [], "tooMany": True}
-        found = []
-        for index in range(total):
-            element = locator.nth(index)
-            if not element.is_visible():
-                continue
-            data = element.evaluate(
-                """element => {
-                  let root = element.closest('article, tr, li, [role="row"]');
-                  if (!root) root = element.parentElement;
-                  for (let i = 0; root && i < 3 && root.parentElement &&
-                       root.innerText.trim() === element.innerText.trim(); i++) root = root.parentElement;
-                  root = root || element;
-                  const badges = [...root.querySelectorAll('.badge, [data-testid*="badge"], [class*="badge"]')]
-                    .filter(node => node instanceof HTMLElement && node.offsetParent !== null)
-                    .map(node => node.textContent.trim()).filter(Boolean).slice(0, 10);
-                  return { tag: root.tagName.toLowerCase(), text: root.innerText.trim(), badges };
-                }"""
-            )
-            container_text = str(data.get("text", ""))[:2_000]
-            badge_texts = tuple(str(item)[:256] for item in data.get("badges", []))
-            seed = f"{target_id}\0{anchor_text}\0{index}\0{container_text}\0{badge_texts}"
-            candidate_id = "row-" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:12]
-            candidate = RowCandidate(
-                candidate_id, anchor_text.strip(), total, str(data.get("tag", ""))[:32], container_text, badge_texts
-            )
-            self.candidates[candidate_id] = candidate
-            found.append(candidate.public())
-        return {"anchorText": anchor_text.strip(), "exactMatchCount": total, "candidates": found, "tooMany": False}
+        if target.page.url == BLANK_PAGE_URL:
+            return {
+                "anchorText": anchor_text,
+                "exactMatchCount": 0,
+                "candidates": [],
+                "error": NOT_NAVIGATED_ERROR,
+            }
+        return _collect_row_candidates(
+            page=target.page,
+            anchor_text=anchor_text,
+            seed_prefix=f"{target_id}\0{anchor_text}",
+            candidates=self.candidates,
+        )
 
     def execute_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         sequence = len(self.evidence) + 1
@@ -531,8 +534,8 @@ class BrowserWorkspace:
                 locator.fill(value, timeout=self.timeout_ms)
                 result = {"filled": True, "exactMatchCount": 1, "url": target.page.url, "error": None}
         elif name == "take_screenshot":
-            if target.page.url == "about:blank":
-                result = {"screenshot": None, "error": "target has not been navigated"}
+            if target.page.url == BLANK_PAGE_URL:
+                result = {"screenshot": None, "error": NOT_NAVIGATED_ERROR}
             else:
                 filename = f"browser-evidence-tool-{sequence}.png"
                 destination = artifact_file(filename)

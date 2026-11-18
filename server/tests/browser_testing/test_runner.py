@@ -28,6 +28,30 @@ def candidate(candidate_id, row, badge, count=1):
     return RowCandidate(candidate_id, row, count, "article", f"{row}\n{badge}", (badge,))
 
 
+def targeted_status_scenario():
+    value = scenario()
+    value["targets"] = [
+        {
+            "id": target,
+            "kind": "kubernetes-pod-label",
+            "namespace": "shop",
+            "selector": f"aurora.dev/replica={target}",
+            "port": 80,
+        }
+        for target in ("retained", "restarted")
+    ]
+    value["checks"] = [
+        {
+            "id": f"{target}-items",
+            "target": target,
+            "path": "/api/items",
+            "expectedStatus": 200,
+        }
+        for target in ("retained", "restarted")
+    ]
+    return freeze_scenario(value)
+
+
 def test_browser_mismatch_is_failed_only_when_evidence_is_complete():
     candidates = {
         "a": candidate("a", "Avenue Rd", "Road closed"),
@@ -102,28 +126,7 @@ def test_missing_http_response_is_inconclusive():
 
 
 def test_targeted_replica_statuses_identify_the_failing_label():
-    value = scenario()
-    value["targets"] = [
-        {
-            "id": "retained",
-            "kind": "kubernetes-pod-label",
-            "namespace": "shop",
-            "selector": "aurora.dev/replica=retained",
-            "port": 80,
-        },
-        {
-            "id": "restarted",
-            "kind": "kubernetes-pod-label",
-            "namespace": "shop",
-            "selector": "aurora.dev/replica=restarted",
-            "port": 80,
-        },
-    ]
-    value["checks"] = [
-        {"id": "retained-items", "target": "retained", "path": "/api/items", "expectedStatus": 200},
-        {"id": "restarted-items", "target": "restarted", "path": "/api/items", "expectedStatus": 200},
-    ]
-    value = freeze_scenario(value)
+    value = targeted_status_scenario()
 
     verdict, reason, checks = compute_verdict(
         value,
@@ -159,27 +162,7 @@ def test_shared_agent_tools_cover_navigation_reading_interaction_and_evidence():
 
 
 def test_status_evidence_is_bound_to_the_frozen_target_and_path():
-    value = scenario()
-    value["targets"] = [
-        {
-            "id": "retained",
-            "kind": "kubernetes-pod-label",
-            "namespace": "shop",
-            "selector": "aurora.dev/replica=retained",
-            "port": 80,
-        },
-        {
-            "id": "restarted",
-            "kind": "kubernetes-pod-label",
-            "namespace": "shop",
-            "selector": "aurora.dev/replica=restarted",
-            "port": 80,
-        },
-    ]
-    value["checks"] = [
-        {"id": "retained-items", "target": "retained", "path": "/api/items", "expectedStatus": 200},
-        {"id": "restarted-items", "target": "restarted", "path": "/api/items", "expectedStatus": 200},
-    ]
+    value = targeted_status_scenario()
     evidence = [
         {"tool": "navigate_browser", "target": "retained", "result": {"path": "/api/items", "status": 200}},
         {"tool": "navigate_browser", "target": "restarted", "result": {"path": "/healthz", "status": 200}},

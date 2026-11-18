@@ -119,13 +119,14 @@ jobs:
           MANIFEST_PATH: ${{ inputs.start_command }}
           SCENARIO: ${{ inputs.scenario_path }}
           TIMEOUT: ${{ inputs.readiness_timeout }}
+          READINESS_PATH: ${{ inputs.readiness_path }}
         run: |
           set -euo pipefail
           [[ "$MANIFEST_PATH" =~ ^[A-Za-z0-9._/-]+\.ya?ml$ ]]
           manifest="$(realpath --canonicalize-existing "$GITHUB_WORKSPACE/app/$MANIFEST_PATH")"
           [[ "$manifest" == "$GITHUB_WORKSPACE/app/"* ]]
 
-          curl --fail --silent --show-error --location \
+          curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
             https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64 \
             --output "$RUNNER_TEMP/kind"
           echo "a6875aaea358acf0ac07786b1a6755d08fd640f4c79b7a2e46681cc13f49a04b  $RUNNER_TEMP/kind" | sha256sum --check
@@ -160,7 +161,7 @@ jobs:
           for url in $(jq -r '.[]' "$target_file"); do
             ready=false
             for ((second=0; second<TIMEOUT; second++)); do
-              if curl --fail --silent "${url%/}${{ inputs.readiness_path }}" >/dev/null; then
+              if curl --fail --silent "${url%/}${READINESS_PATH}" >/dev/null; then
                 ready=true
                 break
               fi
