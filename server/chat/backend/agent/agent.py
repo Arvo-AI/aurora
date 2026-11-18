@@ -270,7 +270,7 @@ class Agent:
         
         try:
             # Direct imports for LangChain 1.2.6+ - no fallbacks
-            from langchain.agents import create_agent
+            from .runtime import build_agent_graph
             from langchain_core.callbacks import BaseCallbackHandler
             from .tools.cloud_tools import get_cloud_tools, set_user_context, set_tool_capture
             from .middleware import BedrockPromptCacheMiddleware, ContextTrimMiddleware, _ForceToolChoice
@@ -695,7 +695,7 @@ class Agent:
             if resolve_cache_style(serving_provider, model_name) == CACHE_STYLE_BEDROCK:
                 middlewares.append(BedrockPromptCacheMiddleware())
 
-            agent_graph = create_agent(
+            agent_graph = build_agent_graph(
                 model=streaming_llm,
                 tools=tools,
                 system_prompt=system_prompt_for_agent,

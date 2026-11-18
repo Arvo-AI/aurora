@@ -1,0 +1,44 @@
+{
+  "id": "case-b",
+  "label": "Incident B",
+  "alert": "checkout-api: Timeout acquiring a database connection (timeout=3000ms). HTTP 5xx is elevated. Investigate the cause and explain what distinguishes it from other plausible causes.",
+  "provenance": "Synthetic evidence, authored for this controlled exercise. These records were not captured from a customer or a running cluster. Times and values form a consistent scenario, not a production benchmark.",
+  "evidence": [
+    {
+      "id": "b-01",
+      "title": "Alert and timeline",
+      "kind": "alert",
+      "content": "Environment: checkout-prod. Three application pods, one PostgreSQL cluster.\n13:55 release r184 and database migration 087 began; complete at 13:57.\n13:58 HTTP p95 rose from 140ms to 8200ms; 5xx rose sharply at 14:00.\n14:00 error: Timeout acquiring a database connection (timeout=3000ms).\nObservation window: 13:45-14:05 UTC. Billing database-query latency alert fired at 13:59."
+    },
+    {
+      "id": "b-02",
+      "title": "Application telemetry",
+      "kind": "metrics",
+      "content": "Per-pod averages over 5-minute windows:\nwindow,requests_per_second,pool_limit,pool_checked_out,pool_waiters,pool_acquire_p95_ms,db_query_p95_ms\n13:45,180,40,13,0,4,65\n13:50,182,40,13,0,4,66\n14:00,181,40,40,58,3000,4900\n14:05,179,40,40,62,3000,5100\nAll three pods show the same transition. Request rate has no step change. Long-running requests hold their connections until query completion; connections are returned afterward."
+    },
+    {
+      "id": "b-03",
+      "title": "Database telemetry and query-plan sample",
+      "kind": "metrics",
+      "content": "window,db_cpu_percent,active_queries,lock_waiters,billing_query_p95_ms\n13:50,26,38,0,61\n14:00,94,120,0,1400\n14:05,96,120,0,1600\nNormalized checkout query: SELECT id,status FROM orders WHERE order_number=$1\n13:50 plan: Index Scan using orders_order_number_idx; actual execution 0.9ms, rows=1.\n14:00 plan: Seq Scan on orders; actual execution 4600ms, rows=1, rows removed by filter=11999999.\nPostgreSQL max_connections=300; total sessions=190. No connection-limit errors."
+    },
+    {
+      "id": "b-04",
+      "title": "Application log excerpt",
+      "kind": "logs",
+      "content": "13:50:12 checkout-1 request=q100 acquire_ms=3 query_ms=61 release=true status=200\n13:57:02 checkout-1 revision=r184 pool_initialized max_size=40 overflow=0\n13:58:06 checkout-1 request=q201 acquire_ms=5 query_ms=4720 release=true status=200\n14:00:03 checkout-1 request=q202 error=\"Timeout acquiring a database connection\" acquire_ms=3000 query_started=false status=503\n14:00:04 checkout-2 request=q203 acquire_ms=2100 query_ms=4910 release=true status=200\n14:00:05 checkout-3 request=q204 error=\"Timeout acquiring a database connection\" acquire_ms=3000 query_started=false status=503"
+    },
+    {
+      "id": "b-05",
+      "title": "Deployment and migration changes",
+      "kind": "change",
+      "content": "checkout-api r183 -> r184 at 13:55 UTC:\nApplication pool configuration unchanged: max_pool_size=40, max_overflow=0, acquire_timeout_ms=3000.\nMigration 087 completed at 13:57:\n  DROP INDEX CONCURRENTLY IF EXISTS orders_order_number_idx;\n  CREATE INDEX CONCURRENTLY orders_created_at_idx ON orders(created_at);\nApplication database access unchanged. The checkout order lookup still filters on order_number. The table holds 12 million orders. No index on order_number remains in the post-migration catalog. Readiness probe initialDelaySeconds 15 -> 10."
+    },
+    {
+      "id": "b-06",
+      "title": "Request and connection lifecycle sample",
+      "kind": "trace",
+      "content": "checkout-1 sample of completed requests, 13:59-14:01:\nrequest,connection_id,checkout,request_finished,connection_returned\nq301,c11,13:59:00.010,13:59:04.842,13:59:04.834\nq302,c12,13:59:00.013,13:59:04.985,13:59:04.976\nq303,c13,13:59:00.020,13:59:05.094,13:59:05.085\nAll successful checkouts associated with completed requests were returned. At 14:00, 40 connections per pod are associated with still-running queries. Trace spans show time spent executing SQL, followed by a normal return to the pool."
+    }
+  ]
+}
