@@ -425,12 +425,14 @@ app.register_blueprint(org_teams_bp)
 from routes.github.github_user_repos import github_user_repos_bp
 from routes.github.github_repo_selection import github_repo_selection_bp
 from routes.github.github_webhook import github_webhook_bp
+from routes.github.github_browser_test_callback import github_browser_test_callback_bp
 from routes.github.github_app import github_app_bp
 from routes.github.github_oauth import github_oauth_bp
 from routes.github.github_signup import github_signup_bp
 app.register_blueprint(github_user_repos_bp, url_prefix="/github")
 app.register_blueprint(github_repo_selection_bp, url_prefix="/github")
 app.register_blueprint(github_webhook_bp, url_prefix="/github")
+app.register_blueprint(github_browser_test_callback_bp, url_prefix="/github")
 app.register_blueprint(github_app_bp, url_prefix="/github")
 app.register_blueprint(github_oauth_bp, url_prefix="/github")
 # Public, unauthenticated entry points: /start mints a signed state per hit and

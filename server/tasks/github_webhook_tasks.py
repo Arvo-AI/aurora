@@ -988,6 +988,11 @@ def _handle_pull_request_event(
 
     _maybe_enqueue_change_gating(payload, action, delivery_id)
 
+    # Browser testing is separately enrolled and must remain independent of
+    # generated PR reviews and incident summaries.
+    from tasks.browser_test_runs import maybe_dispatch
+    maybe_dispatch(payload, action)
+
     _update_delivery_status(delivery_id, status="processed")
 
 
