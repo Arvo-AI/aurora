@@ -1120,7 +1120,7 @@ def get_cloud_tools():
     from utils.auth.connector_access import access_for
     access = access_for(user_id)
 
-    cache_key = f"{user_id}:{capture_tag}:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}:hpa_vpa={is_hpa_vpa_action}:is_rca_ctx={is_rca_context}:pr_review={is_pr_review}:action_id={_action_id}:incident={_incident_id}:mcp={mcp_fingerprint(user_id)}:access={access.revision()}...:rabbitmq={int(rabbitmq_connected)}:evidence={int(_has_chat_evidence)}"
+    cache_key = f"{user_id}:{capture_tag}:{mode_suffix}:background={is_background}:rca={rca_flag}:postmortem={is_postmortem_action}:hpa_vpa={is_hpa_vpa_action}:is_rca_ctx={is_rca_context}:pr_review={is_pr_review}:action_id={_action_id}:incident={_incident_id}:mcp={mcp_fingerprint(user_id)}:access={access.revision()}:rabbitmq={int(rabbitmq_connected)}:evidence={int(_has_chat_evidence)}"
     
     current_time = time.time()
     if (
