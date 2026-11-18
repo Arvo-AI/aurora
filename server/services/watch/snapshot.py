@@ -42,7 +42,9 @@ _SECRET_FLAG = re.compile(rf"^{_FLAG}$", re.I)
 _SECRET_FLAG_VALUE = re.compile(rf"(?<![\w-])({_FLAG})(=|\s+)(?!<redacted|-)(\S+)", re.I)
 # Query parameters, matched in linear time; a credential-named one is masked:
 # /-/ready?token=x, ?access_token=x, &sig=x.
-_QUERY_PARAM = re.compile(r"([?&])([^=&#\s?]{1,200})=([^&#\s]+)")
+# A value runs through a "?" unless that "?" starts another name= (?next=/x?password=y),
+# which is then matched on its own; a credential holding a "?" is still masked whole.
+_QUERY_PARAM = re.compile(r"([?&])([^=&#\s?]{1,200})=((?:[^&#\s?]|\?(?![^=&#\s?]{1,200}=))+)")
 _CREDENTIAL_WORD = re.compile(r"token|key|pass|secret|auth|sig", re.I)
 # Masked values keep a digest keyed by a server secret, so a rotated password still
 # shows as a change while neither the value nor a hash that could be checked against
@@ -416,6 +418,9 @@ def build_snapshot(raw: dict[str, Any], taken_at: float) -> dict[str, Any]:
                 "converging": bool(converging) and not held,
                 "held": held,
                 "max_unavailable": max_unavailable,
+                # Pods a StatefulSet's partition keeps on the old revision.
+                "partition": (_pods_of(((spec.get("updateStrategy") or {}).get("rollingUpdate") or {})
+                                       .get("partition"), int(desired), False) or 0) if kind == "StatefulSet" else 0,
                 # How long Kubernetes itself lets this rollout go without progress.
                 "progress_deadline": spec.get("progressDeadlineSeconds") if kind == "Deployment" else None,
                 "last_write": _last_write(meta),

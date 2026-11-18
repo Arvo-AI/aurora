@@ -181,11 +181,15 @@ def _collect_scope(run: Runner, scope: str, blind: dict[str, str], budget: dict[
         try:
             raw.update(_split_list(_read(run, f"get {','.join(group)} {scope} -o json", budget), group))
             continue
-        except (CommandBlocked, StateTooLarge):
+        except CommandBlocked:
             raise
+        except StateTooLarge as exc:
+            # One response too big for several kinds: read them one at a time. A single
+            # kind still too big, or the poll's budget spent, ends the poll.
+            if len(group) == 1 or str(exc) != _TOO_LARGE:
+                raise
+            logger.info("[AuroraWatch] get %s is over one response; reading kinds one by one", ",".join(group))
         except (KubectlError, ValueError) as exc:
-            if isinstance(exc, _NotJson):
-                budget["left"] += exc.size  # read again kind by kind below: counted once
             logger.info("[AuroraWatch] get %s failed (%s); reading kinds one by one", ",".join(group),
                         type(exc).__name__)
         for resource in group:

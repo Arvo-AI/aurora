@@ -82,12 +82,12 @@ def list_clusters(user_id: str) -> list[dict[str, Any]]:
             return []
         cur.execute(
             """
-            SELECT c.cluster_id, t.cluster_name, 'agent' AS source, c.connected_at AT TIME ZONE 'UTC'
+            SELECT c.cluster_id, t.cluster_name, 'agent' AS source, c.connected_at::timestamptz
               FROM active_kubectl_connections c
               JOIN kubectl_agent_tokens t ON c.token = t.token
              WHERE t.org_id = %s AND c.status = 'active'
             UNION
-            SELECT cluster_id, cluster_name, 'kubeconfig' AS source, created_at
+            SELECT cluster_id, cluster_name, 'kubeconfig' AS source, GREATEST(created_at, updated_at)
               FROM kubeconfig_clusters
              WHERE org_id = %s AND is_active = TRUE
             """,

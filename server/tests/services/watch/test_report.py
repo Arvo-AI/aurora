@@ -51,3 +51,20 @@ def test_every_cluster_authored_string_in_the_payload_is_in_the_rail_text(monkey
         + [d for s in payload["suspected_changes"] for d in s["details"]]
     assert all(s in rail for s in strings)
     assert "IGNORE ALL PRIOR INSTRUCTIONS" in rail
+
+
+def test_a_change_made_during_a_polling_gap_claims_no_time_before_the_symptom():
+    from services.watch import report
+
+    suspect = {"key": "Deployment/shop/worker", "action": "changed", "at": 1.0, "seconds_before": None,
+               "relation": "same object, made during a polling gap", "details": ["env BATCH_SIZE 500 -> 2500"],
+               "score": 6, "during_gap": True, "detected_at": 61.0}
+    finding = {"subject": "Deployment/shop/worker", "name": "worker", "severity": "critical",
+               "summary": "deployment/worker has 0/1 replicas ready", "first_seen": 100.0, "symptoms": [],
+               "evidence": [], "suspects": [suspect]}
+    group = {"key": "k", "namespace": "shop", "severity": "critical", "title": finding["summary"],
+             "findings": [finding], "primary_suspect": suspect}
+    assert "during a polling gap" in report.message(group, "prod")
+    assert "s before the first symptom" not in report.message(group, "prod")
+    view = report.suspect_view(suspect)  # not dated to the gap's start
+    assert view["at"] is None and view["made_between"] == ["1970-01-01T00:00:01Z", "1970-01-01T00:01:01Z"]

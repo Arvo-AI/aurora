@@ -214,3 +214,13 @@ def test_query_parameters_are_masked_in_linear_time():
     assert time.perf_counter() - start < 2
     assert "hunter2" not in snapshot_mod._clean("/-/ready?token=hunter2&verbose=1")
     assert snapshot_mod._clean("/items?page=2&sort=name") == "/items?page=2&sort=name"
+
+
+def test_a_credential_after_a_nested_query_string_is_masked():
+    for text in ("/login?next=/orders?password=Winter2026", "/ready?x=1?sig=Winter2026",
+                 "/probe?module=http_2xx&target=http://api:8080/health?token=Winter2026"):
+        assert "Winter2026" not in snapshot_mod._clean(text, digest=False), text
+    # A credential that holds a "?" is masked whole, and other parameters are kept.
+    masked = snapshot_mod._clean("/-/ready?password=Ab?12345&verbose=1", digest=False)
+    assert "12345" not in masked and masked.endswith("&verbose=1")
+    assert snapshot_mod._clean("/search?q=what?&lang=en", digest=False) == "/search?q=what?&lang=en"

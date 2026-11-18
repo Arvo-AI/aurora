@@ -34,10 +34,20 @@ def test_an_incident_leads_with_the_newest_suspects_only_when_its_own_finding_is
     assert [s["object"] for s in joined["suspected_changes"]][0] == "Deployment/shop/a0"
     assert joined["message"] == "redis down"
     # The incident's own finding, worse and blamed on a newer change: that change leads.
-    reblamed = _merge_payload(old, {"findings": [{"subject": "Deployment/shop/redis"}], "severity": "critical",
-                                    "message": "redis 0/1", "first_seen": "t2", "suspected_changes": [newer_cause]})
+    reblamed = _merge_payload(old, {"findings": [{"subject": "Deployment/shop/redis", "blamed_at": "t2"}],
+                                    "severity": "critical", "message": "redis 0/1", "first_seen": "t2",
+                                    "suspected_changes": [newer_cause]})
     assert [s["object"] for s in reblamed["suspected_changes"]][0] == "Deployment/shop/b"
     assert (reblamed["message"], reblamed["severity"]) == ("redis down", "critical")
+    # A finding it has, re-sent only because it got worse (not blamed again): the order stays.
+    worse = _merge_payload(joined, {"findings": [{"subject": "Deployment/shop/api"}], "severity": "critical",
+                                    "message": "api 0/2", "first_seen": "t3", "suspected_changes": [newer_cause]})
+    assert [s["object"] for s in worse["suspected_changes"]][0] == "Deployment/shop/a0"
+    # Re-sent again with the same blame: still the same lead.
+    again = _merge_payload(reblamed, {"findings": [{"subject": "Deployment/shop/redis", "blamed_at": "t2"}],
+                                      "severity": "critical", "message": "redis 0/1", "first_seen": "t4",
+                                      "suspected_changes": [{"object": "Deployment/shop/c", "at": "t4"}]})
+    assert [s["object"] for s in again["suspected_changes"]][0] == "Deployment/shop/b"
 
 
 def test_a_state_digested_with_another_key_is_learned_again():

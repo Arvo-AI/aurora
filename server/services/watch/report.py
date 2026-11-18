@@ -49,7 +49,7 @@ def incident_service(group: dict[str, Any]) -> str:
 
 
 def suspect_view(suspect: dict[str, Any]) -> dict[str, Any]:
-    return {
+    view = {
         "object": suspect["key"],
         "action": suspect.get("action"),
         "at": _iso(suspect.get("at")),
@@ -57,6 +57,11 @@ def suspect_view(suspect: dict[str, Any]) -> dict[str, Any]:
         "relation": suspect.get("relation"),
         "details": [_clip(d) for d in (suspect.get("details") or [])[:MAX_DETAILS]],
     }
+    if suspect.get("during_gap"):
+        # Made while polling had stopped: when is unknown, so give the window, not its start.
+        view["at"] = None
+        view["made_between"] = [_iso(suspect.get("at")), _iso(suspect.get("detected_at"))]
+    return view
 
 
 def finding_view(finding: dict[str, Any]) -> dict[str, Any]:
@@ -65,6 +70,8 @@ def finding_view(finding: dict[str, Any]) -> dict[str, Any]:
         "severity": finding["severity"],
         "summary": finding["summary"],
         "first_seen": _iso(finding.get("first_seen")),
+        # When the detector last blamed this finding: a later value means it was blamed again.
+        "blamed_at": _iso(finding.get("blamed_at")),
         "signals": sorted({s["kind"] for s in finding.get("symptoms", [])}),
         "evidence": [_clip(e) for e in (finding.get("evidence") or [])[:MAX_EVIDENCE]],
     }
@@ -92,7 +99,8 @@ def message(group: dict[str, Any], cluster_name: str) -> str:
     suspects = _suspects(group)
     if suspects:
         s = suspects[0]
-        when = f"{s.get('seconds_before')}s before the first symptom" if s.get("seconds_before") is not None else ""
+        when = (f"{s.get('seconds_before')}s before the first symptom" if s.get("seconds_before") is not None
+                else "during a polling gap" if s.get("during_gap") else "")
         detail = "; ".join(s.get("details") or [])[:200]
         lines.append(f"Suspected change: {s['key']} {s.get('action')} {when}: {detail}".strip())
     else:

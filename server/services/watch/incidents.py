@@ -43,14 +43,18 @@ def _merge_payload(existing: dict[str, Any] | None, new: dict[str, Any]) -> dict
         return new
     merged = dict(existing)
     newer = {f.get("subject"): f for f in new.get("findings") or []}
-    known = {f.get("subject") for f in existing.get("findings") or []}
+    known = {f.get("subject"): f for f in existing.get("findings") or []}
     kept = [newer.pop(f.get("subject"), f) for f in existing.get("findings") or []]
     merged["findings"] = (kept + list(newer.values()))[: report.MAX_FINDINGS]
 
     def ident(s: dict[str, Any]) -> tuple:
         return s.get("object"), s.get("at")
 
-    reblamed = any(f.get("subject") in known for f in new.get("findings") or [])
+    # Blamed again: the detector moved the blame of a finding the incident has since its
+    # copy here. One re-sent only because it got worse keeps the incident's order.
+    reblamed = any(f.get("blamed_at") and f.get("subject") in known
+                   and f["blamed_at"] != known[f.get("subject")].get("blamed_at")
+                   for f in new.get("findings") or [])
     first, then = (new, existing) if reblamed else (existing, new)
     suspects, seen = [], set()
     for s in (first.get("suspected_changes") or []) + (then.get("suspected_changes") or []):

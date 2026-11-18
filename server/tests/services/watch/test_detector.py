@@ -536,6 +536,47 @@ class TestLogs:
                      "connect to checkout-service-v2-canary refused", "payments-6c5d4f7b8c-a1b2c"):
             assert _mask_secrets(kept) == kept
 
+    def test_ids_are_masked_but_names_are_not(self):
+        from services.watch.detector import _mask_secrets
+
+        for request_id in ("ckx7q2m9a0001ab3cd4ef5gh", "job_01hq3k8x9yz2w4v6t8r0p2n4m6", "sess-k3j4h5g6f7d8s9a0q1w2"):
+            assert "<token>" in _mask_secrets(f"ERROR job {request_id} attempt 2 failed"), request_id
+        for name in ("checkout-service-v2-canary", "payments-6c5d4f7b8c-a1b2c", "connection-timeout-after-30000ms"):
+            assert _mask_secrets(f"connect to {name} refused") == f"connect to {name} refused"
+
+    def test_a_chronic_error_naming_a_new_id_each_time_is_not_new(self):
+        # A worker retries failing jobs and logs each job's id; that was its normal while
+        # learning, so new ids after learning are not new errors.
+        import hashlib
+        import itertools
+
+        c = shop()
+        state = new_state()
+        alphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
+        ids = ("c" + "".join(alphabet[b % 36] for b in hashlib.sha256(str(n).encode()).digest()[:24])
+               for n in itertools.count())  # cuid-like: letters and digits vary per id
+        def logs():
+            out = healthy_logs()
+            out["Deployment/shop/worker"] = [f"ERROR job {next(ids)} attempt {a} failed: timeout" for a in (1, 2)] * 2
+            return out
+        for _ in range(LEARN):
+            poll(c, state, logs())
+        found = []
+        for _ in range(6):
+            found += poll(c, state, logs())
+        assert found == []
+
+    def test_the_line_mask_takes_values_with_spaces_escaped_json_and_query_credentials(self):
+        from services.watch.detector import _mask_secrets
+
+        pw = "correct horse " + "battery staple"  # synthetic
+        assert "horse" not in _mask_secrets('{"user":"svc","passphrase":"' + pw + '"}')
+        assert "horse" not in _mask_secrets('err="bad body {\\"password\\":\\"' + pw + '\\"}"')
+        for url in ("GET /sync?sig=Zk3pQ9vXm2L7&se=2026", "GET /db?pass=hunter2", "GET /x?auth=AIzaSyA123"):
+            masked = _mask_secrets(url)
+            assert "hunter2" not in masked and "Zk3pQ9" not in masked and "AIzaSyA" not in masked, url
+        assert _mask_secrets("token: expired") == "token: expired"  # prose keeps its word
+
     def test_samples_quoted_as_evidence_go_through_the_full_secret_rules(self):
         c = shop()
         state = learned(c)
@@ -547,16 +588,16 @@ class TestLogs:
         evidence = " ".join(found["Deployment/shop/api"]["evidence"])
         assert "hunter2" not in evidence and "q83Xa2" not in evidence
 
-
+    def test_hostile_log_lines_cost_little(self):
         # A client can make every access-log line 4 KB of keyword soup; a poll must not
         # spend a minute on it.
         import time
 
-        line = ('10.0.0.1 - - [17/Nov/2026:21:44:51 +0000] "GET / HTTP/1.1" 200 38 "-" "'
-                + "key" * 1300 + '"')
-        start = time.perf_counter()
-        template_counts([line] * 640)
-        assert time.perf_counter() - start < 3
+        prefix = '10.0.0.1 - - [17/Nov/2026:21:44:51 +0000] "GET / HTTP/1.1" 200 38 "-" "'
+        for soup in ("key" * 1300, "a." * 1950, "a-b." * 975, "password=" * 440):
+            start = time.perf_counter()
+            template_counts([prefix + soup + '"'] * 640)
+            assert time.perf_counter() - start < 3, soup[:12]
 
 
 class TestEvents:
@@ -717,6 +758,23 @@ class TestLifecycle:
         assert finding["suspects"][0]["key"] == "NetworkPolicy/shop/lockdown"
         assert finding["incident_key"] != first_key and "incident_id" not in finding
 
+    def test_a_scale_up_after_an_outage_began_is_not_a_newer_cause(self):
+        # An HPA (or a person) scaling up in response is not what broke it.
+        c = shop()
+        state = learned(c)
+        c.configmap("api-code", {"api.py": "raise SystemExit(1)", "worker.py": "print('worker')"})
+        c.replace_pod("api")
+        c.scale("api", 2, unready=1)
+        run(c, state, 3)
+        finding = state["open"]["Deployment/shop/api"]
+        finding["incident_id"], key = "I1", finding["incident_key"]
+        run(c, state, 12)
+        c.scale("api", 3, unready=1)  # scaled up
+        logs = healthy_logs()
+        logs["Deployment/shop/api"] = ["upstream timed out while connecting to upstream"] * 3
+        run(c, state, 3, logs)
+        assert finding["incident_key"] == key
+
     def test_a_deploy_made_during_a_gap_longer_than_the_change_window_is_still_the_suspect(self):
         c = shop()
         state = learned(c)
@@ -727,7 +785,7 @@ class TestLifecycle:
         f = by_subject(run(c, state, 4))["Deployment/shop/worker"]
         assert f["suspects"][0]["details"] == ["container worker: env BATCH_SIZE 500 -> 2500"]
 
-
+    def test_a_deploy_made_during_a_polling_gap_is_still_the_suspect(self):
         c = shop()
         state = learned(c)
         run(c, state, 3)

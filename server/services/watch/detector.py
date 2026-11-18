@@ -44,7 +44,7 @@ from typing import Any
 
 from services.watch.changes import detect_changes
 from services.watch.logs import normalize
-from services.watch.snapshot import BAD_WAITING, DIGEST_ID, TRACKED_OBJECTS
+from services.watch.snapshot import _QUERY_PARAM, BAD_WAITING, DIGEST_ID, TRACKED_OBJECTS, _mask_query
 from utils.security.output_redaction import redact
 
 SEVERITY_RANK = {"low": 1, "medium": 2, "high": 3, "critical": 4}
@@ -212,17 +212,23 @@ def _event_deltas(state: dict[str, Any], snapshot: dict[str, Any]) -> list[dict[
     return out
 
 
-# Before templating, in linear time on every line: tokens (a long run mixing upper and
-# lower case and digits, as keys, JWT segments and PATs do, but not lowercase names
-# like checkout-service-v2 or a pod name), the value of a credential-shaped pair
-# (password=..., "api_key": "...", logfmt or JSON, quoted or not), and the credential
-# after an Authorization header. The full secret rules run where text is kept or
-# quoted: a template the baseline stores, a finding's evidence and held lines.
+# Before templating, in linear time on every line: tokens and ids (a long run mixing
+# upper and lower case and digits, as keys, JWT segments and PATs do, or a lowercase
+# run with one long segment mixing letters and digits, as cuid and session ids do;
+# not names like checkout-service-v2 or a pod name), the value of a credential-shaped
+# pair (password=..., "api_key": "...", logfmt or JSON, quoted with spaces or escaped
+# inside a string), credential query parameters (?sig=..., ?pass=...), and the
+# credential after an Authorization header. The full secret rules run where text is
+# kept or quoted: a template the baseline stores, a finding's evidence, held lines.
 _TOKEN_RUN = re.compile(r"[A-Za-z0-9+_=-]{20,}")
+_CREDENTIAL_KEY = (r"(?:password|passwd|pass|pwd|passphrase|secret|token|api[_-]?key|apikey|access[_-]?key|"
+                   r"private[_-]?key|auth[_-]?(?:token|key)|session[_-]?(?:id|token|key)|signature)")
+# Anchored on the keyword (no scan before it): key, its closing quote (escaped or not),
+# the separator, then a double-quoted value (escaped or not), a single-quoted one, or a
+# bare one that stops at a delimiter.
 _CREDENTIAL_PAIR = re.compile(
-    r"(?i)\b([\w.-]{0,30}?(?:password|passwd|pwd|passphrase|secret|token|api[_-]?key|apikey|access[_-]?key|"
-    r"private[_-]?key|auth[_-]?(?:token|key)|session[_-]?(?:id|token|key)|signature|credentials?)"
-    r"[\"']?[ \t]*[=:][ \t]*[\"']?)[^\s&\"',;|)\]}>]+")
+    rf"(?i)({_CREDENTIAL_KEY}\\?[\"']?[ \t]*([=:])[ \t]*)"
+    r"(?:(\\?\")((?:[^\"\\]|\\(?!\"))*)|(')([^']*)|([^\s&\"',;|)\]}>\\]+))")
 _AUTH_HEADER = re.compile(r"(?i)\b(authorization[\"']?[ \t]*[=:][ \t]*[\"']?(?:bearer|basic|token)[ \t]+)[^\s\"',;|)\]}>]+")
 
 
@@ -231,12 +237,26 @@ def _looks_like_token(run: str) -> bool:
     has_upper = any(c.isupper() for c in run)
     has_lower = any(c.islower() for c in run)
     return has_digit and (has_upper and has_lower or has_upper and len(run) >= 20 and not has_lower
-                          or len(run) >= 32 and "-" not in run and "_" not in run)
+                          or any(len(s) >= 16 and any(c.isdigit() for c in s) and any(c.isalpha() for c in s)
+                                 for s in re.split(r"[-_]", run)))
+
+
+def _mask_pair(m: re.Match) -> str:
+    prefix, separator, dquote, _, squote, _, bare = m.groups()
+    if dquote is not None:
+        return f"{prefix}{dquote}<redacted>"
+    if squote is not None:
+        return f"{prefix}'<redacted>"
+    # Prose ("token: expired", "pass: ok") keeps its word unless it looks like a secret.
+    if separator == ":" and not any(c.isdigit() for c in bare) and len(bare) < 12:
+        return m.group(0)
+    return f"{prefix}<redacted>"
 
 
 def _mask_secrets(line: str) -> str:
     masked = _TOKEN_RUN.sub(lambda m: "<token>" if _looks_like_token(m.group(0)) else m.group(0), line)
-    return _AUTH_HEADER.sub(r"\1<redacted>", _CREDENTIAL_PAIR.sub(r"\1<redacted>", masked))
+    masked = _QUERY_PARAM.sub(lambda m: _mask_query(m, lambda _: "<redacted>"), masked)
+    return _AUTH_HEADER.sub(r"\1<redacted>", _CREDENTIAL_PAIR.sub(_mask_pair, masked))
 
 
 def template_counts(lines: list[str]) -> dict[str, dict[str, Any]]:
@@ -615,17 +635,27 @@ def _rollout_stalled_for(state: dict[str, Any], key: str, w: dict[str, Any], now
     rollouts = state.setdefault("rollouts", {})
     entry = rollouts.get(key)
     converging = w.get("converging", w["updated"] < w["desired"])
-    if w.get("held"):
+    partition = w.get("partition") or 0
+    if (w.get("held") or partition) and w.get("observed_generation") == w.get("generation"):
         # Its revisions may never converge on their own (OnDelete, a partition), so it
         # is in flight only while it moves pods to the new revision: a new generation,
         # or more pods updated than at any poll of this generation. A deleted pod that
-        # comes back is not progress; at rest, a fault in it is reported at once.
+        # comes back is not progress; at rest, a fault in it is reported at once. The
+        # mark is written only once the status describes this generation, drops when
+        # pods leave (nodes gone from a DaemonSet), and a partitioned set that reached its
+        # partition stays held for the generation, even while its canary pod is replaced.
         marks = state.setdefault("held_updated", {})
         before = ((state.get("prev") or {}).get("workloads") or {}).get(key) or {}
         seen = marks.get(key) or [before.get("generation"), before.get("updated", w["updated"])]
         new_generation = w.get("generation") != seen[0]
-        converging = new_generation or w["updated"] > seen[1]
-        marks[key] = [w.get("generation"), w["updated"] if new_generation else max(seen[1], w["updated"])]
+        mark = w["updated"] if new_generation else max(seen[1], w["updated"])
+        if before.get("desired") is not None and w["desired"] < before["desired"]:
+            mark = min(mark, w["updated"])
+        mark = min(mark, w["desired"])
+        if w.get("held") or mark >= w["desired"] - partition:
+            w["held"] = True
+            converging = new_generation or w["updated"] > seen[1]
+        marks[key] = [w.get("generation"), mark]
     # Once under way, a rollout stays in flight until every replica is ready: the
     # last new pod counts as "updated" as soon as it is scheduled (DaemonSets).
     in_flight = w.get("observed_generation") == w.get("generation") and (
@@ -723,6 +753,12 @@ def reapplies_only(change: dict[str, Any]) -> bool:
     details = change.get("details") or []
     return (change.get("action") == "changed" and bool(details)
             and all(d.startswith("rollout restart requested") for d in details))
+
+
+def _scale_only(change: dict[str, Any]) -> bool:
+    """A change of replica count and nothing else."""
+    details = change.get("details") or []
+    return bool(details) and all(d.startswith("replicas ") for d in details)
 
 
 def _relation(finding: dict[str, Any], change: dict[str, Any], snapshot: dict[str, Any]) -> tuple[int, str]:
@@ -832,6 +868,12 @@ def attribute(finding: dict[str, Any], changes: list[dict[str, Any]], snapshot: 
                 took_effect = max(applied)
         since = finding["first_seen"] - took_effect
         recency = 2 if since <= 180 else 1 if since <= 900 else 0
+        seconds_before: int | None = round(gap)
+        if change.get("during_gap"):
+            # Made sometime during a polling gap: when exactly is unknown, so it is neither
+            # recent nor old, and no time before the symptom is claimed for it.
+            recency, seconds_before = 1, None
+            why += ", made during a polling gap"
         # The error names the object ("exceeded quota: compute-resources"). Not for
         # workloads: their names are in every pod name.
         named = (change["kind"] in _NAMEABLE_KINDS and len(change["name"]) >= 4
@@ -839,9 +881,9 @@ def attribute(finding: dict[str, Any], changes: list[dict[str, Any]], snapshot: 
         if named:
             why += ", named in the error"
         ranked.append({**change, "score": weight + recency + (2 if named else 0), "relation": why,
-                       "seconds_before": round(gap)})
+                       "seconds_before": seconds_before})
     # On a tie, what the pods picked up ranks above the restart that made them pick it up.
-    ranked.sort(key=lambda r: (-r["score"], reapplies_only(r), abs(r["seconds_before"])))
+    ranked.sort(key=lambda r: (-r["score"], reapplies_only(r), abs(r["seconds_before"] or 0)))
     return ranked[:3]
 
 
@@ -962,9 +1004,13 @@ def step(state: dict[str, Any], snapshot: dict[str, Any], logs: dict[str, list[s
                 # blamed among only moves them between recency buckets: never a newer cause.
                 fresh = attribute({**existing, "first_seen": now}, state["changes"], snapshot, cfg)
                 old, new = primary_suspect(existing), primary_suspect({"suspects": fresh})
-                if (new is not None and not reapplies_only(new)
+                # A newer cause must rank at least as high as the old one did when it was
+                # blamed (not as the old one decays with time), and is never routine: a
+                # restart, a replaced pod, or a scale (an HPA answering the outage).
+                if (new is not None and not reapplies_only(new) and not _scale_only(new)
                         and new.get("detected_at", new["at"]) > existing.get("blamed_at", existing["first_seen"])
-                        and (old is None or (new["key"], new["at"]) != (old["key"], old["at"]))):
+                        and (old is None or ((new["key"], new["at"]) != (old["key"], old["at"])
+                                             and new["score"] >= old["score"]))):
                     existing["suspects"] = fresh
                     existing["blamed_at"] = now
                     existing.pop("incident_key", None)

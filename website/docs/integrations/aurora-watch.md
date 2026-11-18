@@ -35,8 +35,9 @@ and Services created later get the same five-minute learning window of their own
 
 Normal operations are not regressions: a rolling update that progresses and takes no
 more pods down than its `maxUnavailable` allows, a paused, `OnDelete` or partitioned
-rollout, a scale-up waiting on new pods, a scale to zero, a pod Pending while the
-cluster autoscaler adds a node, a single bad poll.
+rollout (a pod it loses and cannot replace is still a regression), a scale-up waiting
+on new pods, a scale to zero, a pod Pending while the cluster autoscaler adds a node,
+a single bad poll.
 
 A finding must be seen in two polls. **High** and **critical** findings open an
 incident; low and medium ones stay notices on the Kubernetes page and are reported
@@ -53,8 +54,10 @@ replaced pods. Each finding ranks them by how the changed object relates to the
 failing one (the same object, a ConfigMap it mounts, the Service in front of it, a
 dependency named in its environment, a NetworkPolicy selecting its pods) and how
 close in time the change was. A rollout restart or a replaced pod changes nothing by
-itself, so a ConfigMap edit that it put into effect ranks above it. The incident's
-investigation starts by confirming or refuting the top suspect.
+itself, so a ConfigMap edit that it put into effect ranks above it. A change made
+while polling had stopped (the cluster unreachable, Aurora's workers busy) is still a
+suspect; the incident says it was made during that gap instead of guessing when. The
+incident's investigation starts by confirming or refuting the top suspect.
 
 Findings that blame the same change, or two closely related objects, become one
 incident: a Service with no endpoints and the clients timing out on it are one

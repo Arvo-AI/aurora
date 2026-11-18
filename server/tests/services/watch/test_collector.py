@@ -237,3 +237,16 @@ def test_one_big_namespace_in_the_allowlist_is_read_in_smaller_groups():
 
     raw, _ = collect_state(run, ["shop"])
     assert len(raw["deployments"]["items"]) == 5
+
+
+def test_a_group_over_one_response_is_read_kind_by_kind():
+    c = shop()
+
+    def run(command, timeout):
+        kinds = command.split()[1].split(",")
+        if len(kinds) > 1:
+            raise KubectlError("output too large (9000000 bytes); narrow the command, e.g. with -n <namespace>")
+        return c.kubectl_get(command)
+
+    raw, blind = collect_state(run)
+    assert len(raw["deployments"]["items"]) == 5 and blind == []
