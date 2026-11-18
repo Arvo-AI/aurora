@@ -1,0 +1,169 @@
+name: Aurora managed browser test
+
+run-name: aurora-browser-${{ inputs.run_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id: { required: true, type: string }
+      callback_token: { required: true, type: string }
+      callback_url: { required: true, type: string }
+      source_repo: { required: true, type: string }
+      pr_number: { required: true, type: string }
+      head_sha: { required: true, type: string }
+      install_command: { required: true, type: string }
+      start_command: { required: true, type: string }
+      preview_port: { required: true, type: string }
+      readiness_path: { required: true, type: string }
+      readiness_timeout: { required: true, type: string }
+      scenario_path: { required: true, type: string }
+      scenario_hash: { required: true, type: string }
+      model: { required: true, type: string }
+      aurora_repo: { required: true, type: string }
+      aurora_ref: { required: true, type: string }
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aurora-browser-${{ inputs.source_repo }}-${{ inputs.pr_number }}-${{ inputs.scenario_hash }}
+  cancel-in-progress: true
+
+jobs:
+  browser-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out exact customer PR commit
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.source_repo }}
+          ref: ${{ inputs.head_sha }}
+          path: app
+          persist-credentials: false
+
+      - name: Check out pinned Aurora runner
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.aurora_repo }}
+          ref: ${{ inputs.aurora_ref }}
+          path: aurora
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify exact commit
+        working-directory: app
+        env:
+          EXPECTED_SHA: ${{ inputs.head_sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - name: Install app and browser dependencies
+        env:
+          INSTALL_COMMAND: ${{ inputs.install_command }}
+        run: |
+          cd app
+          bash -lc "$INSTALL_COMMAND"
+          python -m pip install -r ../aurora/server/browser_testing/requirements-ci.txt
+          python -m playwright install chromium
+
+      - name: Start customer app without agent credentials
+        env:
+          START_COMMAND: ${{ inputs.start_command }}
+        run: |
+          cd app
+          nohup bash -lc "$START_COMMAND" >"$RUNNER_TEMP/app.log" 2>&1 &
+          echo "$!" >"$RUNNER_TEMP/app.pid"
+
+      - name: Wait for preview
+        env:
+          PORT: ${{ inputs.preview_port }}
+          PATH_PART: ${{ inputs.readiness_path }}
+          TIMEOUT: ${{ inputs.readiness_timeout }}
+        run: |
+          for ((second=0; second<TIMEOUT; second++)); do
+            curl --fail --silent "http://127.0.0.1:${PORT}${PATH_PART}" >/dev/null && exit 0
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/app.log"
+          exit 1
+
+      - name: Collect browser evidence
+        id: browser
+        continue-on-error: true
+        working-directory: aurora/server
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+          PORT: ${{ inputs.preview_port }}
+          SCENARIO: ${{ inputs.scenario_path }}
+          MODEL: ${{ inputs.model }}
+        run: |
+          python -m browser_testing run \
+            --scenario "$SCENARIO" \
+            --preview-url "http://127.0.0.1:${PORT}/" \
+            --commit "$HEAD_SHA" \
+            --output-dir "$GITHUB_WORKSPACE/evidence" \
+            --model "$MODEL"
+
+      - name: Ensure a result exists
+        if: always()
+        env:
+          HEAD_SHA: ${{ inputs.head_sha }}
+          SCENARIO_HASH: ${{ inputs.scenario_hash }}
+        run: |
+          mkdir -p evidence
+          if [[ ! -f evidence/browser-result.json ]]; then
+            jq -n --arg sha "$HEAD_SHA" --arg hash "$SCENARIO_HASH" \
+              '{schemaVersion:1,testedCommit:$sha,scenarioHash:$hash,verdict:"inconclusive",reason:"The fresh VM did not complete the browser runner.",checks:[],screenshot:null}' \
+              > evidence/browser-result.json
+          fi
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aurora-browser-result-${{ inputs.run_id }}
+          path: evidence/
+          retention-days: 14
+
+      - name: Return result to Aurora
+        if: always()
+        env:
+          CALLBACK_URL: ${{ inputs.callback_url }}
+          CALLBACK_TOKEN: ${{ inputs.callback_token }}
+          RUN_ID: ${{ inputs.run_id }}
+          WORKFLOW_RUN_ID: ${{ github.run_id }}
+          WORKFLOW_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python - <<'PY'
+          import json, os, urllib.request
+          with open("evidence/browser-result.json", encoding="utf-8") as handle:
+              result = json.load(handle)
+          body = json.dumps({
+              "run_id": os.environ["RUN_ID"],
+              "workflow_run_id": int(os.environ["WORKFLOW_RUN_ID"]),
+              "workflow_url": os.environ["WORKFLOW_URL"],
+              "result": result,
+          }).encode()
+          request = urllib.request.Request(
+              os.environ["CALLBACK_URL"], data=body, method="POST",
+              headers={"Authorization": "Bearer " + os.environ["CALLBACK_TOKEN"], "Content-Type": "application/json"},
+          )
+          with urllib.request.urlopen(request, timeout=30) as response:
+              if response.status != 200:
+                  raise RuntimeError(f"Aurora callback returned {response.status}")
+          PY
+
+      - name: Set final job status
+        if: always()
+        run: |
+          verdict="$(jq -r .verdict evidence/browser-result.json)"
+          [[ "$verdict" == "passed" ]] || exit 1
+
+      - name: Stop preview
+        if: always()
+        run: |
+          [[ -f "$RUNNER_TEMP/app.pid" ]] && kill "$(cat "$RUNNER_TEMP/app.pid")" 2>/dev/null || true
