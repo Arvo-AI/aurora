@@ -277,7 +277,6 @@ export default function ChatClient({ initialSessionId, shouldStartNewChat, initi
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Upload failed');
       setEvidenceFiles(prev => [...prev, ...data.files]);
-      setRcaActive(true);
     } catch (e) {
       toast({ description: e instanceof Error ? e.message : 'Upload failed', variant: 'destructive' });
     } finally {
