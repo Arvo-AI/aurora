@@ -22,6 +22,12 @@ RUNNER_VERSION = "1"
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 CHECK_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+NAMESPACE_RE = re.compile(r"^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$")
+LABEL_SELECTOR_RE = re.compile(
+    r"^[A-Za-z0-9](?:[-A-Za-z0-9_.]{0,62}[A-Za-z0-9])?"
+    r"(?:/[A-Za-z0-9](?:[-A-Za-z0-9_.]{0,62}[A-Za-z0-9])?)?="
+    r"[A-Za-z0-9](?:[-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$"
+)
 
 
 class ScenarioError(ValueError):
@@ -64,14 +70,15 @@ def _normalize_baseline(value: Any) -> str:
 
 
 def _normalize_check(
-    check: Any, index: int, seen_ids: set[str]
+    check: Any, index: int, seen_ids: set[str], target_ids: set[str]
 ) -> dict[str, Any]:
     if not isinstance(check, dict):
         raise ScenarioError(f"checks[{index}] has unsupported fields")
     fields = set(check)
     badge_fields = {"id", "rowText", "expectedBadge"}
     status_fields = {"id", "path", "expectedStatus"}
-    if fields != badge_fields and fields != status_fields:
+    targeted_status_fields = status_fields | {"target"}
+    if fields not in (badge_fields, status_fields, targeted_status_fields):
         raise ScenarioError(f"checks[{index}] has unsupported fields")
     check_id = _text(check["id"], f"checks[{index}].id", 64)
     if not CHECK_ID_RE.fullmatch(check_id) or check_id in seen_ids:
@@ -96,21 +103,64 @@ def _normalize_check(
         raise ScenarioError(f"checks[{index}].expectedStatus must be an HTTP status")
     if not 100 <= expected_status <= 599:
         raise ScenarioError(f"checks[{index}].expectedStatus must be an HTTP status")
-    return {
+    result = {
         "id": check_id,
         "path": path,
         "expectedStatus": expected_status,
     }
+    if fields == targeted_status_fields:
+        target = _text(check["target"], f"checks[{index}].target", 64)
+        if target not in target_ids:
+            raise ScenarioError(f"checks[{index}].target does not name a scenario target")
+        result["target"] = target
+    return result
 
 
-def _normalize_checks(value: Any) -> list[dict[str, Any]]:
+def _normalize_checks(value: Any, target_ids: set[str]) -> list[dict[str, Any]]:
     if not isinstance(value, list) or not 1 <= len(value) <= 16:
         raise ScenarioError("checks must contain between 1 and 16 entries")
     seen_ids: set[str] = set()
     return [
-        _normalize_check(check, index, seen_ids)
+        _normalize_check(check, index, seen_ids, target_ids)
         for index, check in enumerate(value)
     ]
+
+
+def _normalize_targets(value: Any) -> list[dict[str, Any]]:
+    if value is None:
+        return []
+    if not isinstance(value, list) or not 1 <= len(value) <= 16:
+        raise ScenarioError("targets must contain between 1 and 16 entries")
+    seen_ids: set[str] = set()
+    normalized = []
+    for index, target in enumerate(value):
+        if not isinstance(target, dict) or set(target) != {
+            "id", "kind", "namespace", "selector", "port"
+        }:
+            raise ScenarioError(f"targets[{index}] has unsupported fields")
+        target_id = _text(target["id"], f"targets[{index}].id", 64)
+        if not CHECK_ID_RE.fullmatch(target_id) or target_id in seen_ids:
+            raise ScenarioError(f"targets[{index}].id is invalid or duplicated")
+        seen_ids.add(target_id)
+        if target["kind"] != "kubernetes-pod-label":
+            raise ScenarioError(f"targets[{index}].kind is unsupported")
+        namespace = _text(target["namespace"], f"targets[{index}].namespace", 63)
+        selector = _text(target["selector"], f"targets[{index}].selector", 253)
+        port = target["port"]
+        if not NAMESPACE_RE.fullmatch(namespace):
+            raise ScenarioError(f"targets[{index}].namespace is invalid")
+        if not LABEL_SELECTOR_RE.fullmatch(selector):
+            raise ScenarioError(f"targets[{index}].selector must be one exact label match")
+        if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+            raise ScenarioError(f"targets[{index}].port is invalid")
+        normalized.append({
+            "id": target_id,
+            "kind": "kubernetes-pod-label",
+            "namespace": namespace,
+            "selector": selector,
+            "port": port,
+        })
+    return normalized
 
 
 def behavior_body(value: dict[str, Any]) -> dict[str, Any]:
@@ -132,6 +182,7 @@ def behavior_body(value: dict[str, Any]) -> dict[str, Any]:
     if value["runnerVersion"] != RUNNER_VERSION:
         raise ScenarioError("unsupported browser runner version")
 
+    targets = _normalize_targets(value.get("targets"))
     body = {
         "schemaVersion": SCHEMA_VERSION,
         "runnerVersion": RUNNER_VERSION,
@@ -139,8 +190,10 @@ def behavior_body(value: dict[str, Any]) -> dict[str, Any]:
         "incident": _normalize_incident(value["incident"]),
         "brief": _text(value["brief"], "brief", 4096),
         "baselineCommit": _normalize_baseline(value["baselineCommit"]),
-        "checks": _normalize_checks(value["checks"]),
+        "checks": _normalize_checks(value["checks"], {target["id"] for target in targets}),
     }
+    if targets:
+        body["targets"] = targets
     if len(canonical_json(body).encode("utf-8")) > 32768:
         raise ScenarioError("scenario exceeds 32 KiB")
     return body
@@ -171,6 +224,7 @@ def validate_frozen(value: Any) -> dict[str, Any]:
         "brief",
         "baselineCommit",
         "checks",
+        "targets",
         "scenarioHash",
         "authoring",
     }

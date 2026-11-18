@@ -45,10 +45,17 @@ def _origin(url: str) -> str:
 class BrowserSession:
     """One fresh browser/context/page with no cross-origin requests."""
 
-    def __init__(self, preview_url: str, timeout_ms: int = 10_000):
+    def __init__(
+        self,
+        preview_url: str,
+        timeout_ms: int = 10_000,
+        *,
+        open_preview: bool = True,
+    ):
         self.preview_url = preview_url
         self.origin = _origin(preview_url)
         self.timeout_ms = timeout_ms
+        self.open_preview = open_preview
         self.candidates: dict[str, RowCandidate] = {}
         self._playwright: Playwright | None = None
         self._browser: Browser | None = None
@@ -70,9 +77,10 @@ class BrowserSession:
 
         self._context.route("**/*", confine)
         self.page = self._context.new_page()
-        self.page.goto(self.preview_url, wait_until="domcontentloaded", timeout=15_000)
-        self.page.wait_for_load_state("networkidle", timeout=10_000)
-        self._assert_origin()
+        if self.open_preview:
+            self.page.goto(self.preview_url, wait_until="domcontentloaded", timeout=15_000)
+            self.page.wait_for_load_state("networkidle", timeout=10_000)
+            self._assert_origin()
         return self
 
     def __exit__(self, exc_type, exc, traceback) -> None:
@@ -94,7 +102,9 @@ class BrowserSession:
         text = self.page.locator("body").inner_text(timeout=self.timeout_ms)
         return {"url": self.page.url, "visibleText": text[:12_000], "truncated": len(text) > 12_000}
 
-    def observe_status(self, path: str) -> dict[str, Any]:
+    def observe_status(
+        self, path: str, screenshot_filename: str | None = None
+    ) -> dict[str, Any]:
         """Navigate a fresh page on the preview origin and capture its HTTP status."""
         if (
             not isinstance(path, str)
@@ -117,6 +127,10 @@ class BrowserSession:
                 return {"path": path, "status": None, "error": "navigation returned no response"}
             if _origin(response.url) != self.origin:
                 return {"path": path, "status": None, "error": "navigation left the preview origin"}
+            if screenshot_filename:
+                target = artifact_file(screenshot_filename)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                page.screenshot(path=str(target), full_page=True, timeout=10_000)
             return {"path": path, "status": response.status, "error": None}
         except PlaywrightTimeoutError as exc:
             return {"path": path, "status": None, "error": f"navigation timed out: {exc}"}

@@ -212,9 +212,27 @@ def complete(run_id: str, callback_token: str, result: dict[str, Any], workflow_
         conclusion = "success" if verdict == "passed" else "failure"
         final_status = "completed"
         title = {"passed": "Incident browser scenario passed", "failed": "Browser evidence did not match", "inconclusive": "Browser run was inconclusive"}[verdict]
-    lines = [reason, "", f"Tested commit: `{head_sha}`", f"Scenario: `{scenario_hash}`", "", "| Row | Expected | Observed |", "| --- | --- | --- |"]
+    incident = result.get("incident") or {}
+    lines = [
+        reason,
+        "",
+        f"Tested commit: `{head_sha}`",
+        f"Scenario: `{scenario_hash}`",
+        f"Incident: {incident.get('reference') or incident.get('id') or 'not supplied'}",
+        "",
+        "| Target | Check | Expected | Observed |",
+        "| --- | --- | --- | --- |",
+    ]
     for check in result.get("checks") or []:
-        lines.append(f"| {check.get('rowText','')} | {check.get('expectedBadge','')} | {check.get('observedBadge') or '—'} |")
+        target = check.get("target") or "preview"
+        label = check.get("rowText") or check.get("path") or check.get("id") or ""
+        expected = check.get("expectedBadge")
+        observed = check.get("observedBadge")
+        if "expectedStatus" in check:
+            expected = f"HTTP {check.get('expectedStatus')}"
+            observed_status = check.get("observedStatus")
+            observed = f"HTTP {observed_status}" if observed_status is not None else "not observed"
+        lines.append(f"| {target} | {label} | {expected or ''} | {observed or 'not observed'} |")
     _update_check(installation_id, repo, int(check_id), {
         "status": "completed", "conclusion": conclusion, "details_url": workflow_url,
         "output": {"title": title, "summary": "\n".join(lines)[:65000]},

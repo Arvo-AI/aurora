@@ -95,3 +95,43 @@ def test_missing_http_response_is_inconclusive():
     assert "navigation timed out" in reason
     assert checks[0]["complete"] is False
     assert checks[0]["verdict"] == "inconclusive"
+
+
+def test_targeted_replica_statuses_identify_the_failing_label():
+    value = scenario()
+    value["targets"] = [
+        {
+            "id": "retained",
+            "kind": "kubernetes-pod-label",
+            "namespace": "shop",
+            "selector": "aurora.dev/replica=retained",
+            "port": 80,
+        },
+        {
+            "id": "restarted",
+            "kind": "kubernetes-pod-label",
+            "namespace": "shop",
+            "selector": "aurora.dev/replica=restarted",
+            "port": 80,
+        },
+    ]
+    value["checks"] = [
+        {"id": "retained-items", "target": "retained", "path": "/api/items", "expectedStatus": 200},
+        {"id": "restarted-items", "target": "restarted", "path": "/api/items", "expectedStatus": 200},
+    ]
+    value = freeze_scenario(value)
+
+    verdict, reason, checks = compute_verdict(
+        value,
+        {},
+        {"observations": []},
+        {
+            "retained-items": {"status": 200, "error": None},
+            "restarted-items": {"status": 504, "error": None},
+        },
+    )
+
+    assert verdict == "failed"
+    assert "observed HTTP 504" in reason
+    assert checks[0]["targetSelector"] == "aurora.dev/replica=retained"
+    assert checks[1]["targetSelector"] == "aurora.dev/replica=restarted"

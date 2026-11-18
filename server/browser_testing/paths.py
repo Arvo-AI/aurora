@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 
@@ -10,6 +11,7 @@ PACKAGE_DIRECTORY = Path(__file__).resolve().parent
 SCENARIO_DIRECTORY = (PACKAGE_DIRECTORY / "fixtures").resolve()
 ARTIFACT_DIRECTORY = (PACKAGE_DIRECTORY / "artifacts").resolve()
 ARTIFACT_FILENAMES = frozenset({"browser-evidence.png", "browser-result.json"})
+TARGET_SCREENSHOT_RE = re.compile(r"^browser-evidence-[a-z0-9][a-z0-9-]{0,63}\.png$")
 AUTHORED_SCENARIO_FILE = SCENARIO_DIRECTORY / "avenue-rd-scenario.json"
 RESULT_FILE = ARTIFACT_DIRECTORY / "browser-result.json"
 RESULT_TEMPORARY_FILE = ARTIFACT_DIRECTORY / ".browser-result.json.tmp"
@@ -41,6 +43,6 @@ def scenario_file(requested: str | Path) -> Path:
 
 
 def artifact_file(filename: str) -> Path:
-    if filename not in ARTIFACT_FILENAMES:
+    if filename not in ARTIFACT_FILENAMES and not TARGET_SCREENSHOT_RE.fullmatch(filename):
         raise PathAccessError("unsupported browser-test artifact filename")
     return confined_path(ARTIFACT_DIRECTORY, filename, label="artifact file")

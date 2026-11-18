@@ -59,6 +59,49 @@ def test_http_status_check_is_frozen_and_validated():
         freeze_scenario(value)
 
 
+def test_replica_targets_are_frozen_and_require_stable_exact_labels():
+    value = scenario()
+    value["targets"] = [
+        {
+            "id": "frontend-retained",
+            "kind": "kubernetes-pod-label",
+            "namespace": "shop",
+            "selector": "aurora.dev/replica=retained",
+            "port": 80,
+        }
+    ]
+    value["checks"] = [
+        {
+            "id": "retained-items",
+            "target": "frontend-retained",
+            "path": "/api/items",
+            "expectedStatus": 200,
+        }
+    ]
+
+    frozen = freeze_scenario(value)
+    assert frozen["targets"] == value["targets"]
+    assert frozen["checks"] == value["checks"]
+
+    value["targets"][0]["selector"] = "app in (frontend)"
+    with pytest.raises(ScenarioError, match="one exact label"):
+        freeze_scenario(value)
+
+
+def test_targeted_check_rejects_unknown_target():
+    value = scenario()
+    value["checks"] = [
+        {
+            "id": "missing-replica",
+            "target": "not-defined",
+            "path": "/api/items",
+            "expectedStatus": 200,
+        }
+    ]
+    with pytest.raises(ScenarioError, match="does not name"):
+        freeze_scenario(value)
+
+
 def test_scenario_rejects_duplicate_checks_and_unknown_fields():
     value = scenario()
     value["checks"][1]["id"] = value["checks"][0]["id"]
@@ -83,6 +126,7 @@ def test_scenario_reads_and_writes_reject_paths_outside_fixture_directory(tmp_pa
         load_scenario("../outside.json")
 
 def test_artifacts_reject_unapproved_or_traversing_paths():
+    assert artifact_file("browser-evidence-frontend-retained.png").parent.name == "artifacts"
     with pytest.raises(PathAccessError, match="unsupported"):
         artifact_file("../browser-result.json")
     with pytest.raises(PathAccessError, match="unsupported"):

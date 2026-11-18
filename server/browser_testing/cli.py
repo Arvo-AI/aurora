@@ -32,6 +32,13 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--preview-url", required=True)
     run.add_argument("--commit", required=True)
     run.add_argument("--model", default=DEFAULT_MODEL)
+    run.add_argument(
+        "--target-url",
+        action="append",
+        default=[],
+        metavar="TARGET=URL",
+        help="URL for one frozen named target; repeat for multiple targets",
+    )
     return parser
 
 
@@ -58,11 +65,19 @@ def main() -> int:
         )
         return 0
 
+    target_urls = {}
+    for item in args.target_url:
+        target, separator, url = item.partition("=")
+        if not separator or not target or not url or target in target_urls:
+            raise SystemExit("--target-url must be a unique TARGET=URL pair")
+        target_urls[target] = url
+
     result = run_scenario(
         scenario_path=args.scenario,
         preview_url=args.preview_url,
         tested_commit=args.commit,
         model=args.model,
+        target_urls=target_urls,
     )
     print(
         json.dumps(

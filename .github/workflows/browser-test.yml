@@ -71,6 +71,7 @@ jobs:
           python -m playwright install chromium
 
       - name: Install and start customer app in isolated container
+        if: inputs.install_command != '__aurora_lab_kind__'
         env:
           INSTALL_COMMAND: ${{ inputs.install_command }}
           START_COMMAND: ${{ inputs.start_command }}
@@ -90,6 +91,7 @@ jobs:
             sh -lc "$INSTALL_COMMAND && exec $START_COMMAND"
 
       - name: Verify customer container has no agent credentials
+        if: inputs.install_command != '__aurora_lab_kind__'
         run: |
           if docker exec aurora-customer-app env | grep -Eq \
             '^(OPENAI_API_KEY|OPENROUTER_API_KEY|GH_TOKEN|GITHUB_TOKEN|GITHUB_APP_PRIVATE_KEY)='; then
@@ -98,6 +100,7 @@ jobs:
           fi
 
       - name: Wait for preview
+        if: inputs.install_command != '__aurora_lab_kind__'
         env:
           PORT: ${{ inputs.preview_port }}
           PATH_PART: ${{ inputs.readiness_path }}
@@ -110,6 +113,62 @@ jobs:
           docker logs aurora-customer-app
           exit 1
 
+      - name: Boot exact Aurora Lab PR deployment in kind
+        if: inputs.install_command == '__aurora_lab_kind__'
+        env:
+          MANIFEST_PATH: ${{ inputs.start_command }}
+          SCENARIO: ${{ inputs.scenario_path }}
+          TIMEOUT: ${{ inputs.readiness_timeout }}
+        run: |
+          set -euo pipefail
+          [[ "$MANIFEST_PATH" =~ ^[A-Za-z0-9._/-]+\.ya?ml$ ]]
+          manifest="$(realpath --canonicalize-existing "$GITHUB_WORKSPACE/app/$MANIFEST_PATH")"
+          [[ "$manifest" == "$GITHUB_WORKSPACE/app/"* ]]
+
+          curl --fail --silent --show-error --location \
+            https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64 \
+            --output "$RUNNER_TEMP/kind"
+          echo "a6875aaea358acf0ac07786b1a6755d08fd640f4c79b7a2e46681cc13f49a04b  $RUNNER_TEMP/kind" | sha256sum --check
+          chmod +x "$RUNNER_TEMP/kind"
+          sudo install "$RUNNER_TEMP/kind" /usr/local/bin/kind
+
+          kind create cluster --name aurora-browser --wait 180s
+          kubectl apply -f "$GITHUB_WORKSPACE/app/app/shop.yaml"
+          kubectl -n shop delete deployment frontend --wait=true
+          kubectl apply -f "$manifest"
+          kubectl -n shop wait --for=condition=Available deployment --all --timeout="${TIMEOUT}s"
+
+          scenario="$GITHUB_WORKSPACE/aurora/server/browser_testing/fixtures/$SCENARIO"
+          target_file="$GITHUB_WORKSPACE/target-urls.json"
+          echo '{}' > "$target_file"
+          next_port=18081
+          while IFS=$'\t' read -r target namespace selector port; do
+            mapfile -t pods < <(kubectl -n "$namespace" get pods -l "$selector" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
+            [[ "${#pods[@]}" -eq 1 && -n "${pods[0]}" ]] || {
+              echo "Target $target selector $selector matched ${#pods[@]} pods; expected exactly one" >&2
+              exit 1
+            }
+            kubectl -n "$namespace" port-forward "pod/${pods[0]}" "$next_port:$port" \
+              >"$RUNNER_TEMP/port-forward-$target.log" 2>&1 &
+            echo $! >> "$RUNNER_TEMP/port-forward-pids"
+            jq --arg id "$target" --arg url "http://127.0.0.1:$next_port/" \
+              '. + {($id): $url}' "$target_file" > "$target_file.tmp"
+            mv "$target_file.tmp" "$target_file"
+            next_port=$((next_port + 1))
+          done < <(jq -r '.targets[] | [.id,.namespace,.selector,(.port|tostring)] | @tsv' "$scenario")
+
+          for url in $(jq -r '.[]' "$target_file"); do
+            ready=false
+            for ((second=0; second<TIMEOUT; second++)); do
+              if curl --fail --silent "${url%/}${{ inputs.readiness_path }}" >/dev/null; then
+                ready=true
+                break
+              fi
+              sleep 1
+            done
+            [[ "$ready" == true ]] || exit 1
+          done
+
       - name: Collect browser evidence
         id: browser
         continue-on-error: true
@@ -121,11 +180,18 @@ jobs:
           SCENARIO: ${{ inputs.scenario_path }}
           MODEL: ${{ inputs.model }}
         run: |
+          target_args=()
+          if [[ -f "$GITHUB_WORKSPACE/target-urls.json" ]]; then
+            while IFS=$'\t' read -r target url; do
+              target_args+=(--target-url "$target=$url")
+            done < <(jq -r 'to_entries[] | [.key,.value] | @tsv' "$GITHUB_WORKSPACE/target-urls.json")
+          fi
           python -m browser_testing run \
             --scenario "$SCENARIO" \
             --preview-url "http://127.0.0.1:${PORT}/" \
             --commit "$HEAD_SHA" \
-            --model "$MODEL"
+            --model "$MODEL" \
+            "${target_args[@]}"
 
       - name: Ensure a result exists
         if: always()
@@ -188,4 +254,9 @@ jobs:
 
       - name: Stop preview
         if: always()
-        run: docker rm --force aurora-customer-app 2>/dev/null || true
+        run: |
+          docker rm --force aurora-customer-app 2>/dev/null || true
+          if [[ -f "$RUNNER_TEMP/port-forward-pids" ]]; then
+            xargs -r kill < "$RUNNER_TEMP/port-forward-pids" 2>/dev/null || true
+          fi
+          kind delete cluster --name aurora-browser 2>/dev/null || true
