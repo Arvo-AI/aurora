@@ -1663,6 +1663,17 @@ async def handle_connection(websocket) -> None:
                     human_message = HumanMessage(
                         content=[{"type": "text", "text": routing_instruction}] + human_message.content
                     )
+            
+            # Remember what the user actually typed and which evidence files they attached,
+            # so the saved chat shows that instead of the LLM scaffolding.
+            evidence_files = [
+                {"filename": a.get('filename', 'unknown'), "size_bytes": a.get('size_bytes')}
+                for a in (attachments or []) if a.get('is_server_path')
+            ]
+            if question and human_message.content != question:
+                human_message.additional_kwargs["display_text"] = question
+            if evidence_files:
+                human_message.additional_kwargs["evidence_files"] = evidence_files
 
             messages_list = [human_message]
 

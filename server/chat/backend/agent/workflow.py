@@ -1633,13 +1633,21 @@ class Workflow:
                 match = _USER_MESSAGE_RE.search(content)
                 if match:
                     content = match.group(1).strip()
-                    
-                ui_messages.append({
+
+                # Prefer the user's original text over routing/evidence scaffolding
+                human_kwargs = getattr(msg, 'additional_kwargs', {}) or {}
+                if human_kwargs.get('display_text'):
+                    content = human_kwargs['display_text']
+
+                ui_message = {
                     'message_number': message_id,
                     'text': content,
                     'sender': 'user',
                     'isCompleted': True
-                })
+                }
+                if human_kwargs.get('evidence_files'):
+                    ui_message['evidenceFiles'] = human_kwargs['evidence_files']
+                ui_messages.append(ui_message)
                 message_id += 1
                 
             elif 'AI' in msg_type:

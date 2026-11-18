@@ -64,6 +64,8 @@ export type Message = {
     name?: string; // original filename if available
     type?: string; // MIME type
   }>;
+  // Evidence files uploaded with this message (names only; contents stay on the server)
+  evidenceFiles?: Array<{ filename: string; size_bytes?: number }>;
   // Tool calls array for agentic messages
   toolCalls?: ToolCall[];
   // New content array for chronological rendering

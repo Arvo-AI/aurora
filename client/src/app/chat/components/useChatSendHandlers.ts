@@ -262,7 +262,10 @@ export function useChatSendHandlers({
         displayData: img.preview,
         name: img.file.name,
         type: img.file.type
-      })) : undefined
+      })) : undefined,
+      evidenceFiles: evidenceFiles.length > 0
+        ? evidenceFiles.map(f => ({ filename: f.filename, size_bytes: f.size_bytes }))
+        : undefined
     };
 
     const actualSessionId = await ensureSession(trimmed);

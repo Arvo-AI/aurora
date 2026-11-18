@@ -3,7 +3,7 @@
 import React, { useState } from "react";
 import { DISPATCH_SUBAGENT_TOOL_NAME, Message, ToolCall } from "@/app/chat/types";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
-import { Copy, Check } from "lucide-react";
+import { Copy, Check, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { copyToClipboard } from "@/lib/utils";
 
@@ -143,6 +143,21 @@ export const MessageItem = React.memo(({ message, sendRaw, onUpdateMessage, sess
               alt={img.name || `Image ${idx + 1}`}
               className="max-w-xs rounded-lg border border-input"
             />
+          ))}
+        </div>
+      )}
+
+      {/* Evidence files attached to user messages */}
+      {message.evidenceFiles && message.evidenceFiles.length > 0 && (
+        <div className="flex flex-wrap gap-2 mt-2">
+          {message.evidenceFiles.map((f, idx) => (
+            <div key={`${f.filename}-${idx}`} className="flex items-center gap-2 px-3 py-1.5 bg-orange-500/10 border border-orange-500/30 rounded-lg text-xs">
+              <FileText className="h-3 w-3 text-orange-400" />
+              <span className="text-orange-400 font-medium">{f.filename}</span>
+              {f.size_bytes != null && (
+                <span className="text-muted-foreground">{Math.ceil(f.size_bytes / 1024)} KB</span>
+              )}
+            </div>
           ))}
         </div>
       )}
