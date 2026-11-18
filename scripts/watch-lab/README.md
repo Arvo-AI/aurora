@@ -38,8 +38,10 @@ System32 is WSL's, which carries its own kubeconfig).
 * **Detected**: Aurora Watch confirmed an incident-level (high or critical)
   finding after the fault.
 * **First incident**: seconds from running `break.sh` to that finding.
-* **Blamed the injected change**: the primary suspect of an incident is the
-  object the scenario changed (`EXPECTED_CHANGE`, taken from `scenario.yaml`).
+* **Blamed the injected change**: an incident's primary suspect is an object the
+  scenario's `break.sh` changed (`EXPECTED_FAULTS` in `run_lab.py`; scenario 12
+  injects two faults and needs both named). Any other primary suspect counts as a
+  wrong blame.
 * **Healthy control**: findings over a fault-free window, to count false alarms.
 
 It does not run the RCA: each incident's investigation is the existing Aurora
