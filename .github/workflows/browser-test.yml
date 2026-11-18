@@ -60,22 +60,42 @@ jobs:
           EXPECTED_SHA: ${{ inputs.head_sha }}
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
 
-      - name: Install app and browser dependencies
-        env:
-          INSTALL_COMMAND: ${{ inputs.install_command }}
+      - name: Install locked browser-runner dependencies from wheels
+        working-directory: aurora/server
         run: |
-          cd app
-          bash -lc "$INSTALL_COMMAND"
-          python -m pip install -r ../aurora/server/browser_testing/requirements-ci.txt
+          python -m pip install \
+            --disable-pip-version-check \
+            --require-hashes \
+            --only-binary=:all: \
+            -r browser_testing/requirements-ci.txt
           python -m playwright install chromium
 
-      - name: Start customer app without agent credentials
+      - name: Install and start customer app in isolated container
         env:
+          INSTALL_COMMAND: ${{ inputs.install_command }}
           START_COMMAND: ${{ inputs.start_command }}
+          PORT: ${{ inputs.preview_port }}
         run: |
-          cd app
-          nohup bash -lc "$START_COMMAND" >"$RUNNER_TEMP/app.log" 2>&1 &
-          echo "$!" >"$RUNNER_TEMP/app.pid"
+          docker run --detach --name aurora-customer-app \
+            --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --pids-limit 256 \
+            --memory 1g \
+            --cpus 2 \
+            --publish "127.0.0.1:${PORT}:${PORT}" \
+            --volume "$GITHUB_WORKSPACE/app:/workspace/app:ro" \
+            --workdir /workspace/app \
+            --env PYTHONDONTWRITEBYTECODE=1 \
+            python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b \
+            sh -lc "$INSTALL_COMMAND && exec $START_COMMAND"
+
+      - name: Verify customer container has no agent credentials
+        run: |
+          if docker exec aurora-customer-app env | grep -Eq \
+            '^(OPENAI_API_KEY|OPENROUTER_API_KEY|GH_TOKEN|GITHUB_TOKEN|GITHUB_APP_PRIVATE_KEY)='; then
+            echo "Customer container received a forbidden credential" >&2
+            exit 1
+          fi
 
       - name: Wait for preview
         env:
@@ -87,7 +107,7 @@ jobs:
             curl --fail --silent "http://127.0.0.1:${PORT}${PATH_PART}" >/dev/null && exit 0
             sleep 1
           done
-          cat "$RUNNER_TEMP/app.log"
+          docker logs aurora-customer-app
           exit 1
 
       - name: Collect browser evidence
@@ -105,7 +125,6 @@ jobs:
             --scenario "$SCENARIO" \
             --preview-url "http://127.0.0.1:${PORT}/" \
             --commit "$HEAD_SHA" \
-            --output-dir "$GITHUB_WORKSPACE/evidence" \
             --model "$MODEL"
 
       - name: Ensure a result exists
@@ -113,12 +132,13 @@ jobs:
         env:
           HEAD_SHA: ${{ inputs.head_sha }}
           SCENARIO_HASH: ${{ inputs.scenario_hash }}
+          EVIDENCE_DIR: ${{ github.workspace }}/aurora/server/browser_testing/artifacts
         run: |
-          mkdir -p evidence
-          if [[ ! -f evidence/browser-result.json ]]; then
+          mkdir -p "$EVIDENCE_DIR"
+          if [[ ! -f "$EVIDENCE_DIR/browser-result.json" ]]; then
             jq -n --arg sha "$HEAD_SHA" --arg hash "$SCENARIO_HASH" \
               '{schemaVersion:1,testedCommit:$sha,scenarioHash:$hash,verdict:"inconclusive",reason:"The fresh VM did not complete the browser runner.",checks:[],screenshot:null}' \
-              > evidence/browser-result.json
+              > "$EVIDENCE_DIR/browser-result.json"
           fi
 
       - name: Upload evidence
@@ -126,7 +146,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: aurora-browser-result-${{ inputs.run_id }}
-          path: evidence/
+          path: aurora/server/browser_testing/artifacts/
           retention-days: 14
 
       - name: Return result to Aurora
@@ -137,10 +157,11 @@ jobs:
           RUN_ID: ${{ inputs.run_id }}
           WORKFLOW_RUN_ID: ${{ github.run_id }}
           WORKFLOW_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RESULT_PATH: ${{ github.workspace }}/aurora/server/browser_testing/artifacts/browser-result.json
         run: |
           python - <<'PY'
           import json, os, urllib.request
-          with open("evidence/browser-result.json", encoding="utf-8") as handle:
+          with open(os.environ["RESULT_PATH"], encoding="utf-8") as handle:
               result = json.load(handle)
           body = json.dumps({
               "run_id": os.environ["RUN_ID"],
@@ -159,11 +180,12 @@ jobs:
 
       - name: Set final job status
         if: always()
+        env:
+          RESULT_PATH: ${{ github.workspace }}/aurora/server/browser_testing/artifacts/browser-result.json
         run: |
-          verdict="$(jq -r .verdict evidence/browser-result.json)"
+          verdict="$(jq -r .verdict "$RESULT_PATH")"
           [[ "$verdict" == "passed" ]] || exit 1
 
       - name: Stop preview
         if: always()
-        run: |
-          [[ -f "$RUNNER_TEMP/app.pid" ]] && kill "$(cat "$RUNNER_TEMP/app.pid")" 2>/dev/null || true
+        run: docker rm --force aurora-customer-app 2>/dev/null || true

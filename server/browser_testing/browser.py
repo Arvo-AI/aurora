@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import asdict, dataclass
-from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
 from playwright.sync_api import Browser, BrowserContext, Page, Playwright, sync_playwright
+
+from .paths import artifact_file
 
 
 @dataclass(frozen=True)
@@ -146,10 +147,10 @@ class BrowserSession:
             return self.inspect_row(arguments["anchorText"])
         raise ValueError(f"unsupported browser tool: {name}")
 
-    def screenshot(self, path: str | Path) -> None:
+    def screenshot(self, filename: str) -> None:
         self._assert_origin()
         assert self.page is not None
-        target = Path(path)
+        target = artifact_file(filename)
         target.parent.mkdir(parents=True, exist_ok=True)
         self.page.screenshot(path=str(target), full_page=True, timeout=10_000)
 

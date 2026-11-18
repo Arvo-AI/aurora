@@ -13,6 +13,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .paths import scenario_file
+
 
 SCHEMA_VERSION = 1
 RUNNER_VERSION = "1"
@@ -150,15 +152,16 @@ def validate_frozen(value: Any) -> dict[str, Any]:
 
 
 def load_scenario(path: str | Path) -> dict[str, Any]:
+    target = scenario_file(path)
     try:
-        value = json.loads(Path(path).read_text(encoding="utf-8"))
+        value = json.loads(target.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ScenarioError(f"cannot read scenario: {exc}") from exc
     return validate_frozen(value)
 
 
 def save_scenario(path: str | Path, value: dict[str, Any]) -> None:
-    target = Path(path)
+    target = scenario_file(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = target.with_suffix(target.suffix + ".tmp")
     temporary.write_text(

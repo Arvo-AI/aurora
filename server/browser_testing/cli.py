@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 from .author import author_scenario
+from .paths import ARTIFACT_DIRECTORY, scenario_file
 from .runner import run_scenario
 from .scenario import save_scenario
 
@@ -31,7 +32,6 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--scenario", required=True, type=Path)
     run.add_argument("--preview-url", required=True)
     run.add_argument("--commit", required=True)
-    run.add_argument("--output-dir", required=True, type=Path)
     run.add_argument("--model", default=DEFAULT_MODEL)
     return parser
 
@@ -39,7 +39,7 @@ def _parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = _parser().parse_args()
     if args.command == "author":
-        brief = args.brief.read_text(encoding="utf-8").strip()
+        brief = scenario_file(args.brief).read_text(encoding="utf-8").strip()
         scenario = author_scenario(
             brief=brief,
             preview_url=args.preview_url,
@@ -56,13 +56,12 @@ def main() -> int:
         scenario_path=args.scenario,
         preview_url=args.preview_url,
         tested_commit=args.commit,
-        output_dir=args.output_dir,
         model=args.model,
     )
     print(
         json.dumps(
             {
-                "result": str(args.output_dir / "browser-result.json"),
+                "result": str(ARTIFACT_DIRECTORY / "browser-result.json"),
                 "scenarioHash": result.get("scenarioHash"),
                 "verdict": result["verdict"],
                 "reason": result["reason"],

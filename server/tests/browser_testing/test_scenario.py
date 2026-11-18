@@ -2,7 +2,14 @@ import json
 
 import pytest
 
-from browser_testing.scenario import ScenarioError, freeze_scenario, validate_frozen
+from browser_testing.paths import PathAccessError, artifact_file
+from browser_testing.scenario import (
+    ScenarioError,
+    freeze_scenario,
+    load_scenario,
+    save_scenario,
+    validate_frozen,
+)
 
 
 def scenario():
@@ -40,3 +47,22 @@ def test_scenario_rejects_duplicate_checks_and_unknown_fields():
     value["checks"][0]["selector"] = ".badge"
     with pytest.raises(ScenarioError, match="unsupported fields"):
         freeze_scenario(value)
+
+
+def test_scenario_reads_and_writes_reject_paths_outside_fixture_directory(tmp_path):
+    outside = tmp_path / "outside.json"
+    outside.write_text("{}", encoding="utf-8")
+
+    with pytest.raises(PathAccessError, match="must stay inside"):
+        load_scenario(outside)
+    with pytest.raises(PathAccessError, match="must stay inside"):
+        save_scenario(outside, freeze_scenario(scenario()))
+    with pytest.raises(PathAccessError, match="must stay inside"):
+        load_scenario("../outside.json")
+
+
+def test_artifacts_reject_unapproved_or_traversing_paths():
+    with pytest.raises(PathAccessError, match="unsupported"):
+        artifact_file("../browser-result.json")
+    with pytest.raises(PathAccessError, match="unsupported"):
+        artifact_file("other.json")

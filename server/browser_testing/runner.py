@@ -10,6 +10,7 @@ from typing import Any
 
 from .agent import run_tool_agent
 from .browser import BROWSER_TOOLS, BrowserSession, RowCandidate
+from .paths import ARTIFACT_DIRECTORY, artifact_file
 from .scenario import load_scenario
 
 
@@ -114,14 +115,12 @@ def run_scenario(
     scenario_path: str | Path,
     preview_url: str,
     tested_commit: str,
-    output_dir: str | Path,
     model: str,
 ) -> dict[str, Any]:
     started_at = _utc_now()
-    output = Path(output_dir)
-    output.mkdir(parents=True, exist_ok=True)
-    result_path = output / "browser-result.json"
-    screenshot_path = output / "browser-evidence.png"
+    ARTIFACT_DIRECTORY.mkdir(parents=True, exist_ok=True)
+    result_path = artifact_file("browser-result.json")
+    screenshot_path = artifact_file("browser-evidence.png")
     scenario: dict[str, Any] | None = None
     result: dict[str, Any]
 
@@ -162,7 +161,7 @@ Frozen checks: {checks_json}
                     }
                     for check in scenario["checks"]
                 ]
-            browser.screenshot(screenshot_path)
+            browser.screenshot("browser-evidence.png")
             preview_origin = browser.origin
 
         result = {
