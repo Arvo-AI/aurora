@@ -38,6 +38,27 @@ def test_freeze_is_canonical_and_detects_edits():
         validate_frozen(reordered)
 
 
+def test_existing_avenue_scenario_hash_is_unchanged():
+    frozen = load_scenario("avenue-rd-scenario.json")
+    assert frozen["scenarioHash"] == "62b309720e26717a46a6195f47ba7d207bf356ee51dfa022bd9ca87926da3e90"
+
+
+def test_http_status_check_is_frozen_and_validated():
+    value = scenario()
+    value["checks"] = [{"id": "items", "path": "/api/items", "expectedStatus": 200}]
+    frozen = freeze_scenario(value)
+
+    assert validate_frozen(frozen)["checks"] == value["checks"]
+
+    value["checks"][0]["path"] = "https://example.test/api/items"
+    with pytest.raises(ScenarioError, match="origin-relative"):
+        freeze_scenario(value)
+
+    value["checks"][0] = {"id": "items", "path": "/api/items", "expectedStatus": 999}
+    with pytest.raises(ScenarioError, match="HTTP status"):
+        freeze_scenario(value)
+
+
 def test_scenario_rejects_duplicate_checks_and_unknown_fields():
     value = scenario()
     value["checks"][1]["id"] = value["checks"][0]["id"]

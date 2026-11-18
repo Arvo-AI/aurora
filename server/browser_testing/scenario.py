@@ -65,27 +65,45 @@ def _normalize_baseline(value: Any) -> str:
 
 def _normalize_check(
     check: Any, index: int, seen_ids: set[str]
-) -> dict[str, str]:
-    if not isinstance(check, dict) or set(check) != {
-        "id",
-        "rowText",
-        "expectedBadge",
-    }:
+) -> dict[str, Any]:
+    if not isinstance(check, dict):
+        raise ScenarioError(f"checks[{index}] has unsupported fields")
+    fields = set(check)
+    badge_fields = {"id", "rowText", "expectedBadge"}
+    status_fields = {"id", "path", "expectedStatus"}
+    if fields != badge_fields and fields != status_fields:
         raise ScenarioError(f"checks[{index}] has unsupported fields")
     check_id = _text(check["id"], f"checks[{index}].id", 64)
     if not CHECK_ID_RE.fullmatch(check_id) or check_id in seen_ids:
         raise ScenarioError(f"checks[{index}].id is invalid or duplicated")
     seen_ids.add(check_id)
+    if fields == badge_fields:
+        return {
+            "id": check_id,
+            "rowText": _text(check["rowText"], f"checks[{index}].rowText", 256),
+            "expectedBadge": _text(
+                check["expectedBadge"], f"checks[{index}].expectedBadge", 256
+            ),
+        }
+
+    path = _text(check["path"], f"checks[{index}].path", 2048)
+    if not path.startswith("/") or path.startswith("//") or "#" in path:
+        raise ScenarioError(
+            f"checks[{index}].path must be an origin-relative URL path without a fragment"
+        )
+    expected_status = check["expectedStatus"]
+    if isinstance(expected_status, bool) or not isinstance(expected_status, int):
+        raise ScenarioError(f"checks[{index}].expectedStatus must be an HTTP status")
+    if not 100 <= expected_status <= 599:
+        raise ScenarioError(f"checks[{index}].expectedStatus must be an HTTP status")
     return {
         "id": check_id,
-        "rowText": _text(check["rowText"], f"checks[{index}].rowText", 256),
-        "expectedBadge": _text(
-            check["expectedBadge"], f"checks[{index}].expectedBadge", 256
-        ),
+        "path": path,
+        "expectedStatus": expected_status,
     }
 
 
-def _normalize_checks(value: Any) -> list[dict[str, str]]:
+def _normalize_checks(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list) or not 1 <= len(value) <= 16:
         raise ScenarioError("checks must contain between 1 and 16 entries")
     seen_ids: set[str] = set()

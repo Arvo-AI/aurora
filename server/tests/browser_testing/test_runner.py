@@ -59,3 +59,39 @@ def test_complete_matching_evidence_passes():
         {"observations": [{"checkId": "avenue", "candidateId": "a"}, {"checkId": "queen", "candidateId": "q"}]},
     )
     assert verdict == "passed"
+
+
+def test_http_status_match_passes_and_mismatch_fails():
+    value = scenario()
+    value["checks"] = [{"id": "items", "path": "/api/items", "expectedStatus": 200}]
+
+    verdict, _, checks = compute_verdict(
+        value, {}, {"observations": []}, {"items": {"status": 200, "error": None}}
+    )
+    assert verdict == "passed"
+    assert checks[0]["observedStatus"] == 200
+    assert checks[0]["verdict"] == "passed"
+
+    verdict, reason, checks = compute_verdict(
+        value, {}, {"observations": []}, {"items": {"status": 502, "error": None}}
+    )
+    assert verdict == "failed"
+    assert "expected HTTP 200, observed HTTP 502" in reason
+    assert checks[0]["path"] == "/api/items"
+    assert checks[0]["verdict"] == "failed"
+
+
+def test_missing_http_response_is_inconclusive():
+    value = scenario()
+    value["checks"] = [{"id": "items", "path": "/api/items", "expectedStatus": 200}]
+
+    verdict, reason, checks = compute_verdict(
+        value,
+        {},
+        {"observations": []},
+        {"items": {"status": None, "error": "navigation timed out"}},
+    )
+    assert verdict == "inconclusive"
+    assert "navigation timed out" in reason
+    assert checks[0]["complete"] is False
+    assert checks[0]["verdict"] == "inconclusive"

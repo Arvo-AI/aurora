@@ -7,7 +7,14 @@ from dataclasses import asdict, dataclass
 from typing import Any
 from urllib.parse import urlsplit
 
-from playwright.sync_api import Browser, BrowserContext, Page, Playwright, sync_playwright
+from playwright.sync_api import (
+    Browser,
+    BrowserContext,
+    Page,
+    Playwright,
+    TimeoutError as PlaywrightTimeoutError,
+    sync_playwright,
+)
 
 from .paths import artifact_file
 
@@ -86,6 +93,35 @@ class BrowserSession:
         assert self.page is not None
         text = self.page.locator("body").inner_text(timeout=self.timeout_ms)
         return {"url": self.page.url, "visibleText": text[:12_000], "truncated": len(text) > 12_000}
+
+    def observe_status(self, path: str) -> dict[str, Any]:
+        """Navigate a fresh page on the preview origin and capture its HTTP status."""
+        if (
+            not isinstance(path, str)
+            or not path.startswith("/")
+            or path.startswith("//")
+            or "#" in path
+        ):
+            raise ValueError("path must be an origin-relative URL path without a fragment")
+        if self._context is None:
+            raise RuntimeError("browser context is not open")
+
+        page = self._context.new_page()
+        try:
+            response = page.goto(
+                f"{self.origin}{path}",
+                wait_until="domcontentloaded",
+                timeout=15_000,
+            )
+            if response is None:
+                return {"path": path, "status": None, "error": "navigation returned no response"}
+            if _origin(response.url) != self.origin:
+                return {"path": path, "status": None, "error": "navigation left the preview origin"}
+            return {"path": path, "status": response.status, "error": None}
+        except PlaywrightTimeoutError as exc:
+            return {"path": path, "status": None, "error": f"navigation timed out: {exc}"}
+        finally:
+            page.close()
 
     def inspect_row(self, anchor_text: str) -> dict[str, Any]:
         self._assert_origin()
