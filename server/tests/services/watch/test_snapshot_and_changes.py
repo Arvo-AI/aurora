@@ -224,3 +224,10 @@ def test_a_credential_after_a_nested_query_string_is_masked():
     masked = snapshot_mod._clean("/-/ready?password=Ab?12345&verbose=1", digest=False)
     assert "12345" not in masked and masked.endswith("&verbose=1")
     assert snapshot_mod._clean("/search?q=what?&lang=en", digest=False) == "/search?q=what?&lang=en"
+
+
+def test_a_credential_holding_a_query_string_is_masked_whole():
+    for text in ("https://hooks.example.com/notify?secret=Xy7?k=9LpQ2", "/x?password=Ab?w=Zr8vT&verbose=1"):
+        masked = snapshot_mod._clean(text, digest=False)
+        assert "9LpQ2" not in masked and "Zr8vT" not in masked, masked
+    assert snapshot_mod._clean("/x?password=Ab?w=Zr8vT&verbose=1", digest=False).endswith("&verbose=1")

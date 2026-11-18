@@ -55,3 +55,16 @@ def test_a_state_digested_with_another_key_is_learned_again():
     from services.watch.detector import current_state, new_state
 
     assert current_state({**new_state(), "digest_id": "rotated!", "polls": 40})["polls"] == 0
+
+
+def test_two_changes_made_in_different_polling_gaps_stay_two_suspects():
+    from services.watch.incidents import _merge_payload
+
+    first = {"object": "Deployment/shop/redis", "at": None, "made_between": ["t1", "t2"]}
+    second = {"object": "Deployment/shop/redis", "at": None, "made_between": ["t3", "t4"]}
+    merged = _merge_payload(
+        {"findings": [{"subject": "Deployment/shop/redis"}], "severity": "high", "message": "redis down",
+         "suspected_changes": [first]},
+        {"findings": [{"subject": "Deployment/shop/api"}], "severity": "high", "message": "api failing",
+         "first_seen": "t5", "suspected_changes": [second, first]})
+    assert merged["suspected_changes"] == [first, second]

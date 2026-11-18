@@ -48,7 +48,8 @@ def _merge_payload(existing: dict[str, Any] | None, new: dict[str, Any]) -> dict
     merged["findings"] = (kept + list(newer.values()))[: report.MAX_FINDINGS]
 
     def ident(s: dict[str, Any]) -> tuple:
-        return s.get("object"), s.get("at")
+        # A change made during a polling gap has no time: its window tells two apart.
+        return s.get("object"), s.get("at"), tuple(s.get("made_between") or ())
 
     # Blamed again: the detector moved the blame of a finding the incident has since its
     # copy here. One re-sent only because it got worse keeps the incident's order.

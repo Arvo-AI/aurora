@@ -403,6 +403,31 @@ class TestCascades:
         assert redis["incident_key"] in keys and "Deployment/shop/redis" in redis["incident_key"]
 
 
+class TestDependencyConfig:
+    def test_a_dependency_s_config_edit_outranks_the_restart_that_applied_it(self):
+        c = Cluster()
+        c.configmap("api-code", {"api.py": "print('api')", "worker.py": "print('worker')"})
+        c.configmap("frontend-nginx", {"default.conf": "upstream api { server api:8080; }"})
+        c.configmap("redis-conf", {"redis.conf": "port 6379"})
+        c.deployment("redis", configmap="redis-conf")
+        c.deployment("api", replicas=2, env={"REDIS_HOST": "redis"}, configmap="api-code")
+        c.deployment("worker", env={"BATCH_SIZE": "500"}, configmap="api-code")
+        c.deployment("frontend", replicas=2, configmap="frontend-nginx")
+        c.deployment("loadgen")
+        c.service("redis", {"app": "redis"}, 6379, 6379)
+        c.service("api", {"app": "api"}, 8080, 8080)
+        c.service("frontend", {"app": "frontend"}, 80, 80)
+        state = learned(c)
+        c.configmap("redis-conf", {"redis.conf": "port 6380"})
+        assert run(c, state, 30) == []  # nothing reloads it for five minutes
+        c.restart("redis")  # the restart puts it into effect, and the api cannot connect
+        c.crash("api", reason="Error", exit_code=1)
+        logs = healthy_logs()
+        logs["Deployment/shop/api"] = ["redis.exceptions.ConnectionError: Error 111 connecting to redis:6379."] * 3
+        f = by_subject(run(c, state, 3, logs))["Deployment/shop/api"]
+        assert f["suspects"][0]["key"] == "ConfigMap/shop/redis-conf"
+
+
 class TestLogs:
     def test_new_request_failures_page_but_new_internal_errors_do_not(self):
         c = shop()
@@ -576,6 +601,25 @@ class TestLogs:
             masked = _mask_secrets(url)
             assert "hunter2" not in masked and "Zk3pQ9" not in masked and "AIzaSyA" not in masked, url
         assert _mask_secrets("token: expired") == "token: expired"  # prose keeps its word
+
+    def test_the_line_mask_keeps_a_word_after_a_colon_only_when_it_is_a_status(self):
+        from services.watch.detector import _mask_secrets
+
+        pw = "change" + "me"  # synthetic, and digit-free like many real passwords
+        for line in (f"config {{User:shop Password:{pw} DB:0}}", f"  password: {pw}", f"ClientSecret:{pw}",
+                     f"credentials=alerts:{pw}", f'"credentials":"robot:{pw}"', f"?credentials=a:{pw}&x=1",
+                     f"login rejected password=sunshine2024!{pw}", f"bind failed password=Zx9\\{pw}"):
+            assert pw not in _mask_secrets(line), line
+        for kept in ("token: expired", "using password: YES", "invalid credentials: expired."):
+            assert _mask_secrets(kept) == kept
+
+    def test_a_query_string_in_a_json_log_line_ends_where_the_url_does(self):
+        # The fields after the URL keep their words, so the line is still a failing request.
+        line = ('{"time":"2026-11-18T05:00:00Z","method":"GET","uri":"/api/orders?page_token=abc123",'
+                '"status":503,"error":"upstream timed out"}')
+        (entry,) = template_counts([line]).values()
+        assert entry["request_failure"] and "upstream timed out" in entry["sample"]
+        assert "abc123" not in entry["sample"]
 
     def test_samples_quoted_as_evidence_go_through_the_full_secret_rules(self):
         c = shop()
@@ -775,6 +819,43 @@ class TestLifecycle:
         run(c, state, 3, logs)
         assert finding["incident_key"] == key
 
+    def test_a_dependency_scaled_to_zero_is_named_as_the_newer_cause(self):
+        # Scaling up answers an outage; scaling a dependency down to zero can cause one.
+        c = shop()
+        state = learned(c)
+        for _ in range(2):
+            c.deployments["api"]["restarts"] += 1
+            poll(c, state)
+        finding = state["open"]["Deployment/shop/api"]  # restarting, nothing to blame
+        finding["incident_id"], key = "I1", finding["incident_key"]
+        for i in range(60):
+            if i % 24 == 0:
+                c.deployments["api"]["restarts"] += 1
+            poll(c, state)
+        c.scale("redis", 0)
+        logs = healthy_logs()
+        logs["Deployment/shop/api"] = ["request failed: redis error: connection refused"] * 3
+        run(c, state, 4, logs)
+        assert finding["suspects"][0]["key"] == "Deployment/shop/redis"
+        assert finding["incident_key"] != key
+
+    def test_a_broken_deploy_made_during_a_polling_gap_is_named_as_the_newer_cause(self):
+        c = shop()
+        state = learned(c)
+        c.set_env("worker", "BATCH_SIZE", "2500")
+        poll(c, state)
+        for _ in range(2):
+            c.deployments["worker"]["restarts"] += 1
+            poll(c, state)
+        finding = state["open"]["Deployment/shop/worker"]
+        finding["incident_id"], key = "I1", finding["incident_key"]
+        c.tick(12 * 60)  # no poll for 12 minutes, and meanwhile another, broken deploy
+        c.set_env("worker", "BATCH_SIZE", "99999")
+        c.crash("worker", reason="OOMKilled", exit_code=137)
+        run(c, state, 4)
+        assert finding["suspects"][0]["details"] == ["container worker: env BATCH_SIZE 2500 -> 99999"]
+        assert finding["incident_key"] != key
+
     def test_a_deploy_made_during_a_gap_longer_than_the_change_window_is_still_the_suspect(self):
         c = shop()
         state = learned(c)
@@ -784,6 +865,19 @@ class TestLifecycle:
         c.crash("worker")
         f = by_subject(run(c, state, 4))["Deployment/shop/worker"]
         assert f["suspects"][0]["details"] == ["container worker: env BATCH_SIZE 500 -> 2500"]
+
+    def test_a_deploy_made_during_a_polling_gap_does_not_outrank_a_later_cause(self):
+        c = shop()
+        state = learned(c)
+        run(c, state, 3)
+        c.tick(12 * 60)  # no poll for 12 minutes; a harmless deploy meanwhile
+        c.set_env("frontend", "LOG_FORMAT", "json")
+        assert run(c, state, 7) == []
+        c.configmap("frontend-nginx", {"default.conf": "upstream api { server api:8080; } proxy_conect_timeout 2s;"})
+        c.restart("frontend")
+        c.crash("frontend", reason="Error", exit_code=1)
+        f = by_subject(run(c, state, 3))["Deployment/shop/frontend"]
+        assert f["suspects"][0]["key"] == "ConfigMap/shop/frontend-nginx"
 
     def test_a_deploy_made_during_a_polling_gap_is_still_the_suspect(self):
         c = shop()

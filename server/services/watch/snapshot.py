@@ -41,11 +41,17 @@ _FLAG = r"--?[\w.-]*?(?:password|passwd|passphrase|pass|pwd|secret|token(?:[-_]?
 _SECRET_FLAG = re.compile(rf"^{_FLAG}$", re.I)
 _SECRET_FLAG_VALUE = re.compile(rf"(?<![\w-])({_FLAG})(=|\s+)(?!<redacted|-)(\S+)", re.I)
 # Query parameters, matched in linear time; a credential-named one is masked:
-# /-/ready?token=x, ?access_token=x, &sig=x.
-# A value runs through a "?" unless that "?" starts another name= (?next=/x?password=y),
-# which is then matched on its own; a credential holding a "?" is still masked whole.
+# /-/ready?token=x, ?access_token=x, &sig=x. A value runs through a "?" unless that "?"
+# starts another name= (?next=/x?password=y), which is then matched on its own; a
+# credential's value is masked whole, through any "?" in it, up to the next & # or space.
 _QUERY_PARAM = re.compile(r"([?&])([^=&#\s?]{1,200})=((?:[^&#\s?]|\?(?![^=&#\s?]{1,200}=))+)")
-_CREDENTIAL_WORD = re.compile(r"token|key|pass|secret|auth|sig", re.I)
+_QUERY_VALUE_END = re.compile(r"[&#\s]")
+# In a log line a value also ends where the URL does inside JSON or quotes, so the fields
+# after it ("status":503,"error":"...") keep their words.
+LOG_QUERY_PARAM = re.compile(r"([?&])([^=&#\s?\"'\\]{1,200})="
+                             r"((?:[^&#\s?\"'\\,;|)\]}>]|\?(?![^=&#\s?\"'\\]{1,200}=))+)")
+LOG_QUERY_VALUE_END = re.compile(r"[&#\s\"',;|)\]}>]|\\(?=\")")
+_CREDENTIAL_WORD = re.compile(r"token|key|pass|secret|auth|sig|credential|creds", re.I)
 # Masked values keep a digest keyed by a server secret, so a rotated password still
 # shows as a change while neither the value nor a hash that could be checked against
 # guesses is stored. Without the secret (some dev installs) a masked value is just
@@ -69,9 +75,20 @@ def _masked(value: str) -> str:
     return f"<redacted {digest}>" if digest else "<redacted>"
 
 
-def _mask_query(match: re.Match, tag: Any) -> str:
-    sep, name, value = match.groups()
-    return f"{sep}{name}={tag(value)}" if _CREDENTIAL_WORD.search(name) else match.group(0)
+def mask_query_params(text: str, tag: Any, params: re.Pattern = _QUERY_PARAM,
+                      value_end: re.Pattern = _QUERY_VALUE_END) -> str:
+    """``text`` with each credential-named query parameter's value replaced by ``tag(value)``,
+    whole: through any "?" in it, up to where the parameter ends. One pass, linear."""
+    out, pos = [], 0
+    for m in params.finditer(text):
+        if m.start() < pos or not _CREDENTIAL_WORD.search(m.group(2)) or m.group(3).startswith("<redacted"):
+            continue
+        stop = value_end.search(text, m.start(3))
+        end = stop.start() if stop else len(text)
+        out += [text[pos:m.start(3)], tag(text[m.start(3):end])]
+        pos = end
+    out.append(text[pos:])
+    return "".join(out)
 
 
 @functools.lru_cache(maxsize=20_000)  # pod specs barely change between polls
@@ -86,7 +103,7 @@ def _clean(value: str, digest: bool = True) -> str:
     value = value.replace("\x00", "")
     masked = _URL_PASSWORD.sub(lambda m: f"{m.group(1)}:{tag(m.group(2))}@", value)
     masked = _SECRET_FLAG_VALUE.sub(lambda m: f"{m.group(1)}{m.group(2)}{tag(m.group(3))}", masked)
-    masked = _QUERY_PARAM.sub(lambda m: _mask_query(m, tag), masked)
+    masked = mask_query_params(masked, tag)
     out, findings = redact(masked)
     return f"{out} {_digest(value)}".rstrip() if findings and digest else out
 

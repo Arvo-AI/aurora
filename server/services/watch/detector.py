@@ -44,7 +44,8 @@ from typing import Any
 
 from services.watch.changes import detect_changes
 from services.watch.logs import normalize
-from services.watch.snapshot import _QUERY_PARAM, BAD_WAITING, DIGEST_ID, TRACKED_OBJECTS, _mask_query
+from services.watch.snapshot import (BAD_WAITING, DIGEST_ID, LOG_QUERY_PARAM, LOG_QUERY_VALUE_END,
+                                     TRACKED_OBJECTS, mask_query_params)
 from utils.security.output_redaction import redact
 
 SEVERITY_RANK = {"low": 1, "medium": 2, "high": 3, "critical": 4}
@@ -212,23 +213,29 @@ def _event_deltas(state: dict[str, Any], snapshot: dict[str, Any]) -> list[dict[
     return out
 
 
-# Before templating, in linear time on every line: tokens and ids (a long run mixing
-# upper and lower case and digits, as keys, JWT segments and PATs do, or a lowercase
-# run with one long segment mixing letters and digits, as cuid and session ids do;
-# not names like checkout-service-v2 or a pod name), the value of a credential-shaped
+# Before templating, in linear time on every line: the value of a credential-shaped
 # pair (password=..., "api_key": "...", logfmt or JSON, quoted with spaces or escaped
-# inside a string), credential query parameters (?sig=..., ?pass=...), and the
-# credential after an Authorization header. The full secret rules run where text is
-# kept or quoted: a template the baseline stores, a finding's evidence, held lines.
+# inside a string), credential query parameters (?sig=..., ?pass=...), the credential
+# after an Authorization header, then tokens and ids (a long run mixing upper and
+# lower case and digits, as keys, JWT segments and PATs do, or a lowercase run with
+# one long segment mixing letters and digits, as cuid and session ids do; not names
+# like checkout-service-v2 or a pod name). The masks that know a key run first, so the
+# token pass cannot take a key with part of its value. The full secret rules run where
+# text is kept or quoted: a template the baseline stores, a finding's evidence, held lines.
 _TOKEN_RUN = re.compile(r"[A-Za-z0-9+_=-]{20,}")
 _CREDENTIAL_KEY = (r"(?:password|passwd|pass|pwd|passphrase|secret|token|api[_-]?key|apikey|access[_-]?key|"
-                   r"private[_-]?key|auth[_-]?(?:token|key)|session[_-]?(?:id|token|key)|signature)")
+                   r"private[_-]?key|auth[_-]?(?:token|key)|session[_-]?(?:id|token|key)|signature|"
+                   r"credentials?|creds)")
 # Anchored on the keyword (no scan before it): key, its closing quote (escaped or not),
 # the separator, then a double-quoted value (escaped or not), a single-quoted one, or a
-# bare one that stops at a delimiter.
+# bare one that stops at a delimiter (a backslash only when it starts an escaped quote).
 _CREDENTIAL_PAIR = re.compile(
     rf"(?i)({_CREDENTIAL_KEY}\\?[\"']?[ \t]*([=:])[ \t]*)"
-    r"(?:(\\?\")((?:[^\"\\]|\\(?!\"))*)|(')([^']*)|([^\s&\"',;|)\]}>\\]+))")
+    r"(?:(\\?\")((?:[^\"\\]|\\(?!\"))*)|(')([^']*)|((?:[^\s&\"',;|)\]}>\\]|\\(?!\"))+))")
+# Prose after "key:" that is a status, not a value: "token: expired", "using password: YES".
+_STATUS_WORDS = frozenset(
+    "expired invalid missing required revoked malformed empty none null nil ok true false yes no set unset "
+    "unknown denied rejected mismatch valid present absent provided incorrect wrong bad failed passed".split())
 _AUTH_HEADER = re.compile(r"(?i)\b(authorization[\"']?[ \t]*[=:][ \t]*[\"']?(?:bearer|basic|token)[ \t]+)[^\s\"',;|)\]}>]+")
 
 
@@ -247,16 +254,17 @@ def _mask_pair(m: re.Match) -> str:
         return f"{prefix}{dquote}<redacted>"
     if squote is not None:
         return f"{prefix}'<redacted>"
-    # Prose ("token: expired", "pass: ok") keeps its word unless it looks like a secret.
-    if separator == ":" and not any(c.isdigit() for c in bare) and len(bare) < 12:
+    # Prose ("token: expired", "pass: ok") keeps its word; any other value is masked.
+    if separator == ":" and bare.lower().rstrip(".!") in _STATUS_WORDS:
         return m.group(0)
     return f"{prefix}<redacted>"
 
 
 def _mask_secrets(line: str) -> str:
-    masked = _TOKEN_RUN.sub(lambda m: "<token>" if _looks_like_token(m.group(0)) else m.group(0), line)
-    masked = _QUERY_PARAM.sub(lambda m: _mask_query(m, lambda _: "<redacted>"), masked)
-    return _AUTH_HEADER.sub(r"\1<redacted>", _CREDENTIAL_PAIR.sub(_mask_pair, masked))
+    masked = _CREDENTIAL_PAIR.sub(_mask_pair, line)
+    masked = mask_query_params(masked, lambda _: "<redacted>", LOG_QUERY_PARAM, LOG_QUERY_VALUE_END)
+    masked = _AUTH_HEADER.sub(r"\1<redacted>", masked)
+    return _TOKEN_RUN.sub(lambda m: "<token>" if _looks_like_token(m.group(0)) else m.group(0), masked)
 
 
 def template_counts(lines: list[str]) -> dict[str, dict[str, Any]]:
@@ -755,10 +763,17 @@ def reapplies_only(change: dict[str, Any]) -> bool:
             and all(d.startswith("rollout restart requested") for d in details))
 
 
-def _scale_only(change: dict[str, Any]) -> bool:
-    """A change of replica count and nothing else."""
+def _scaled_up(change: dict[str, Any]) -> bool:
+    """More replicas and nothing else changed: an HPA (or a person) answering load or an
+    outage, not a cause. Scaling down (a dependency to zero) can be one."""
     details = change.get("details") or []
-    return bool(details) and all(d.startswith("replicas ") for d in details)
+    counts = [re.fullmatch(r"replicas (\d+) -> (\d+)", d) for d in details]
+    return bool(counts) and all(m is not None and int(m.group(2)) > int(m.group(1)) for m in counts)
+
+
+def _strength(suspect: dict[str, Any]) -> int:
+    """How closely a suspect relates to its finding, without its recency."""
+    return suspect.get("strength", suspect["score"] - 2)
 
 
 def _relation(finding: dict[str, Any], change: dict[str, Any], snapshot: dict[str, Any]) -> tuple[int, str]:
@@ -839,6 +854,15 @@ def _workloads_of(finding: dict[str, Any], snapshot: dict[str, Any]) -> set[str]
             if w["namespace"] == ns and labels_match(selector, w["pod_labels"])}
 
 
+def _dependency_backends(finding: dict[str, Any], snapshot: dict[str, Any]) -> set[str]:
+    """Workloads behind the Services the finding's workload depends on (as _relation reads them)."""
+    workload = snapshot["workloads"].get(finding["subject"])
+    if not workload:
+        return set()
+    return {b for dep in dependencies(workload, snapshot)
+            for b in (snapshot["services"].get(dep) or {}).get("backends") or []}
+
+
 def attribute(finding: dict[str, Any], changes: list[dict[str, Any]], snapshot: dict[str, Any],
               config: dict[str, Any]) -> list[dict[str, Any]]:
     """Up to three changes most likely to have caused ``finding``, best first."""
@@ -859,9 +883,11 @@ def attribute(finding: dict[str, Any], changes: list[dict[str, Any]], snapshot: 
         # is as recent as that restart and ranks above it.
         took_effect = change["at"]
         if change["kind"] in ("ConfigMap", "Secret"):
-            # The restart that matters is the failing workload's own (the latest one before
-            # the symptom), not the first restart of any workload sharing the ConfigMap.
-            users = _users_of(change, snapshot) & _workloads_of(finding, snapshot)
+            # The restart that matters is the failing workload's own, or that of a workload
+            # it depends on (the latest one before the symptom), not the first restart of any
+            # workload sharing the ConfigMap.
+            users = _users_of(change, snapshot) & (_workloads_of(finding, snapshot)
+                                                   | _dependency_backends(finding, snapshot))
             applied = [r["at"] for r in reapplies
                        if r["key"] in users and change["at"] <= r["at"] <= finding["first_seen"] + 120]
             if applied:
@@ -870,9 +896,11 @@ def attribute(finding: dict[str, Any], changes: list[dict[str, Any]], snapshot: 
         recency = 2 if since <= 180 else 1 if since <= 900 else 0
         seconds_before: int | None = round(gap)
         if change.get("during_gap"):
-            # Made sometime during a polling gap: when exactly is unknown, so it is neither
-            # recent nor old, and no time before the symptom is claimed for it.
-            recency, seconds_before = 1, None
+            # Made sometime during a polling gap: when exactly is unknown, so no time before
+            # the symptom is claimed for it. It was made no later than the poll that found
+            # it: never recent, and old when even that poll was over 15 minutes before.
+            known_age = finding["first_seen"] - change.get("detected_at", change["at"])
+            recency, seconds_before = (0 if known_age > 900 else 1), None
             why += ", made during a polling gap"
         # The error names the object ("exceeded quota: compute-resources"). Not for
         # workloads: their names are in every pod name.
@@ -881,9 +909,13 @@ def attribute(finding: dict[str, Any], changes: list[dict[str, Any]], snapshot: 
         if named:
             why += ", named in the error"
         ranked.append({**change, "score": weight + recency + (2 if named else 0), "relation": why,
-                       "seconds_before": seconds_before})
-    # On a tie, what the pods picked up ranks above the restart that made them pick it up.
-    ranked.sort(key=lambda r: (-r["score"], reapplies_only(r), abs(r["seconds_before"] or 0)))
+                       "seconds_before": seconds_before, "strength": weight + (2 if named else 0)})
+    # On a tie, what the pods picked up ranks above the restart that made them pick it up,
+    # then the closer in time. A gap change is at least as old as the poll that found it:
+    # older than anything found after the gap, newer than anything before it.
+    ranked.sort(key=lambda r: (-r["score"], reapplies_only(r),
+                               abs(r["seconds_before"]) if r["seconds_before"] is not None
+                               else max(0.0, finding["first_seen"] - r.get("detected_at", r["at"]))))
     return ranked[:3]
 
 
@@ -1003,15 +1035,18 @@ def step(state: dict[str, Any], snapshot: dict[str, Any], logs: dict[str, list[s
                 # incident, which is sent the update. Re-ranking the changes it was already
                 # blamed among only moves them between recency buckets: never a newer cause.
                 fresh = attribute({**existing, "first_seen": now}, state["changes"], snapshot, cfg)
-                old, new = primary_suspect(existing), primary_suspect({"suspects": fresh})
-                # A newer cause must rank at least as high as the old one did when it was
-                # blamed (not as the old one decays with time), and is never routine: a
-                # restart, a replaced pod, or a scale (an HPA answering the outage).
-                if (new is not None and not reapplies_only(new) and not _scale_only(new)
+                old = primary_suspect(existing)
+                # The newer cause is the best fresh suspect that is not routine (a restart, a
+                # replaced pod, a scale-up answering the outage), found since the finding was
+                # last blamed, and related to it at least as closely as the old suspect.
+                # Recency is left out of that comparison on both sides, so neither the old
+                # suspect aging nor a gap change's unknown time decides it.
+                new = next((s for s in fresh if not reapplies_only(s) and not _scaled_up(s)), None)
+                if (new is not None and primary_suspect({"suspects": [new]}) is not None
                         and new.get("detected_at", new["at"]) > existing.get("blamed_at", existing["first_seen"])
                         and (old is None or ((new["key"], new["at"]) != (old["key"], old["at"])
-                                             and new["score"] >= old["score"]))):
-                    existing["suspects"] = fresh
+                                             and _strength(new) >= _strength(old)))):
+                    existing["suspects"] = [new] + [s for s in fresh if s is not new]
                     existing["blamed_at"] = now
                     existing.pop("incident_key", None)
                     confirmed.append(existing)
