@@ -84,7 +84,15 @@ def _suspects(group: dict[str, Any]) -> list[dict[str, Any]]:
     seen, out = set(), []
     ranked = sorted((s for f in group["findings"] for s in f.get("suspects") or []),
                     key=lambda s: -s.get("score", 0))
-    lead = group.get("primary_suspect")
+    # The primary suspect of the finding the group's key came from ("<ns>|<object>|<at>"):
+    # group_findings takes primary_suspect from the first finding in state order, which can
+    # be a downstream finding blaming its own change. Only a finding's own primary suspect
+    # counts, so a re-blamed finding that rejoined an older incident keeps its newer cause.
+    _, _, named = (group.get("key") or "").partition("|")
+    heads = [f["suspects"][0] for f in group["findings"]
+             if f.get("suspects") and f["suspects"][0].get("score", 0) >= 4
+             and f"{f['suspects'][0]['key']}|{int(f['suspects'][0].get('at') or 0)}" == named]
+    lead = heads[0] if heads else group.get("primary_suspect")
     for s in ([lead] if lead else []) + ranked:
         ident = (s["key"], int(s.get("at") or 0))
         if ident not in seen:

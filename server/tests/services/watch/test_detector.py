@@ -495,6 +495,23 @@ class TestDependencies:
         snapshot = build_snapshot(c.render(), c.now)
         assert dependencies(snapshot["workloads"]["Deployment/shop/loadgen"], snapshot) == ["shop/frontend", "shop/redis"]
 
+    def test_reading_dependencies_from_crafted_args_stays_cheap(self):
+        # Attribution asks for a workload's dependencies once per change it weighs; a
+        # Deployment with long args of word characters must not stall the poll.
+        import time
+
+        from services.watch.detector import dependencies
+
+        c = shop()
+        api = c.deployments["api"]["template"]["spec"]["containers"][0]
+        api["args"] = [".a" * 249 + f"{i:02d}" for i in range(100)]
+        snapshot = build_snapshot(c.render(), c.now)
+        workload = snapshot["workloads"]["Deployment/shop/api"]
+        start = time.perf_counter()
+        for _ in range(200):
+            dependencies(workload, snapshot)
+        assert time.perf_counter() - start < 1
+
     def test_a_client_that_names_its_upstream_in_args_joins_the_upstream_incident(self):
         c = shop()
         loadgen = c.deployments["loadgen"]["template"]["spec"]["containers"][0]

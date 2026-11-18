@@ -36,6 +36,7 @@ dict so the caller can persist it as JSON between polls.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import math
@@ -752,9 +753,18 @@ def _service_symptoms(state: dict[str, Any], snapshot: dict[str, Any],
 # ---------------------------------------------------------------------------
 
 # A host in a container's command or args: a URL's host, or host:port
-# (--upstream=http://api:8080, wget http://frontend/x, --redis=redis:6379).
-_ARG_URL_HOST = re.compile(r"\b[a-z][a-z0-9+.-]*://(?:[^\s/@]*@)?([a-z0-9-]+)", re.I)
+# (--upstream=http://api:8080, wget http://frontend/x, --redis=redis:6379). The scheme
+# is bounded so a long run of word characters cannot make it slow (as in snapshot).
+_ARG_URL_HOST = re.compile(r"\b[a-z][a-z0-9+.-]{0,30}://(?:[^\s/@]*@)?([a-z0-9-]+)", re.I)
 _ARG_HOST_PORT = re.compile(r"(?<![\w.:/@-])([a-z][a-z0-9-]*)(?:\.[a-z0-9-]+)*:\d{2,5}\b", re.I)
+
+
+@functools.lru_cache(maxsize=20_000)  # pod specs barely change between polls
+def _arg_hosts(arg: str) -> tuple[str, ...]:
+    """The hosts one command or args word names, lowercased. Attribution asks for a
+    workload's dependencies once per change it weighs, so each word is scanned once."""
+    return tuple(m.group(1).lower() for pattern in (_ARG_URL_HOST, _ARG_HOST_PORT)
+                 for m in pattern.finditer(arg))
 
 
 def dependencies(workload: dict[str, Any], snapshot: dict[str, Any]) -> list[str]:
@@ -771,10 +781,9 @@ def dependencies(workload: dict[str, Any], snapshot: dict[str, Any]) -> list[str
                 if host in by_name:
                     deps.add(by_name[host])
             for arg in (c.get("command") or []) + (c.get("args") or []):
-                for pattern in (_ARG_URL_HOST, _ARG_HOST_PORT):
-                    for m in pattern.finditer(str(arg)):
-                        if m.group(1).lower() in by_name:
-                            deps.add(by_name[m.group(1).lower()])
+                for host in _arg_hosts(str(arg)):
+                    if host in by_name:
+                        deps.add(by_name[host])
     return sorted(deps)
 
 
