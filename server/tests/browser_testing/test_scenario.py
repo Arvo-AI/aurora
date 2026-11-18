@@ -2,12 +2,11 @@ import json
 
 import pytest
 
-from browser_testing.paths import PathAccessError, artifact_file
+from browser_testing.paths import PathAccessError, artifact_file, scenario_file
 from browser_testing.scenario import (
     ScenarioError,
     freeze_scenario,
     load_scenario,
-    save_scenario,
     validate_frozen,
 )
 
@@ -56,13 +55,9 @@ def test_scenario_reads_and_writes_reject_paths_outside_fixture_directory(tmp_pa
     with pytest.raises(PathAccessError, match="must stay inside"):
         load_scenario(outside)
     with pytest.raises(PathAccessError, match="must stay inside"):
-        save_scenario(outside, freeze_scenario(scenario()))
+        scenario_file(outside)
     with pytest.raises(PathAccessError, match="must stay inside"):
         load_scenario("../outside.json")
-
-    with pytest.raises(PathAccessError, match="authoring output"):
-        save_scenario("another-scenario.json", freeze_scenario(scenario()))
-
 
 def test_artifacts_reject_unapproved_or_traversing_paths():
     with pytest.raises(PathAccessError, match="unsupported"):

@@ -21,7 +21,6 @@ python -m browser_testing author \
   --incident-id 40fc996b-ccde-4553-a3e3-ea2046b80bb4 \
   --incident-reference http://localhost:3000/incidents/40fc996b-ccde-4553-a3e3-ea2046b80bb4 \
   --baseline-commit 0e254410ea011f64764c3b362ec213c905b52614 \
-  --output avenue-rd-scenario.json \
   --model gpt-5-mini
 ```
 

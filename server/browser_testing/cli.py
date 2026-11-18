@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 
 from .author import author_scenario
-from .paths import ARTIFACT_DIRECTORY, scenario_file
+from .paths import ARTIFACT_DIRECTORY, AUTHORED_SCENARIO_FILE, scenario_file
 from .runner import run_scenario
 from .scenario import save_scenario
 
@@ -25,7 +25,6 @@ def _parser() -> argparse.ArgumentParser:
     author.add_argument("--incident-id", required=True)
     author.add_argument("--incident-reference", required=True)
     author.add_argument("--baseline-commit", required=True)
-    author.add_argument("--output", required=True, type=Path)
     author.add_argument("--model", default=DEFAULT_MODEL)
 
     run = commands.add_parser("run", help="run a frozen scenario")
@@ -48,8 +47,15 @@ def main() -> int:
             baseline_commit=args.baseline_commit,
             model=args.model,
         )
-        save_scenario(args.output, scenario)
-        print(json.dumps({"scenario": str(args.output), "scenarioHash": scenario["scenarioHash"]}))
+        save_scenario(scenario)
+        print(
+            json.dumps(
+                {
+                    "scenario": str(AUTHORED_SCENARIO_FILE),
+                    "scenarioHash": scenario["scenarioHash"],
+                }
+            )
+        )
         return 0
 
     result = run_scenario(

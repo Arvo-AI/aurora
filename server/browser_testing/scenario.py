@@ -13,7 +13,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .paths import AUTHORED_SCENARIO_FILE, PathAccessError, scenario_file
+from .paths import AUTHORED_SCENARIO_FILE, scenario_file
 
 
 SCHEMA_VERSION = 1
@@ -160,9 +160,7 @@ def load_scenario(path: str | Path) -> dict[str, Any]:
     return validate_frozen(value)
 
 
-def save_scenario(path: str | Path, value: dict[str, Any]) -> None:
-    if scenario_file(path) != AUTHORED_SCENARIO_FILE:
-        raise PathAccessError("authoring output must be avenue-rd-scenario.json")
+def save_scenario(value: dict[str, Any]) -> None:
     target = AUTHORED_SCENARIO_FILE
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = target.parent / ".avenue-rd-scenario.json.tmp"
