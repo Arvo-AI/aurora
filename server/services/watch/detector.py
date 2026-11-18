@@ -790,6 +790,19 @@ def _users_of(change: dict[str, Any], snapshot: dict[str, Any]) -> set[str]:
             and change["name"] in (w.get("references") or {}).get(change["kind"], [])}
 
 
+def _workloads_of(finding: dict[str, Any], snapshot: dict[str, Any]) -> set[str]:
+    """The workloads a finding is about: its own, or the ones behind its Service."""
+    subject = finding["subject"]
+    if subject in snapshot["workloads"]:
+        return {subject}
+    kind, ns, name = subject.split("/", 2)
+    if kind != "Service":
+        return set()
+    selector = (snapshot["services"].get(f"{ns}/{name}") or {}).get("selector")
+    return {key for key, w in snapshot["workloads"].items()
+            if w["namespace"] == ns and labels_match(selector, w["pod_labels"])}
+
+
 def attribute(finding: dict[str, Any], changes: list[dict[str, Any]], snapshot: dict[str, Any],
               config: dict[str, Any]) -> list[dict[str, Any]]:
     """Up to three changes most likely to have caused ``finding``, best first."""
@@ -810,10 +823,13 @@ def attribute(finding: dict[str, Any], changes: list[dict[str, Any]], snapshot: 
         # is as recent as that restart and ranks above it.
         took_effect = change["at"]
         if change["kind"] in ("ConfigMap", "Secret"):
-            users = _users_of(change, snapshot)
-            applied = [r["at"] for r in reapplies if r["key"] in users and r["at"] >= change["at"]]
+            # The restart that matters is the failing workload's own (the latest one before
+            # the symptom), not the first restart of any workload sharing the ConfigMap.
+            users = _users_of(change, snapshot) & _workloads_of(finding, snapshot)
+            applied = [r["at"] for r in reapplies
+                       if r["key"] in users and change["at"] <= r["at"] <= finding["first_seen"] + 120]
             if applied:
-                took_effect = min(applied)
+                took_effect = max(applied)
         since = finding["first_seen"] - took_effect
         recency = 2 if since <= 180 else 1 if since <= 900 else 0
         # The error names the object ("exceeded quota: compute-resources"). Not for

@@ -321,6 +321,21 @@ class TestWorkloadRegression:
         assert f["suspects"][0]["key"] == "Deployment/shop/api"
         assert f["suspects"][0]["relation"] == "same object (a restart)"
 
+    def test_a_shared_configmap_edit_outranks_the_restart_of_the_workload_it_broke(self):
+        # api-code is shared: the api restarts first and is fine; the worker restarts
+        # minutes later and crash-loops. The edit is still the worker's cause.
+        c = shop()
+        state = learned(c)
+        c.configmap("api-code", {"api.py": "print('api')", "worker.py": "raise SystemExit(1)"})
+        poll(c, state, seconds=60)
+        c.restart("api")
+        for _ in range(4):
+            poll(c, state, seconds=60)
+        c.restart("worker")
+        c.crash("worker", reason="Error", exit_code=1)
+        f = by_subject(run(c, state, 3, seconds=60))["Deployment/shop/worker"]
+        assert f["suspects"][0]["key"] == "ConfigMap/shop/api-code"
+
     def test_a_configmap_edit_outranks_a_restart_made_minutes_later(self):
         # Edit the ConfigMap, see nothing reload, restart five minutes later: the edit is
         # the cause, put into effect by the restart.
