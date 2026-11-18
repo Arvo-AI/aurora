@@ -2027,6 +2027,65 @@ def initialize_tables():
                 )
                 conn.rollback()
 
+            # Incident-guided browser tests managed by Aurora. Configuration is
+            # kept outside the customer repository; runs are keyed to the exact
+            # PR head and frozen scenario hash.
+            try:
+                cursor.execute(
+                    """CREATE TABLE IF NOT EXISTS browser_test_configs (
+                           id SERIAL PRIMARY KEY,
+                           repo_full_name VARCHAR(512) NOT NULL UNIQUE,
+                           installation_id BIGINT NOT NULL,
+                           enabled BOOLEAN NOT NULL DEFAULT FALSE,
+                           install_command TEXT NOT NULL,
+                           start_command TEXT NOT NULL,
+                           preview_port INTEGER NOT NULL,
+                           readiness_path TEXT NOT NULL DEFAULT '/',
+                           readiness_timeout_seconds INTEGER NOT NULL DEFAULT 30,
+                           scenario_path TEXT NOT NULL,
+                           scenario_hash VARCHAR(64) NOT NULL,
+                           model VARCHAR(100) NOT NULL DEFAULT 'gpt-5-mini',
+                           base_branch VARCHAR(255) NOT NULL DEFAULT 'main',
+                           head_prefix VARCHAR(255),
+                           runner_repo VARCHAR(512) NOT NULL,
+                           runner_workflow VARCHAR(255) NOT NULL,
+                           runner_ref VARCHAR(255) NOT NULL DEFAULT 'main',
+                           aurora_repo VARCHAR(512) NOT NULL,
+                           aurora_ref VARCHAR(64) NOT NULL,
+                           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                           updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                       );"""
+                )
+                cursor.execute(
+                    """CREATE TABLE IF NOT EXISTS browser_test_runs (
+                           id UUID PRIMARY KEY,
+                           config_id INTEGER NOT NULL REFERENCES browser_test_configs(id) ON DELETE CASCADE,
+                           repo_full_name VARCHAR(512) NOT NULL,
+                           installation_id BIGINT NOT NULL,
+                           pr_number INTEGER NOT NULL,
+                           head_sha VARCHAR(40) NOT NULL,
+                           scenario_hash VARCHAR(64) NOT NULL,
+                           callback_token_hash VARCHAR(64) NOT NULL,
+                           check_run_id BIGINT,
+                           workflow_run_id BIGINT,
+                           status VARCHAR(32) NOT NULL DEFAULT 'queued',
+                           verdict VARCHAR(32),
+                           result JSONB,
+                           error TEXT,
+                           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                           completed_at TIMESTAMPTZ,
+                           UNIQUE(repo_full_name, pr_number, head_sha, scenario_hash)
+                       );"""
+                )
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_browser_test_runs_pr ON browser_test_runs(repo_full_name, pr_number, created_at DESC);"
+                )
+                conn.commit()
+                logging.info("Ensured managed browser test tables exist.")
+            except Exception as e:
+                logging.warning(f"Error creating managed browser test tables: {e}")
+                conn.rollback()
+
             # NOTE: The slack_channels.is_dismissed column is now unused —
             # channel membership is the single source of truth (a channel is
             # Active iff Aurora is a member of it), so the old "dismiss without

@@ -80,6 +80,9 @@ EXEMPT_FUNCTIONS: Set[str] = {
     # Webhooks (external service push — HMAC/secret validates sender)
     "webhook",
     "github_webhook",
+    # Central browser runner callback — a per-run, single-use bearer token
+    # is validated before any result is accepted. It has no Aurora user session.
+    "browser_test_callback",
     "bitbucket_webhook",
     "alert_webhook",
     "cloudwatch_alarm_webhook",

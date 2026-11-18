@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "runnerVersion": "1",
+  "name": "avenue-rd-lane-restriction-and-queen-st-e-closure",
+  "incident": {
+    "id": "40fc996b-ccde-4553-a3e3-ea2046b80bb4",
+    "reference": "http://localhost:3000/incidents/40fc996b-ccde-4553-a3e3-ea2046b80bb4"
+  },
+  "brief": "The road board previously showed \u201cRoad closed\u201d for Avenue Rd even though the City record described a blocked curb lane. Verify in the running app that Avenue Rd shows \u201cLane restriction\u201d and Queen St E still shows \u201cRoad closed.\u201d",
+  "baselineCommit": "0e254410ea011f64764c3b362ec213c905b52614",
+  "checks": [
+    {
+      "id": "avenue-rd-badge",
+      "rowText": "Avenue Rd",
+      "expectedBadge": "Lane restriction"
+    },
+    {
+      "id": "queen-st-e-badge",
+      "rowText": "Queen St E",
+      "expectedBadge": "Road closed"
+    }
+  ],
+  "scenarioHash": "62b309720e26717a46a6195f47ba7d207bf356ee51dfa022bd9ca87926da3e90",
+  "authoring": {
+    "model": "gpt-5-mini",
+    "previewOrigin": "http://127.0.0.1:5000",
+    "observations": [
+      {
+        "rowText": "Avenue Rd",
+        "observedBadges": [
+          "Road closed"
+        ]
+      },
+      {
+        "rowText": "Queen St E",
+        "observedBadges": [
+          "Road closed"
+        ]
+      }
+    ]
+  }
+}

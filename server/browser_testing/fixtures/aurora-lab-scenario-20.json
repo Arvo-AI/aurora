@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "runnerVersion": "1",
+  "name": "Aurora Lab shop items route",
+  "incident": {
+    "id": "aurora-lab-scenario-20",
+    "reference": "https://github.com/Arvo-AI/aurora-lab/tree/main/scenarios/20-nginx-502-upstream-closed-connection"
+  },
+  "brief": "The shop /api/items route previously returned HTTP 502 while Kubernetes reported every pod Ready. Verify the route returns HTTP 200 and displays the healthy item list; /healthz is only the separate readiness control.",
+  "baselineCommit": "4edcd9dfbc48cbd9ca8ea031e429832cf72842d0",
+  "checks": [
+    {
+      "id": "shop-items-route",
+      "path": "/api/items",
+      "expectedStatus": 200
+    }
+  ],
+  "scenarioHash": "7948015e214a770ab3350feb60365739737f129ce03eac65e62c52b959ff76d9",
+  "authoring": {
+    "model": "manual-local-freeze",
+    "previewOrigin": "http://127.0.0.1:18080",
+    "observations": [
+      {
+        "route": "/api/items",
+        "status": 200,
+        "visibleText": "{\"items\": [\"kettle\", \"mug\", \"teapot\"]}"
+      },
+      {
+        "route": "/healthz",
+        "status": 200,
+        "visibleText": "ok"
+      }
+    ]
+  }
+}

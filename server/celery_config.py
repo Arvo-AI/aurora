@@ -164,6 +164,7 @@ celery_app.conf.update(
         'utils.aws.credential_refresh',
         'routes.aws.cloudwatch_tasks',
         'tasks.github_webhook_tasks',
+        'tasks.browser_test_runs',
         'tasks.bitbucket_webhook_tasks',
         'tasks.change_gating',
         'routes.bitbucket.bitbucket_selection',

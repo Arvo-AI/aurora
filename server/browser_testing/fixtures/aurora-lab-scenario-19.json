@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "runnerVersion": "1",
+  "name": "Scenario 19 per-replica shop route",
+  "incident": {
+    "id": "30d7f3d2-c7d4-414f-a132-4f8ffea14161",
+    "reference": "http://localhost:3000/incidents/30d7f3d2-c7d4-414f-a132-4f8ffea14161"
+  },
+  "brief": "The shop frontend previously split after a ConfigMap edit and partial restart: one Ready replica served /api/items with HTTP 200 while the other returned HTTP 504. Verify /api/items returns HTTP 200 on each frontend replica independently.",
+  "baselineCommit": "4edcd9dfbc48cbd9ca8ea031e429832cf72842d0",
+  "checks": [
+    {
+      "id": "retained-items",
+      "path": "/api/items",
+      "expectedStatus": 200,
+      "target": "frontend-retained"
+    },
+    {
+      "id": "restarted-items",
+      "path": "/api/items",
+      "expectedStatus": 200,
+      "target": "frontend-restarted"
+    }
+  ],
+  "targets": [
+    {
+      "id": "frontend-retained",
+      "kind": "kubernetes-pod-label",
+      "namespace": "shop",
+      "selector": "aurora.dev/replica=retained",
+      "port": 80
+    },
+    {
+      "id": "frontend-restarted",
+      "kind": "kubernetes-pod-label",
+      "namespace": "shop",
+      "selector": "aurora.dev/replica=restarted",
+      "port": 80
+    }
+  ],
+  "scenarioHash": "c0c973f37681b3dce61b72e88f837a58467194263f65d39b562c3059da6502d3",
+  "authoring": {
+    "model": "human-reviewed-from-aurora-investigation",
+    "source": {
+      "incidentId": "30d7f3d2-c7d4-414f-a132-4f8ffea14161",
+      "chatSessionId": "17521e20-e3e7-4461-b54d-ba30a57433b1",
+      "chatMessageNumber": 34,
+      "humanFindingId": 921
+    },
+    "finding": "The younger restarted replica loaded api:8000 and returned 504; the older retained replica kept api:8080 and returned 200. This led to direct per-replica checks selected by stable labels.",
+    "observations": [
+      {
+        "target": "frontend-retained",
+        "status": 200
+      },
+      {
+        "target": "frontend-restarted",
+        "status": 504
+      }
+    ]
+  }
+}
