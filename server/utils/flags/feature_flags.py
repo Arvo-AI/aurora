@@ -26,3 +26,12 @@ def is_spinnaker_enabled() -> bool:
 def is_incident_prevention_enabled() -> bool:
     """Check if PR change-gating (Incident Prevention) is enabled."""
     return os.getenv("NEXT_PUBLIC_ENABLE_INCIDENT_PREVENTION", "true").lower() == "true"
+
+
+def is_aurora_watch_enabled() -> bool:
+    """Check if Aurora Watch may run on this installation.
+
+    It is still off for every org until an admin turns it on; this is the
+    operator's switch to make it unavailable altogether.
+    """
+    return os.getenv("NEXT_PUBLIC_ENABLE_AURORA_WATCH", "true").lower() == "true"

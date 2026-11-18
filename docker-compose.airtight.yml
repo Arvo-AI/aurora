@@ -76,6 +76,8 @@ x-common-env: &common-env
   GITHUB_APP_SETUP_URL: ${GITHUB_APP_SETUP_URL}
   # Enable/disable Incident Prevention (PR change-gating). Set to false to turn off entirely.
   NEXT_PUBLIC_ENABLE_INCIDENT_PREVENTION: ${NEXT_PUBLIC_ENABLE_INCIDENT_PREVENTION:-true}
+  # Aurora Watch (opens incidents from cluster regressions; per-org opt-in). false = unavailable.
+  NEXT_PUBLIC_ENABLE_AURORA_WATCH: ${NEXT_PUBLIC_ENABLE_AURORA_WATCH:-true}
   # Slack OAuth (needed by celery_worker for formatting responses)
   SLACK_CLIENT_ID: ${SLACK_CLIENT_ID}
   SLACK_CLIENT_SECRET: ${SLACK_CLIENT_SECRET}

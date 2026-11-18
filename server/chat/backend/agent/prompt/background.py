@@ -71,7 +71,12 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
     providers = rca_context.get('providers', [])
     integrations = rca_context.get('integrations', {})
 
-    source_display = "USER-REPORTED INCIDENT" if source == "chat" else f"{source.upper()} alert"
+    if source == "chat":
+        source_display = "USER-REPORTED INCIDENT"
+    elif source == "aurora_watch":
+        source_display = "AURORA WATCH alert (opened by Aurora from a cluster regression)"
+    else:
+        source_display = f"{source.upper()} alert"
     providers_display = ", ".join(providers) if providers else "None"
     providers_tools_display = ", ".join(providers) if providers else "none"
 
@@ -124,6 +129,10 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
         leading_blank=True,
         trailing_blank=True,
     )
+
+    # An alert Aurora opened itself: start from its suspected change.
+    if source == "aurora_watch":
+        _append_segment(parts, "background_source_aurora_watch", trailing_blank=True)
 
     # Critical requirements - MUST complete all before stopping
     _source_segment = _SOURCE_SEGMENTS.get(source)

@@ -66,6 +66,7 @@ const sidebars: SidebarsConfig = {
       label: 'Integrations',
       items: [
         'integrations/connectors',
+        'integrations/aurora-watch',
         'integrations/mcp',
         'integrations/custom-mcp-servers',
         'integrations/spinnaker',

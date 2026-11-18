@@ -735,6 +735,9 @@ def get_incident(user_id, incident_id: str):
                             logger.debug("[INCIDENTS] Found incident.io payload for alert")
                     except (ValueError, TypeError):
                         logger.debug("[INCIDENTS] Skipping payload fetch for incidentio alert (non-integer id)")
+                elif source_type == "aurora_watch":
+                    # Built by Aurora itself and kept on the incident, not in a vendor table.
+                    raw_payload = ((incident.get("alert") or {}).get("metadata") or {}).get("aurora_watch")
 
                 # Log warning if no payload found for any source type
                 if not raw_payload:
