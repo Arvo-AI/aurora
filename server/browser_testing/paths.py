@@ -10,6 +10,10 @@ PACKAGE_DIRECTORY = Path(__file__).resolve().parent
 SCENARIO_DIRECTORY = (PACKAGE_DIRECTORY / "fixtures").resolve()
 ARTIFACT_DIRECTORY = (PACKAGE_DIRECTORY / "artifacts").resolve()
 ARTIFACT_FILENAMES = frozenset({"browser-evidence.png", "browser-result.json"})
+AUTHORED_SCENARIO_FILE = SCENARIO_DIRECTORY / "avenue-rd-scenario.json"
+RESULT_FILE = ARTIFACT_DIRECTORY / "browser-result.json"
+RESULT_TEMPORARY_FILE = ARTIFACT_DIRECTORY / ".browser-result.json.tmp"
+SCREENSHOT_FILE = ARTIFACT_DIRECTORY / "browser-evidence.png"
 
 
 class PathAccessError(ValueError):

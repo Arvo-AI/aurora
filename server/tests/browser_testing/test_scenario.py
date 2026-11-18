@@ -60,6 +60,9 @@ def test_scenario_reads_and_writes_reject_paths_outside_fixture_directory(tmp_pa
     with pytest.raises(PathAccessError, match="must stay inside"):
         load_scenario("../outside.json")
 
+    with pytest.raises(PathAccessError, match="authoring output"):
+        save_scenario("another-scenario.json", freeze_scenario(scenario()))
+
 
 def test_artifacts_reject_unapproved_or_traversing_paths():
     with pytest.raises(PathAccessError, match="unsupported"):

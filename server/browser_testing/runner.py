@@ -10,7 +10,12 @@ from typing import Any
 
 from .agent import run_tool_agent
 from .browser import BROWSER_TOOLS, BrowserSession, RowCandidate
-from .paths import ARTIFACT_DIRECTORY, artifact_file
+from .paths import (
+    ARTIFACT_DIRECTORY,
+    RESULT_FILE,
+    RESULT_TEMPORARY_FILE,
+    SCREENSHOT_FILE,
+)
 from .scenario import load_scenario
 
 
@@ -119,8 +124,8 @@ def run_scenario(
 ) -> dict[str, Any]:
     started_at = _utc_now()
     ARTIFACT_DIRECTORY.mkdir(parents=True, exist_ok=True)
-    result_path = artifact_file("browser-result.json")
-    screenshot_path = artifact_file("browser-evidence.png")
+    result_path = RESULT_FILE
+    screenshot_path = SCREENSHOT_FILE
     scenario: dict[str, Any] | None = None
     result: dict[str, Any]
 
@@ -194,7 +199,8 @@ Frozen checks: {checks_json}
             "screenshot": screenshot_path.name if screenshot_path.exists() else None,
         }
 
-    temporary = result_path.with_suffix(".json.tmp")
-    temporary.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
-    temporary.replace(result_path)
+    RESULT_TEMPORARY_FILE.write_text(
+        json.dumps(result, indent=2) + "\n", encoding="utf-8"
+    )
+    RESULT_TEMPORARY_FILE.replace(result_path)
     return result
