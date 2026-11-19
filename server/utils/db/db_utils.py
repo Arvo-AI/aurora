@@ -1601,6 +1601,135 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_action_runs_action ON action_runs(action_id);
                     CREATE INDEX IF NOT EXISTS idx_action_runs_status ON action_runs(org_id, status);
                 """,
+                # Detection memory (services/detection). A check is a read-only command
+                # plus an assertion on its output, run on a schedule with no model.
+                #
+                # state values (VARCHAR + documented set, as elsewhere in this module):
+                #   silent  -- runs and records; a failure reaches no one
+                #   proven  -- its record earned it the right to open a case
+                #   retired -- no longer runs; record and revisions are kept
+                #
+                # claimed_at marks a run in flight so overlapping scheduler ticks do
+                # not run the same check twice. TIMESTAMPTZ because these columns are
+                # compared against NOW() in SQL.
+                "detection_checks": """
+                    CREATE TABLE IF NOT EXISTS detection_checks (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        org_id VARCHAR(255) NOT NULL,
+                        created_by VARCHAR(255) NOT NULL,
+                        name VARCHAR(255) NOT NULL,
+                        state VARCHAR(16) NOT NULL DEFAULT 'silent',
+                        revision INTEGER NOT NULL DEFAULT 1,
+                        origin JSONB NOT NULL DEFAULT '{}'::jsonb,
+                        prediction TEXT NOT NULL,
+                        asset VARCHAR(512) NOT NULL,
+                        pattern VARCHAR(128) NOT NULL,
+                        provider VARCHAR(32) NOT NULL,
+                        target VARCHAR(255) NOT NULL DEFAULT '',
+                        command TEXT NOT NULL,
+                        assertion JSONB NOT NULL,
+                        interval_seconds INTEGER NOT NULL DEFAULT 900,
+                        run_count INTEGER NOT NULL DEFAULT 0,
+                        fail_count INTEGER NOT NULL DEFAULT 0,
+                        error_count INTEGER NOT NULL DEFAULT 0,
+                        consecutive_errors INTEGER NOT NULL DEFAULT 0,
+                        hit_count INTEGER NOT NULL DEFAULT 0,
+                        false_fire_count INTEGER NOT NULL DEFAULT 0,
+                        consecutive_false_fires INTEGER NOT NULL DEFAULT 0,
+                        revision_false_fires INTEGER NOT NULL DEFAULT 0,
+                        last_status VARCHAR(16),
+                        last_observed TEXT,
+                        last_run_at TIMESTAMPTZ,
+                        claimed_at TIMESTAMPTZ,
+                        retired_reason TEXT,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    );
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_detection_checks_org_name
+                        ON detection_checks(org_id, name);
+                    CREATE INDEX IF NOT EXISTS idx_detection_checks_due
+                        ON detection_checks(org_id, last_run_at) WHERE state <> 'retired';
+                """,
+                # One row per version of a check's definition, with why it changed.
+                "detection_check_revisions": """
+                    CREATE TABLE IF NOT EXISTS detection_check_revisions (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        check_id UUID NOT NULL REFERENCES detection_checks(id) ON DELETE CASCADE,
+                        org_id VARCHAR(255) NOT NULL,
+                        created_by VARCHAR(255) NOT NULL,
+                        revision INTEGER NOT NULL,
+                        definition JSONB NOT NULL,
+                        reason TEXT,
+                        source VARCHAR(50) NOT NULL DEFAULT 'agent',
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    );
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_detection_check_revisions_check
+                        ON detection_check_revisions(check_id, revision);
+                """,
+                # One row each time a check starts failing. A fire is graded later from
+                # what happened next (services/detection/record.py):
+                #   hit   -- an incident on the same asset was confirmed around it
+                #   false -- it cleared, or the window closed, with no such incident
+                # pattern and asset are copied from the check so a pattern's record
+                # can be summed across checks, including retired ones.
+                # incident_id is the case the fire opened or joined;
+                # evidence_incident_id is the incident that proved it right.
+                "detection_check_fires": """
+                    CREATE TABLE IF NOT EXISTS detection_check_fires (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        check_id UUID NOT NULL REFERENCES detection_checks(id) ON DELETE CASCADE,
+                        org_id VARCHAR(255) NOT NULL,
+                        revision INTEGER NOT NULL,
+                        pattern VARCHAR(128) NOT NULL,
+                        asset VARCHAR(512) NOT NULL,
+                        observed TEXT,
+                        fired_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        cleared_at TIMESTAMPTZ,
+                        outcome VARCHAR(16),
+                        graded_at TIMESTAMPTZ,
+                        incident_id UUID,
+                        evidence_incident_id UUID,
+                        opened_incident BOOLEAN NOT NULL DEFAULT FALSE
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_detection_check_fires_check
+                        ON detection_check_fires(check_id, fired_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_detection_check_fires_ungraded
+                        ON detection_check_fires(org_id, fired_at) WHERE outcome IS NULL;
+                    CREATE INDEX IF NOT EXISTS idx_detection_check_fires_pattern
+                        ON detection_check_fires(org_id, pattern) WHERE outcome IS NOT NULL;
+                """,
+                # One row while Aurora cannot run checks against a provider, so the
+                # "I have lost access" message is sent once per outage, not per check.
+                "detection_access_alerts": """
+                    CREATE TABLE IF NOT EXISTS detection_access_alerts (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        org_id VARCHAR(255) NOT NULL,
+                        provider VARCHAR(32) NOT NULL,
+                        detail TEXT,
+                        alerted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        resolved_at TIMESTAMPTZ
+                    );
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_detection_access_alerts_open
+                        ON detection_access_alerts(org_id, provider) WHERE resolved_at IS NULL;
+                """,
+                # Runs worth reading later: failures, errors and changes of status.
+                # A passing run that follows a passing run only moves the counters
+                # on detection_checks.
+                "detection_check_runs": """
+                    CREATE TABLE IF NOT EXISTS detection_check_runs (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        check_id UUID NOT NULL REFERENCES detection_checks(id) ON DELETE CASCADE,
+                        org_id VARCHAR(255) NOT NULL,
+                        revision INTEGER NOT NULL,
+                        status VARCHAR(16) NOT NULL,
+                        observed TEXT,
+                        detail TEXT,
+                        duration_ms INTEGER,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_detection_check_runs_check
+                        ON detection_check_runs(check_id, created_at DESC);
+                """,
                 # Right-sizing recommendations proposed by the hpa_vpa_rightsizing action.
                 # One live row per (org, workload) while a PR is open; dismissal starts a
                 # cooldown so the action does not re-propose a change a human rejected.
@@ -1756,6 +1885,11 @@ def initialize_tables():
             rls_tables.append("artifact_versions")
             rls_tables.append("hpa_vpa_recommendations")
             rls_tables.append("recurrence_verdicts")
+            rls_tables.append("detection_checks")
+            rls_tables.append("detection_check_revisions")
+            rls_tables.append("detection_check_runs")
+            rls_tables.append("detection_check_fires")
+            rls_tables.append("detection_access_alerts")
 
 
             # Migration: Add rca_celery_task_id column to incidents table if it doesn't exist

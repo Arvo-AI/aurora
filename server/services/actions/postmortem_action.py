@@ -241,6 +241,12 @@ def _build_action_prompt(instructions: str, incident: dict) -> str:
         "- The incident_id for tool calls is: " + incident["incident_id"],
         "- Write professionally. Do not speculate beyond what the data supports.",
         "- If Slack tools are not available, proceed with only the RCA data.",
+        # Added here, not in the stored instructions, so orgs seeded before this
+        # existed get it too.
+        "- After saving the postmortem: if the investigation shows one read-only command that "
+        "would have caught this problem earlier, save it with save_detection_check "
+        "(origin_kind \"incident\", origin_ref \"INC " + incident["incident_id"] + "\"). "
+        "Aurora then runs it by itself. Skip this when no such command is clear.",
     ]
 
     return "\n".join(parts)

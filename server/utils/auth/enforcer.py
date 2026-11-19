@@ -49,6 +49,7 @@ _DEFAULT_POLICIES = [
     ("viewer", "*", "user_preferences", "write"),
     ("viewer", "*", "rca_emails", "read"),
     ("viewer", "*", "actions", "read"),
+    ("viewer", "*", "detection_checks", "read"),
 
     # --- editor permissions (mutating operations) ---
     ("editor", "*", "connectors", "write"),

@@ -68,6 +68,10 @@ Hard anti-slop rules:
 
 - First check for existing open PRs/MRs from prior runs of this action.
   Do not open a second one if a previous proposal is still pending review.
+- Then look at what happened to the PRs/MRs earlier runs opened in this repo. If the
+  last three were closed without merging, or sat open for 30 days with no review
+  activity, this team does not use them: do not open another one for this repo. Record
+  that in the living document. A later merged PR/MR means the team uses them again.
 - Create a branch, commit the alert definitions, and open a PR (GitHub/Bitbucket)
   or MR (GitLab) using the appropriate VCS tools.
 - When modifying an existing alert/rules file, use the provider's anchored edit
@@ -76,4 +80,12 @@ Hard anti-slop rules:
 - PR/MR body: for each proposed alert, one sentence on the gap it fills and why it matters.
   No filler, no essay. Reviewers are busy.
 - If you found no gaps worth proposing, do not open an empty or low-value PR. Instead,
-  update the living document noting that coverage looks healthy and when you last checked."""
+  update the living document noting that coverage looks healthy and when you last checked.
+
+**Step 5: Cover the gap yourself**
+
+A PR only helps once someone merges it. For each real gap that a read-only command can
+observe, also call save_detection_check with origin_kind "gap", so Aurora watches it
+from now on whether or not the PR is merged. Do this even when Step 4 told you not to
+open a PR. Skip a gap you cannot express as one read-only command with a clear healthy
+condition; do not save a check you are not sure measures the gap."""
