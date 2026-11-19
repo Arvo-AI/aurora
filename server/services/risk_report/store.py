@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 import uuid
 from typing import Any, Dict, Optional
@@ -69,15 +70,26 @@ def update_run(run_id: str, **fields: Any) -> None:
     save_run(run)
 
 
+_SAFE_LOG_VALUE = re.compile(r"[^A-Za-z0-9_.:-]")
+_MODES = ("repo", "pr")
+
+
+def _log_safe(value: Any) -> str:
+    """Props can come from a request body: keep logs to a safe charset, one line."""
+    return _SAFE_LOG_VALUE.sub("_", str(value))[:64]
+
+
 def track(event: str, user_id: Optional[str], **props: Any) -> bool:
     if event not in FUNNEL_EVENTS:
         return False
-    logger.info("risk_report_funnel event=%s user=%s props=%s", event, user_id, json.dumps(props))
+    safe_props = " ".join(f"{_log_safe(k)}={_log_safe(v)}" for k, v in props.items() if v is not None)
+    logger.info("risk_report_funnel event=%s user=%s %s", event, _log_safe(user_id), safe_props)
     r = get_redis_client()
     if r is not None:
         r.hincrby(_FUNNEL_KEY, event, 1)
-        if props.get("mode"):
-            r.hincrby(_FUNNEL_KEY, f"{event}:{props['mode']}", 1)
+        mode = props.get("mode")
+        if mode in _MODES:
+            r.hincrby(_FUNNEL_KEY, f"{event}:{mode}", 1)
     return True
 
 

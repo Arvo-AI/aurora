@@ -58,7 +58,7 @@ const STAGES: Record<string, string> = {
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api/proxy/risk-report/${path}`, {
     ...init,
-    headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
+    headers: { 'Content-Type': 'application/json', ...init?.headers },
   });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body?.error || 'Request failed');
@@ -175,7 +175,7 @@ function RiskReport() {
   );
 }
 
-function Progress({ run }: { run: Run }) {
+function Progress({ run }: Readonly<{ run: Run }>) {
   if (run.status === 'failed') {
     return (
       <Card><CardContent className="pt-6 flex items-center gap-2 text-sm text-destructive">
@@ -197,17 +197,19 @@ function Progress({ run }: { run: Run }) {
   );
 }
 
-function Headline({ report }: { report: Report }) {
+const VERDICT_HEADLINE: Record<'RISKY' | 'SAFE' | 'ERROR', string> = {
+  RISKY: 'Aurora would have flagged this before merge.',
+  SAFE: 'Aurora would have let this through.',
+  ERROR: 'Aurora could not finish this review.',
+};
+
+function Headline({ report }: Readonly<{ report: Report }>) {
   if (report.mode === 'pr') {
     const pr = report.prs[0];
     return (
       <div>
         <p className="text-sm text-muted-foreground mb-1">{report.repo} · reviewed in {Math.round(report.seconds)}s</p>
-        <p className="text-xl font-semibold">
-          {pr.verdict === 'RISKY' ? 'Aurora would have flagged this before merge.'
-            : pr.verdict === 'SAFE' ? 'Aurora would have let this through.'
-              : 'Aurora could not finish this review.'}
-        </p>
+        <p className="text-xl font-semibold">{VERDICT_HEADLINE[pr.verdict ?? 'ERROR']}</p>
       </div>
     );
   }
@@ -242,7 +244,7 @@ const OUTCOME: Record<PRResult['outcome'], { text: string; cls: string }> = {
   error: { text: 'Review failed', cls: 'bg-muted text-muted-foreground' },
 };
 
-function AfterMerge({ pr }: { pr: PRResult }) {
+function AfterMerge({ pr }: Readonly<{ pr: PRResult }>) {
   if (pr.label === 'incident' && pr.evidence[0]) {
     const e = pr.evidence[0];
     return (
@@ -263,7 +265,7 @@ function AfterMerge({ pr }: { pr: PRResult }) {
   return <span>Not reverted. You know whether it caused trouble.</span>;
 }
 
-function PRRow({ pr }: { pr: PRResult }) {
+function PRRow({ pr }: Readonly<{ pr: PRResult }>) {
   const o = OUTCOME[pr.outcome];
   return (
     <div className="border-t border-border py-4 first:border-t-0">
@@ -286,8 +288,8 @@ function PRRow({ pr }: { pr: PRResult }) {
                   ? <><ShieldAlert className="h-4 w-4 text-amber-500" /> Risky</>
                   : <><CheckCircle2 className="h-4 w-4 text-muted-foreground" /> Safe to merge</>}
               </p>
-              {pr.findings.map((f, i) => (
-                <div key={i} className="mt-2">
+              {pr.findings.map(f => (
+                <div key={`${f.file_path ?? ''}:${f.title ?? ''}`} className="mt-2">
                   <p>
                     <span className="text-xs font-semibold">{f.severity}</span> {f.title}
                     {f.file_path && <span className="text-muted-foreground"> · {f.file_path}</span>}
@@ -326,7 +328,7 @@ function PRRow({ pr }: { pr: PRResult }) {
   );
 }
 
-function LookingBack({ h }: { h: Hindsight }) {
+function LookingBack({ h }: Readonly<{ h: Hindsight }>) {
   return (
     <div className="mt-4 rounded-md border border-dashed border-border p-3 text-sm">
       <p className="flex items-center gap-1 text-xs uppercase tracking-wide text-muted-foreground mb-2">
@@ -344,7 +346,7 @@ function LookingBack({ h }: { h: Hindsight }) {
   );
 }
 
-function InstallCTA({ mode }: { mode: Mode }) {
+function InstallCTA({ mode }: Readonly<{ mode: Mode }>) {
   return (
     <Card className="mt-6 border-primary/40">
       <CardContent className="pt-6 flex flex-col sm:flex-row sm:items-center gap-4">
@@ -365,7 +367,7 @@ function InstallCTA({ mode }: { mode: Mode }) {
   );
 }
 
-function ReportView({ report }: { report: Report }) {
+function ReportView({ report }: Readonly<{ report: Report }>) {
   return (
     <>
       <Card>

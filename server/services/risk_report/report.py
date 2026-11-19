@@ -35,6 +35,35 @@ def _is_bot(pr: Dict[str, Any]) -> bool:
     return user.get("type") == "Bot" or (user.get("login") or "").endswith("[bot]")
 
 
+def _original_of(gh: PublicGitHub, rv: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Fetch the PR a revert undid, or None if it can't be resolved."""
+    target = find_revert_target(rv, gh.full_name)
+    if not target:
+        return None
+    number = target[1] if target[0] == "pr" else gh.pr_for_commit(target[1])
+    if not number:
+        return None
+    try:
+        return gh.get_pr(number)
+    except Exception:
+        return None
+
+
+def _revert_evidence(original: Dict[str, Any], rv: Dict[str, Any]) -> Optional[Evidence]:
+    """Evidence when ``rv`` is a valid revert of a merged, non-revert PR within the window."""
+    orig_at, rv_at = parse_ts(original.get("merged_at")), parse_ts(rv.get("merged_at"))
+    if not orig_at or not rv_at or rv_at <= orig_at or is_revert_itself(original):
+        return None
+    hours = (rv_at - orig_at).total_seconds() / 3600
+    if hours > MAX_REVERT_WINDOW_DAYS * 24:
+        return None
+    return Evidence(
+        kind="revert_pr", ref=f"#{rv['number']}", url=rv.get("html_url", ""),
+        title=(rv.get("title") or "")[:200], after_hours=round(hours, 1),
+        reason=revert_reason(rv),
+    )
+
+
 def gather_incidents(gh: PublicGitHub, days: int, max_incidents: int) -> List[LabeledPR]:
     """Merged PRs that a later merged PR reverted, newest revert first."""
     out: List[LabeledPR] = []
@@ -42,29 +71,13 @@ def gather_incidents(gh: PublicGitHub, days: int, max_incidents: int) -> List[La
     for rv in gh.search_merged_reverts(days=days):
         if len(out) >= max_incidents:
             break
-        target = find_revert_target(rv, gh.full_name)
-        if not target:
+        original = _original_of(gh, rv)
+        if not original or original["number"] in seen:
             continue
-        number = target[1] if target[0] == "pr" else gh.pr_for_commit(target[1])
-        if not number or number in seen:
-            continue
-        try:
-            original = gh.get_pr(number)
-        except Exception:
-            continue
-        orig_at, rv_at = parse_ts(original.get("merged_at")), parse_ts(rv.get("merged_at"))
-        # Must be a merged, non-revert PR that the revert came AFTER.
-        if not orig_at or not rv_at or rv_at <= orig_at or is_revert_itself(original):
-            continue
-        hours = (rv_at - orig_at).total_seconds() / 3600
-        if hours > MAX_REVERT_WINDOW_DAYS * 24:
-            continue
-        seen.add(number)
-        out.append(LabeledPR(pr=original, label="incident", evidence=[Evidence(
-            kind="revert_pr", ref=f"#{rv['number']}", url=rv.get("html_url", ""),
-            title=(rv.get("title") or "")[:200], after_hours=round(hours, 1),
-            reason=revert_reason(rv),
-        )]))
+        evidence = _revert_evidence(original, rv)
+        if evidence:
+            seen.add(original["number"])
+            out.append(LabeledPR(pr=original, label="incident", evidence=[evidence]))
     return out
 
 

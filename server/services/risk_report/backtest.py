@@ -191,6 +191,9 @@ Return:
 - would_catch_it: one sentence naming the signal or context that would have caught it before merge (e.g. CI cache size history, a load test, a dependency's consumers)."""
 
 
+_ONE_SENTENCE = "One sentence"
+
+
 def explain_with_hindsight(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """One structured LLM call comparing the verdict to what actually happened.
 
@@ -204,10 +207,10 @@ def explain_with_hindsight(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         from chat.backend.agent.providers import create_chat_model
 
         class Hindsight(BaseModel):
-            what_broke: str = Field(description="One sentence")
+            what_broke: str = Field(description=_ONE_SENTENCE)
             visible_in_diff: bool
-            verdict_gap: str = Field(description="One sentence")
-            would_catch_it: str = Field(description="One sentence")
+            verdict_gap: str = Field(description=_ONE_SENTENCE)
+            would_catch_it: str = Field(description=_ONE_SENTENCE)
 
         llm = create_chat_model(ModelConfig.MAIN_MODEL, temperature=0.0, streaming=False)
         out = llm.with_structured_output(Hindsight, include_raw=True, method="function_calling").invoke(

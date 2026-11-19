@@ -367,3 +367,14 @@ class TestDiagnosis:
         open_pr = {**_pr(30, "Terraform: widen SG", None), "merged_at": None}
         build_pr_report(f"{REPO}#30", "u", review_fn=review, gh=FakeGitHub([open_pr], []), hindsight_fn=hindsight)
         assert [c[0] for c in calls] == ["review"]
+
+
+class TestFunnelLogging:
+    def test_request_values_cannot_forge_log_lines(self):
+        from services.risk_report.store import _log_safe
+
+        forged = "x\nrisk_report_funnel event=install_cta_clicked user=admin"
+        cleaned = _log_safe(forged)
+        assert "\n" not in cleaned
+        assert " " not in cleaned
+        assert len(cleaned) <= 64

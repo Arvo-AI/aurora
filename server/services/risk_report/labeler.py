@@ -21,7 +21,7 @@ _INFRA_PATH = re.compile(
 
 # "Reverts owner/repo#N", "Reverts #N", "Revert #N", "reverts .../pull/N"
 _REVERTS_REF = re.compile(
-    r"\brevert(?:s|ed|ing)?\b[^\n]{0,80}?(?:(?P<repo>[\w.-]+/[\w.-]+)?#(?P<num>\d+)|/pull/(?P<url_num>\d+))",
+    r"\brevert\w*[^\n]{0,80}?(?:(?P<repo>[\w.-]+/[\w.-]+)?#(?P<num>\d+)|/pull/(?P<url_num>\d+))",
     re.IGNORECASE,
 )
 # "This reverts commit <sha>", "fully reverts commit <sha>"
@@ -79,7 +79,14 @@ def touches_infra(files: List[Dict[str, Any]]) -> bool:
     return any(_INFRA_PATH.search(f.get("filename") or "") for f in files)
 
 
-_LINK_LINE = re.compile(r"^\s*(this (pr )?(fully )?)?reverts?\b.*?(#\d+|commit [0-9a-f]{7,40}|/pull/\d+)\S*\s*\.?\s*$", re.IGNORECASE)
+_LINK_TOKEN = re.compile(r"#\d+|commit [0-9a-f]{7,40}|/pull/\d+", re.IGNORECASE)
+
+
+def _is_link_line(line: str) -> bool:
+    """``Reverts owner/repo#N`` / ``This PR fully reverts commit <sha>.``: short,
+    starts with a revert verb, carries a link. Plain checks, no backtracking."""
+    lower = line.lower()
+    return "revert" in lower[:30] and len(line.split()) <= 8 and bool(_LINK_TOKEN.search(lower))
 
 
 def revert_reason(revert_pr: Dict[str, Any], limit: int = 400) -> str:
@@ -87,7 +94,7 @@ def revert_reason(revert_pr: Dict[str, Any], limit: int = 400) -> str:
     lines = []
     for line in (revert_pr.get("body") or "").splitlines():
         stripped = line.strip()
-        if not stripped or stripped.startswith("<!--") or _LINK_LINE.match(stripped):
+        if not stripped or stripped.startswith("<!--") or _is_link_line(stripped):
             continue
         lines.append(stripped)
     text = " ".join(lines)
