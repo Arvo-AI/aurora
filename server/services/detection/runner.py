@@ -19,8 +19,8 @@ from contextlib import contextmanager
 
 from celery_config import celery_app
 from services.detection import STATE_PROVEN, STATUS_ERROR
+from services.detection import access, attention, cases, consolidation, ownership, record
 from services.detection.assertion import Verdict
-from services.detection import access, cases, consolidation, record
 from services.detection.execution import judge
 from services.detection.store import (
     claim_due_checks,
@@ -101,6 +101,9 @@ def run_due_checks():
     claimed, awaiting = [], []
 
     def _claim(cur, conn, _user_id, org_id):
+        # Before claiming: a check claimed under a creator who has left would
+        # run, and fail, as that creator.
+        ownership.reassign_orphaned_checks(cur, org_id)
         due = claim_due_checks(cur, org_id, MAX_CHECKS_PER_ORG_PER_TICK)
         conn.commit()
         claimed.extend((check_id, org_id, created_by, claim) for check_id, created_by, claim in due)
@@ -266,3 +269,52 @@ def consolidate_checks():
             logger.info("%s Consolidated org %s: %s", _LOG, sanitize(org_id), retired)
 
     _for_each_org(_consolidate, "consolidating checks")
+
+
+@celery_app.task(name="services.detection.runner.spend_attention")
+def spend_attention():
+    """Post "worth a look" for long failures of unproven checks, within the weekly budget."""
+    if not checks_enabled():
+        return
+
+    def _spend(cur, conn, user_id, org_id):
+        waiting = attention.candidates(cur, org_id)
+        cleared = attention.cleared_to_note(cur, org_id)
+        if not waiting and not cleared:
+            return
+        client, channel = attention.slack_target(user_id)
+        if client is None:
+            return
+
+        for fire_id, posted_channel, ts, hours in cleared:
+            # Marked first, so a crash after sending cannot say it twice.
+            noted = attention.mark_clear_noted(cur, fire_id)
+            conn.commit()
+            if noted:
+                _send(client, posted_channel, attention.cleared_message(hours), thread_ts=ts)
+
+        budget, spent = attention.channel_budget(cur, org_id, channel)
+        for candidate in waiting[:max(0, budget - spent)]:
+            # Claimed and committed before sending: two workers must not both post.
+            claimed = attention.claim(cur, candidate["fire_id"], channel)
+            conn.commit()
+            if not claimed:
+                continue
+            ts = _send(client, channel, attention.worth_a_look_message(candidate, budget))
+            if ts:
+                attention.record_post(cur, candidate["fire_id"], ts)
+            else:
+                attention.release(cur, candidate["fire_id"])
+            conn.commit()
+
+    _for_each_org(_spend, "spending attention")
+
+
+def _send(client, channel: str, text: str, thread_ts: str | None = None) -> str | None:
+    """Post to Slack. Returns the message ts, or None when it did not go out."""
+    try:
+        result = client.send_message(channel=channel, text=text, thread_ts=thread_ts)
+        return (result or {}).get("ts") or None
+    except Exception:
+        logger.exception("%s Slack post failed", _LOG)
+        return None

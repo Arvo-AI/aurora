@@ -221,6 +221,10 @@ celery_app.conf.update(
             'task': 'services.detection.runner.watch_access',
             'schedule': 900.0,
         },
+        'spend-detection-attention': {
+            'task': 'services.detection.runner.spend_attention',
+            'schedule': 900.0,
+        },
         'consolidate-detection-checks': {
             'task': 'services.detection.runner.consolidate_checks',
             'schedule': 86400.0,
