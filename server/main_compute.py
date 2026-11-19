@@ -759,6 +759,10 @@ app.register_blueprint(debug_bp)
 from routes.onboarding_routes import onboarding_bp
 app.register_blueprint(onboarding_bp, url_prefix="/api/onboarding")
 
+# Risk Report: backtest the PR reviewer on a public repo or PR link (no install)
+from routes.risk_report_routes import risk_report_bp
+app.register_blueprint(risk_report_bp, url_prefix="/risk-report")
+
 # ============================================================================
 # Global Error Handlers
 # ============================================================================

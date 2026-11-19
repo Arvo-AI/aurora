@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
-import { Zap, Clock, ChevronRight, Loader2, CheckCircle2, Link2, GitMerge, Plus, AlertTriangle } from 'lucide-react';
+import { Zap, Clock, ChevronRight, Loader2, CheckCircle2, Link2, GitMerge, Plus, AlertTriangle, History, ArrowRight } from 'lucide-react';
 import { Incident, incidentsService } from '@/lib/services/incidents';
 import { groupIncidents, IncidentGroup, isStalled } from '@/lib/incident-grouping';
 import IncidentGroupRow from './components/IncidentGroupRow';
@@ -21,6 +21,7 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
+import { trackRiskReport } from '@/lib/risk-report';
 
 const ALERT_CATEGORIES = new Set(['Monitoring', 'Incident Management']);
 
@@ -325,6 +326,29 @@ const alertConnectors = connectorRegistry
   .getAll()
   .filter(c => c.category && ALERT_CATEGORIES.has(c.category) && c.path);
 
+// Zero-credential door: a result from a public repo or PR link, before any
+// monitoring is connected. See /risk-report.
+function RiskReportEntryCard() {
+  return (
+    <Link
+      href="/risk-report"
+      onClick={() => trackRiskReport('entry_card_clicked', { source: 'incidents_empty' })}
+      className="mt-6 max-w-lg mx-auto flex items-center gap-3 rounded-lg border border-primary/40 bg-primary/5 p-4 text-left hover:bg-primary/10 transition-colors"
+    >
+      <div className="p-2 rounded-md bg-muted">
+        <History className="h-5 w-5 text-foreground" />
+      </div>
+      <div className="flex-1">
+        <p className="text-sm font-medium">Nothing to connect yet? See what Aurora would have caught.</p>
+        <p className="text-xs text-muted-foreground">
+          Paste a GitHub PR or public repo. No install, no credentials, results in minutes.
+        </p>
+      </div>
+      <ArrowRight className="h-4 w-4 text-muted-foreground" />
+    </Link>
+  );
+}
+
 function ConnectPlatformCTA() {
   const [open, setOpen] = useState(false);
   const [suggestion, setSuggestion] = useState('');
@@ -374,6 +398,8 @@ function ConnectPlatformCTA() {
           <span className="text-xs font-medium text-muted-foreground">Suggest</span>
         </button>
       </div>
+
+      <RiskReportEntryCard />
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="sm:max-w-sm">
