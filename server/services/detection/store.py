@@ -66,6 +66,12 @@ def normalize_definition(raw: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]],
     name = _clean(raw.get("name"))
     if not name or len(name) > _MAX_NAME:
         return None, "name must be 1-%d characters" % _MAX_NAME
+    # name, asset and pattern end up in an incident title that is read by the
+    # agent that posts to chat. Angle brackets are how chat platforms spell a
+    # mention, and no identifier needs them.
+    for field in ("name", "asset", "pattern"):
+        if any(ch in _clean(raw.get(field)) for ch in "<>"):
+            return None, "%s must not contain '<' or '>'" % field
 
     limits = (
         ("prediction", _MAX_PREDICTION),

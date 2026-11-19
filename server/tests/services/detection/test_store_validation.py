@@ -74,3 +74,11 @@ def test_an_onprem_check_needs_its_cluster_and_cannot_use_a_pipe():
     piped = dict(onprem, target="cluster-7",
                  command="kubectl get pods -n checkout --no-headers | grep -c Running")
     assert "no pipes" in normalize_definition(_definition(**piped))[1]
+
+
+@pytest.mark.parametrize("field", ["name", "asset", "pattern"])
+def test_an_identifier_cannot_carry_chat_mention_syntax(field):
+    # These reach an incident title that the agent posting to chat reads.
+    definition, problem = normalize_definition(_definition(**{field: "checkout <!channel>"}))
+    assert definition is None
+    assert field in problem
