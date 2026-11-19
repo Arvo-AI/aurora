@@ -126,6 +126,25 @@ def streaming_flag(command: str) -> str:
     return ""
 
 
+def _command_problem(definition: Dict[str, Any], window_seconds: Any) -> str:
+    """Why the command cannot be saved, or ''. Sets definition['window_seconds']."""
+    problem = window.problem(definition["command"], window_seconds)
+    if problem:
+        return problem
+    definition["window_seconds"] = window_seconds
+
+    # Classified with its span filled in: that is the command that will run.
+    rejection = describe_rejection(window.render(definition["command"], window_seconds))
+    if rejection:
+        return "command is not read-only: " + rejection
+    flag = streaming_flag(definition["command"])
+    if flag:
+        return "command must answer once and exit: remove %s" % flag
+    if definition["provider"] == PROVIDER_ONPREM_KUBECTL:
+        return _onprem_problem(definition)
+    return ""
+
+
 def normalize_definition(raw: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], str]:
     """Return (definition, '') or (None, why it is refused).
 
@@ -144,23 +163,9 @@ def normalize_definition(raw: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]],
         return None, "target must be at most %d characters" % _MAX_TARGET
     definition["target"] = target
 
-    window_seconds = raw.get("window_seconds") or 0
-    problem = window.problem(definition["command"], window_seconds)
+    problem = _command_problem(definition, raw.get("window_seconds") or 0)
     if problem:
         return None, problem
-    definition["window_seconds"] = window_seconds
-
-    # Classified with its span filled in: that is the command that will run.
-    rejection = describe_rejection(window.render(definition["command"], window_seconds))
-    if rejection:
-        return None, "command is not read-only: " + rejection
-    flag = streaming_flag(definition["command"])
-    if flag:
-        return None, "command must answer once and exit: remove %s" % flag
-    if definition["provider"] == PROVIDER_ONPREM_KUBECTL:
-        problem = _onprem_problem(definition)
-        if problem:
-            return None, problem
 
     problem = validation_error(raw.get("assertion"))
     if problem:
