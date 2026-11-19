@@ -327,6 +327,7 @@ const alertConnectors = connectorRegistry
 
 function ConnectPlatformCTA() {
   const [open, setOpen] = useState(false);
+  const [sampleOpen, setSampleOpen] = useState(false);
   const [suggestion, setSuggestion] = useState('');
   const { toast } = useToast();
 
@@ -375,6 +376,15 @@ function ConnectPlatformCTA() {
         </button>
       </div>
 
+      <div className="mt-6">
+        <Button
+          variant="outline"
+          onClick={() => setSampleOpen(true)}
+        >
+          Explore a sample investigation
+        </Button>
+      </div>
+
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
@@ -397,6 +407,44 @@ function ConnectPlatformCTA() {
               Submit
             </Button>
           </form>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={sampleOpen} onOpenChange={setSampleOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Sample investigation: Elevated API latency</DialogTitle>
+            <DialogDescription>
+              Illustrative example using fictional incident data.
+              This is not a live Aurora investigation.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 text-sm">
+            <div>
+              <p className="font-medium mb-1">What happened?</p>
+              <p className="text-muted-foreground">
+                API response times increased significantly, with intermittent
+                request failures affecting users.
+              </p>
+            </div>
+
+            <div>
+              <p className="font-medium mb-1">Suspected root cause</p>
+              <p className="text-muted-foreground">
+                Database connection pool exhaustion following a sudden increase
+                in incoming traffic.
+              </p>
+            </div>
+
+            <div>
+              <p className="font-medium mb-1">Recommended next steps</p>
+              <ul className="list-disc pl-5 space-y-1 text-muted-foreground">
+                <li>Inspect database connection pool utilization.</li>
+                <li>Review recent traffic and deployment changes.</li>
+                <li>Evaluate whether connection pool capacity needs to increase.</li>
+              </ul>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>
