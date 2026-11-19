@@ -1629,6 +1629,7 @@ def initialize_tables():
                         command TEXT NOT NULL,
                         assertion JSONB NOT NULL,
                         interval_seconds INTEGER NOT NULL DEFAULT 900,
+                        window_seconds INTEGER NOT NULL DEFAULT 0,
                         run_count INTEGER NOT NULL DEFAULT 0,
                         fail_count INTEGER NOT NULL DEFAULT 0,
                         error_count INTEGER NOT NULL DEFAULT 0,
@@ -1660,6 +1661,7 @@ def initialize_tables():
                         revision INTEGER NOT NULL,
                         definition JSONB NOT NULL,
                         reason TEXT,
+                        replay JSONB,
                         source VARCHAR(50) NOT NULL DEFAULT 'agent',
                         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                     );
@@ -1695,7 +1697,8 @@ def initialize_tables():
                         nudged_at TIMESTAMPTZ,
                         nudge_channel VARCHAR(64),
                         nudge_ts VARCHAR(64),
-                        nudge_clear_noted BOOLEAN NOT NULL DEFAULT FALSE
+                        nudge_clear_noted BOOLEAN NOT NULL DEFAULT FALSE,
+                        replayed BOOLEAN NOT NULL DEFAULT FALSE
                     );
                     CREATE INDEX IF NOT EXISTS idx_detection_check_fires_check
                         ON detection_check_fires(check_id, fired_at DESC);
@@ -1927,6 +1930,22 @@ def initialize_tables():
                 conn.commit()
             except Exception as e:
                 logging.warning(f"Error adding nudge columns to detection_check_fires: {e}")
+                conn.rollback()
+
+            # Migration: windowed checks and replay (services/detection/window.py,
+            # replay.py). Same note: on a new install CREATE TABLE has these.
+            try:
+                cursor.execute("""
+                    ALTER TABLE detection_checks
+                    ADD COLUMN IF NOT EXISTS window_seconds INTEGER NOT NULL DEFAULT 0;
+                    ALTER TABLE detection_check_revisions
+                    ADD COLUMN IF NOT EXISTS replay JSONB;
+                    ALTER TABLE detection_check_fires
+                    ADD COLUMN IF NOT EXISTS replayed BOOLEAN NOT NULL DEFAULT FALSE;
+                """)
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error adding replay columns to detection tables: {e}")
                 conn.rollback()
 
             # Migration: Add rca_celery_task_id column to incidents table if it doesn't exist

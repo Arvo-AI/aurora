@@ -19,7 +19,7 @@ from contextlib import contextmanager
 
 from celery_config import celery_app
 from services.detection import STATE_PROVEN, STATUS_ERROR
-from services.detection import access, attention, cases, consolidation, ownership, record
+from services.detection import access, attention, cases, consolidation, ownership, record, replay
 from services.detection.assertion import Verdict
 from services.detection.execution import judge
 from services.detection.store import (
@@ -318,3 +318,39 @@ def _send(client, channel: str, text: str, thread_ts: str | None = None) -> str 
     except Exception:
         logger.exception("%s Slack post failed", _LOG)
         return None
+
+
+@celery_app.task(name="services.detection.runner.run_fire_drills")
+def run_fire_drills():
+    """Re-run the replay that admitted each proven check; demote one that now misses.
+
+    A check can stop catching its own incident without anyone revising it: a
+    log format changes, a metric is renamed. The replay that let it in is the
+    test that says so.
+    """
+    if not checks_enabled():
+        return
+
+    targets = []
+
+    def _collect(cur, _conn, user_id, org_id):
+        targets.extend((org_id, user_id, target) for target in replay.drill_targets(cur, org_id))
+
+    _for_each_org(_collect, "collecting fire drills")
+
+    for org_id, user_id, target in targets:
+        try:
+            if replay.still_catches(target) is not False:
+                continue
+            with _org_cursor(user_id, org_id) as (cur, conn):
+                if cur is None:
+                    continue
+                replay.fail_drill(
+                    cur, str(target["id"]), org_id,
+                    "Fire drill: replayed over incident %s, this check no longer fails."
+                    % target["replay"].get("incident_id"),
+                )
+                conn.commit()
+            logger.info("%s Fire drill demoted check %s", _LOG, sanitize(str(target["id"])))
+        except Exception:
+            logger.exception("%s Fire drill failed for check %s", _LOG, sanitize(str(target["id"])))
