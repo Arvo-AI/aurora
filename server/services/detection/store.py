@@ -56,13 +56,8 @@ def _clean(value: Any) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
-def normalize_definition(raw: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], str]:
-    """Return (definition, '') or (None, why it is refused).
-
-    The command must be one the read-only classifier recognises as a read. The
-    same classifier runs again before every execution, so a row edited behind
-    this function still cannot run a write.
-    """
+def _text_fields(raw: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], str]:
+    """The name and the plain-text fields, trimmed and length-checked."""
     name = _clean(raw.get("name"))
     if not name or len(name) > _MAX_NAME:
         return None, "name must be 1-%d characters" % _MAX_NAME
@@ -88,6 +83,19 @@ def normalize_definition(raw: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]],
         definition[field] = value
     definition["provider"] = definition["provider"].lower()
     definition["pattern"] = definition["pattern"].lower()
+    return definition, ""
+
+
+def normalize_definition(raw: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], str]:
+    """Return (definition, '') or (None, why it is refused).
+
+    The command must be one the read-only classifier recognises as a read. The
+    same classifier runs again before every execution, so a row edited behind
+    this function still cannot run a write.
+    """
+    definition, problem = _text_fields(raw)
+    if problem:
+        return None, problem
 
     # Which account, subscription or cluster the command runs against. Optional
     # for cloud providers; an on-prem cluster cannot be reached without it.
