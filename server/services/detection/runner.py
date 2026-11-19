@@ -51,14 +51,13 @@ def checks_enabled() -> bool:
 
 def _org_representatives():
     """[(user_id, org_id)], one user per org. `users` is not RLS-protected."""
-    with db_pool.get_admin_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT DISTINCT ON (org_id) id, org_id "
-                "FROM users WHERE org_id IS NOT NULL "
-                "ORDER BY org_id, id"
-            )
-            return cur.fetchall()
+    with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT DISTINCT ON (org_id) id, org_id "
+            "FROM users WHERE org_id IS NOT NULL "
+            "ORDER BY org_id, id"
+        )
+        return cur.fetchall()
 
 
 @contextmanager
@@ -68,12 +67,11 @@ def _org_cursor(user_id: str, org_id: str):
     *org_id* is pinned rather than resolved from the user, so work for a check
     whose creator has left the org is still recorded.
     """
-    with db_pool.get_admin_connection() as conn:
-        with conn.cursor() as cur:
-            if set_rls_context(cur, conn, user_id, org_id=org_id, log_prefix=_LOG):
-                yield cur, conn
-            else:
-                yield None, None
+    with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+        if set_rls_context(cur, conn, user_id, org_id=org_id, log_prefix=_LOG):
+            yield cur, conn
+        else:
+            yield None, None
 
 
 def _for_each_org(work, what: str) -> None:

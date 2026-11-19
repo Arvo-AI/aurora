@@ -205,7 +205,7 @@ export default function ChecksPage() {
         </div>
         <label className="flex items-center gap-2 text-xs text-zinc-500 cursor-pointer">
           <input type="checkbox" checked={showRetired} onChange={(e) => setShowRetired(e.target.checked)} />
-          Show retired
+          <span>Show retired</span>
         </label>
       </div>
 

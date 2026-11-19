@@ -25,12 +25,11 @@ _ERR_INTERNAL = "Internal server error"
 def get_checks(user_id):
     include_retired = request.args.get("include_retired", "").lower() == "true"
     try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cur:
-                org_id = set_rls_context(cur, conn, user_id, log_prefix="[Detection:list]")
-                if not org_id:
-                    return jsonify({"error": "No organization"}), 403
-                checks = list_checks(cur, org_id, include_retired=include_retired)
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+            org_id = set_rls_context(cur, conn, user_id, log_prefix="[Detection:list]")
+            if not org_id:
+                return jsonify({"error": "No organization"}), 403
+            checks = list_checks(cur, org_id, include_retired=include_retired)
     except Exception:
         logger.exception("[Detection] Failed to list checks")
         return jsonify({"error": _ERR_INTERNAL}), 500

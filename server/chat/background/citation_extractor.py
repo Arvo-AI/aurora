@@ -13,6 +13,8 @@ logger = logging.getLogger(__name__)
 
 # Display-friendly names for the citation modal. Hoisted to module scope so we
 # don't rebuild the dict per call.
+_DETECTION_CHECKS = "Detection Checks"
+
 _TOOL_NAME_MAPPING: Dict[str, str] = {
     "bash": "Terminal",
     "run_bash_command": "Terminal",
@@ -44,9 +46,9 @@ _TOOL_NAME_MAPPING: Dict[str, str] = {
     "append_to_memory": "Memory",
     "edit_memory": "Memory",
     "grep_memories": "Memory",
-    "save_detection_check": "Detection Checks",
-    "list_detection_checks": "Detection Checks",
-    "retire_detection_check": "Detection Checks",
+    "save_detection_check": _DETECTION_CHECKS,
+    "list_detection_checks": _DETECTION_CHECKS,
+    "retire_detection_check": _DETECTION_CHECKS,
     "search_splunk": "Splunk Search",
     "list_splunk_indexes": "Splunk Indexes",
     "list_splunk_sourcetypes": "Splunk Sourcetypes",

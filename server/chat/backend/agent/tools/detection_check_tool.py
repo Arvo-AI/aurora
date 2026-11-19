@@ -8,9 +8,8 @@ nothing in the customer's systems and notifies no one.
 import json
 import logging
 from contextlib import contextmanager
-from typing import Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from services.detection import DEFAULT_INTERVAL_SECONDS, MIN_INTERVAL_SECONDS, ORIGIN_KINDS
 from services.detection.execution import gated_form
@@ -69,7 +68,7 @@ class SaveDetectionCheckArgs(BaseModel):
             "text: contains, not_contains, eq, ne, empty, not_empty."
         )
     )
-    value: Optional[Union[float, str]] = Field(
+    value: float | str | None = Field(
         default=None, description="What the output is compared with. Omit for empty / not_empty."
     )
     origin_kind: str = Field(description="Why this check exists: " + ", ".join(ORIGIN_KINDS) + ".")
@@ -95,45 +94,38 @@ class RetireDetectionCheckArgs(BaseModel):
 @contextmanager
 def _connection(user_id: str, operation: str):
     """Yield (cursor, conn, org_id) with RLS set. Raises ValueError('no_org')."""
-    with db_pool.get_admin_connection() as conn:
-        with conn.cursor() as cursor:
-            org_id = set_rls_context(cursor, conn, user_id, log_prefix="[DetectionTool:%s]" % operation)
-            if not org_id:
-                raise ValueError("no_org")
-            yield cursor, conn, org_id
+    with db_pool.get_admin_connection() as conn, conn.cursor() as cursor:
+        org_id = set_rls_context(cursor, conn, user_id, log_prefix="[DetectionTool:%s]" % operation)
+        if not org_id:
+            raise ValueError("no_org")
+        yield cursor, conn, org_id
 
 
-def save_detection_check(
-    name: str,
-    prediction: str,
-    asset: str,
-    pattern: str,
-    provider: str,
-    command: str,
-    expect: str,
-    op: str,
-    origin_kind: str,
-    value: Optional[Union[float, str]] = None,
-    target: str = "",
-    origin_ref: str = "",
-    reason: str = "",
-    interval_seconds: int = DEFAULT_INTERVAL_SECONDS,
-    user_id: Optional[str] = None,
-    **_kwargs,
-) -> str:
-    """Create a check, or revise the one with the same name."""
+def save_detection_check(user_id: str | None = None, **fields) -> str:
+    """Create a check, or revise the one with the same name.
+
+    Takes the fields of SaveDetectionCheckArgs as keyword arguments.
+    """
     if not user_id:
         return _NO_USER_CTX
+    try:
+        args = SaveDetectionCheckArgs(
+            **{name: fields[name] for name in SaveDetectionCheckArgs.model_fields if name in fields}
+        )
+    except ValidationError as invalid:
+        first = invalid.errors()[0]
+        field = ".".join(str(part) for part in first.get("loc", ()))
+        return json.dumps({"error": "Invalid check: %s: %s" % (field, first.get("msg", "bad input"))})
 
     definition, problem = normalize_definition({
-        "name": name, "prediction": prediction, "asset": asset, "pattern": pattern,
-        "provider": provider, "target": target, "command": command,
-        "interval_seconds": interval_seconds,
-        "assertion": {"expect": expect, "op": op, "value": value},
+        "name": args.name, "prediction": args.prediction, "asset": args.asset,
+        "pattern": args.pattern, "provider": args.provider, "target": args.target,
+        "command": args.command, "interval_seconds": args.interval_seconds,
+        "assertion": {"expect": args.expect, "op": args.op, "value": args.value},
     })
     if problem:
         return json.dumps({"error": problem})
-    origin, problem = normalize_origin({"kind": origin_kind, "ref": origin_ref})
+    origin, problem = normalize_origin({"kind": args.origin_kind, "ref": args.origin_ref})
     if problem:
         return json.dumps({"error": problem})
 
@@ -154,7 +146,7 @@ def save_detection_check(
             try:
                 check_id, revision, changed = save_check(
                     cursor, org_id, user_id, definition,
-                    origin=origin, reason=reason, source="agent",
+                    origin=origin, reason=args.reason, source="agent",
                 )
             except CheckRetired as retired:
                 conn.rollback()
@@ -180,7 +172,7 @@ def save_detection_check(
 
 def list_detection_checks(
     include_retired: bool = False,
-    user_id: Optional[str] = None,
+    user_id: str | None = None,
     **_kwargs,
 ) -> str:
     """List the org's checks with their records."""
@@ -200,7 +192,7 @@ def list_detection_checks(
 def retire_detection_check(
     name: str,
     reason: str,
-    user_id: Optional[str] = None,
+    user_id: str | None = None,
     **_kwargs,
 ) -> str:
     """Stop running a check. Its record and revisions are kept."""
