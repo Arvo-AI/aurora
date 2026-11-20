@@ -16,7 +16,7 @@ from services.detection.record import MAX_ACTIVE_CHECKS_PER_ASSET, RETIRE_AFTER_
 
 _RETIRE = """UPDATE detection_checks
              SET state = %s, retired_reason = %s, updated_at = NOW()
-             WHERE id = ANY(%s::uuid[])"""
+             WHERE id = ANY(%s::uuid[]) AND state = %s"""
 
 # Best record first: hits, then fewest false fires, then the oldest check.
 _STRONGEST_FIRST = "hit_count DESC, false_fire_count ASC, created_at ASC"
@@ -25,16 +25,19 @@ _STRONGEST_FIRST = "hit_count DESC, false_fire_count ASC, created_at ASC"
 def _retire(cursor, check_ids, reason: str) -> int:
     if not check_ids:
         return 0
-    cursor.execute(_RETIRE, (STATE_RETIRED, reason, [str(i) for i in check_ids]))
+    # Guarded on silent: grading may have promoted a candidate since it was selected.
+    cursor.execute(_RETIRE, (STATE_RETIRED, reason, [str(i) for i in check_ids], STATE_SILENT))
     return cursor.rowcount
 
 
 def retire_duplicates(cursor, org_id: str) -> int:
-    """Two checks that run the same command with the same assertion are one check."""
+    """Two checks that run the same command, against the same target, for the same
+    asset, with the same assertion, are one check. The same command on two
+    clusters is two checks."""
     cursor.execute(
         """SELECT id FROM (
                SELECT id, state, ROW_NUMBER() OVER (
-                   PARTITION BY provider, command, assertion
+                   PARTITION BY provider, target, lower(asset), command, assertion
                    ORDER BY (state = 'proven') DESC, """ + _STRONGEST_FIRST + """
                ) AS place
                FROM detection_checks WHERE org_id = %s AND state <> %s
@@ -42,7 +45,7 @@ def retire_duplicates(cursor, org_id: str) -> int:
         (org_id, STATE_RETIRED, STATE_SILENT),
     )
     return _retire(cursor, [r[0] for r in cursor.fetchall()],
-                   "Duplicate of another check with the same command and condition.")
+                   "Duplicate of another check with the same target, command and condition.")
 
 
 def retire_only_ever_wrong(cursor, org_id: str) -> int:

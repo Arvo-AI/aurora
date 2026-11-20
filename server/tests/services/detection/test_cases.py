@@ -25,7 +25,10 @@ def test_the_title_alone_says_a_check_fired_and_on_what():
     assert "check" in title.lower()
 
 
-def test_a_long_name_cannot_push_the_title_past_the_incident_limit():
+def test_a_long_name_cannot_push_the_asset_out_of_the_title():
+    title = case_title(dict(_CHECK, name="x" * 255, asset="checkout"))
+    assert len(title) <= 200
+    assert title.endswith("failing on checkout")
     assert len(case_title(dict(_CHECK, name="x" * 255, asset="y" * 512))) <= 200
 
 

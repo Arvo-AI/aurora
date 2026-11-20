@@ -9,7 +9,7 @@ import json
 import logging
 from contextlib import contextmanager
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, StrictFloat, StrictInt, StrictStr, ValidationError
 
 from services.detection import DEFAULT_INTERVAL_SECONDS, MIN_INTERVAL_SECONDS, ORIGIN_KINDS
 from services.detection.execution import gated_form
@@ -27,6 +27,10 @@ from utils.db.connection_pool import db_pool
 
 logger = logging.getLogger(__name__)
 
+_STATE_NOTES = {
+    "silent": "It runs on its schedule and records results. A silent check notifies no one.",
+    "proven": "It runs on its schedule. If it starts failing it opens a case.",
+}
 _NO_USER_CTX = json.dumps({"error": "No user context available."})
 _NO_ORG_CTX = json.dumps({"error": "No organization context available."})
 
@@ -68,7 +72,8 @@ class SaveDetectionCheckArgs(BaseModel):
             "text: contains, not_contains, eq, ne, empty, not_empty."
         )
     )
-    value: float | str | None = Field(
+    # Strict: lax parsing would turn `false` into the threshold 0.0 and "300" into 300.
+    value: StrictFloat | StrictInt | StrictStr | None = Field(
         default=None, description="What the output is compared with. Omit for empty / not_empty."
     )
     origin_kind: str = Field(description="Why this check exists: " + ", ".join(ORIGIN_KINDS) + ".")
@@ -76,7 +81,7 @@ class SaveDetectionCheckArgs(BaseModel):
         default="", description="The incident id, or the person who asked, that this check came from."
     )
     reason: str = Field(default="", description="Why it is being created or changed.")
-    interval_seconds: int = Field(
+    interval_seconds: StrictInt = Field(
         default=DEFAULT_INTERVAL_SECONDS,
         description="How often to run it. Minimum %d." % MIN_INTERVAL_SECONDS,
     )
@@ -154,6 +159,9 @@ def save_detection_check(user_id: str | None = None, **fields) -> str:
                     "error": "A check with this name was retired and is not brought back.",
                     "retired_reason": str(retired),
                 })
+            # Read back: an unchanged save of a proven check is still proven.
+            cursor.execute("SELECT state FROM detection_checks WHERE id = %s", (check_id,))
+            state = cursor.fetchone()[0]
             conn.commit()
     except ValueError:
         return _NO_ORG_CTX
@@ -165,8 +173,8 @@ def save_detection_check(user_id: str | None = None, **fields) -> str:
         "status": "saved" if changed else "unchanged",
         "check_id": check_id,
         "revision": revision,
-        "state": "silent",
-        "note": "It runs on its schedule and records results. A silent check notifies no one.",
+        "state": state,
+        "note": _STATE_NOTES.get(state, ""),
     })
 
 

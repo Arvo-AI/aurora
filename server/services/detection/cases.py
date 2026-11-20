@@ -18,6 +18,8 @@ logger = logging.getLogger(__name__)
 # fresh open case join it instead of opening another.
 JOIN_OPEN_CASE_MINUTES = 60
 _TITLE_MAX_CHARS = 200
+_TITLE_NAME_CHARS = 90
+_TITLE_ASSET_CHARS = 80
 
 _ORIGIN_WORDS = {
     "incident": "it was written after incident {ref}",
@@ -56,7 +58,10 @@ def healthy_condition(assertion: Dict[str, Any]) -> str:
 
 def case_title(check: Dict[str, Any]) -> str:
     # The title is the one field the Slack routing prompt always carries.
-    return ("Aurora check: %s failing on %s" % (check["name"], check["asset"]))[:_TITLE_MAX_CHARS]
+    # Name and asset are cut separately: one slice over the whole title would let
+    # a long name push the asset, the part routing needs most, off the end.
+    name, asset = check["name"][:_TITLE_NAME_CHARS], check["asset"][:_TITLE_ASSET_CHARS]
+    return "Aurora check: %s failing on %s" % (name, asset)
 
 
 def case_description(check: Dict[str, Any], observed: str) -> str:

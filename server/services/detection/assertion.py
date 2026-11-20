@@ -55,14 +55,14 @@ def _as_number(value: Any) -> Optional[float]:
     """A finite float, or None. Booleans are not numbers here."""
     if isinstance(value, bool):
         return None
-    if isinstance(value, (int, float)):
+    if isinstance(value, str):
+        value = value.strip()
+    elif not isinstance(value, (int, float)):
+        return None
+    try:
         number = float(value)
-    elif isinstance(value, str):
-        try:
-            number = float(value.strip())
-        except ValueError:
-            return None
-    else:
+    except (ValueError, OverflowError):
+        # OverflowError: an integer too large for a float, e.g. 10**400.
         return None
     return number if math.isfinite(number) else None
 
@@ -73,6 +73,9 @@ def validation_error(assertion: Any) -> str:
         return "assertion must be an object with expect, op and value"
     expect = assertion.get("expect")
     op = assertion.get("op")
+    if not isinstance(op, str):
+        # An unhashable op (a list, a dict) would raise on the lookups below.
+        return "op must be a string"
     if expect in _COUNTED:
         if op not in _NUMBER_OPS:
             return "op for a number must be one of: " + ", ".join(sorted(_NUMBER_OPS))

@@ -10,7 +10,7 @@ from flask import jsonify, request
 
 from services.detection.store import list_checks
 from utils.auth.rbac_decorators import require_permission
-from utils.auth.stateless_auth import set_rls_context
+from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
 from utils.db.connection_pool import db_pool
 
 from . import detection_bp
@@ -26,7 +26,11 @@ def get_checks(user_id):
     include_retired = request.args.get("include_retired", "").lower() == "true"
     try:
         with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
-            org_id = set_rls_context(cur, conn, user_id, log_prefix="[Detection:list]")
+            # Pinned to the org RBAC just authorized: resolving it again from the
+            # user could return a different one while a reassignment propagates.
+            org_id = set_rls_context(
+                cur, conn, user_id, org_id=get_org_id_from_request(), log_prefix="[Detection:list]",
+            )
             if not org_id:
                 return jsonify({"error": "No organization"}), 403
             checks = list_checks(cur, org_id, include_retired=include_retired)

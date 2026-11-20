@@ -6,6 +6,7 @@ check may run, and when a run counts as healthy, can be tested on their own.
 
 import json
 import logging
+from contextlib import contextmanager
 
 from services.detection import PROVIDER_ONPREM_KUBECTL, STATUS_ERROR
 from services.detection.assertion import Verdict, evaluate
@@ -45,6 +46,37 @@ def gated_form(provider: str, command: str) -> str:
     return _command_for_policy(_normalize_cloud_exec_provider(provider), command)
 
 
+@contextmanager
+def _own_context(user_id: str, session_id: str, provider: str):
+    """Run the block as a read-only detection run, then put the caller's context back.
+
+    The execution context is per thread and has no reset. A check can be run
+    from inside an agent's turn (a replay while the agent saves it), and that
+    agent's session and mode must be what they were when the run returns.
+    """
+    from utils.cloud.cloud_utils import (
+        get_mode_from_context,
+        get_provider_preference,
+        get_user_context,
+        set_user_context,
+    )
+
+    before = get_user_context()
+    before_mode, before_providers = get_mode_from_context(), get_provider_preference()
+    set_user_context(
+        user_id=user_id, session_id=session_id,
+        provider_preference=provider, mode=_READ_ONLY_MODE,
+    )
+    try:
+        yield
+    finally:
+        if before.get("user_id"):
+            set_user_context(
+                user_id=before["user_id"], session_id=before.get("session_id"),
+                provider_preference=before_providers, mode=before_mode,
+            )
+
+
 def _execute(check: dict, user_id: str, check_id: str) -> Verdict | str:
     """Run the check's command and return its output, or an error Verdict.
 
@@ -53,31 +85,27 @@ def _execute(check: dict, user_id: str, check_id: str) -> Verdict | str:
     apply to a check exactly as they apply to a person's read-only question.
     """
     from utils.auth.command_gate import judged_at_save
-    from utils.cloud.cloud_utils import set_user_context
 
     provider, command, target = check["provider"], check["command"], check.get("target") or ""
     session_id = "detection-check-%s" % check_id
-    set_user_context(
-        user_id=user_id, session_id=session_id,
-        provider_preference=provider, mode=_READ_ONLY_MODE,
-    )
-    # The judge needs a conversation to compare the command with, and a
-    # scheduled run has none: it judged this command when the check was saved
-    # (detection_check_tool). The signature matcher and org policy still run.
-    with judged_at_save(gated_form(provider, command)):
-        if _is_onprem(provider):
-            from chat.backend.agent.tools.kubectl_onprem_tool import on_prem_kubectl
-            raw = on_prem_kubectl(
-                command, cluster_id=target, user_id=user_id, session_id=session_id,
-                timeout=COMMAND_TIMEOUT_SECONDS,
-            )
-        else:
-            from chat.backend.agent.tools.cloud_exec_tool import cloud_exec
-            raw = cloud_exec(
-                provider, command, user_id=user_id, session_id=session_id,
-                provider_preference=provider, timeout=COMMAND_TIMEOUT_SECONDS,
-                account_id=target or None,
-            )
+    with _own_context(user_id, session_id, provider):
+        # The judge needs a conversation to compare the command with, and a
+        # scheduled run has none: it judged this command when the check was saved
+        # (detection_check_tool). The signature matcher and org policy still run.
+        with judged_at_save(gated_form(provider, command)):
+            if _is_onprem(provider):
+                from chat.backend.agent.tools.kubectl_onprem_tool import on_prem_kubectl
+                raw = on_prem_kubectl(
+                    command, cluster_id=target, user_id=user_id, session_id=session_id,
+                    timeout=COMMAND_TIMEOUT_SECONDS,
+                )
+            else:
+                from chat.backend.agent.tools.cloud_exec_tool import cloud_exec
+                raw = cloud_exec(
+                    provider, command, user_id=user_id, session_id=session_id,
+                    provider_preference=provider, timeout=COMMAND_TIMEOUT_SECONDS,
+                    account_id=target or None,
+                )
     try:
         result = json.loads(raw)
     except (TypeError, ValueError):

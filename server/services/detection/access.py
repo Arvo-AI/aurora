@@ -53,6 +53,18 @@ def open_alert(cursor, org_id: str, provider: str, detail: str) -> bool:
     return cursor.rowcount > 0
 
 
+def release_alert(cursor, org_id: str, provider: str) -> None:
+    """Give up a claim whose message did not go out, so a later pass sends it.
+
+    Without this, one failed send would silence the notice for the whole outage.
+    """
+    cursor.execute(
+        "DELETE FROM detection_access_alerts "
+        "WHERE org_id = %s AND provider = %s AND resolved_at IS NULL",
+        (org_id, provider),
+    )
+
+
 def resolve_recovered(cursor, org_id: str) -> int:
     """Close alerts for providers where a check is running again."""
     cursor.execute(

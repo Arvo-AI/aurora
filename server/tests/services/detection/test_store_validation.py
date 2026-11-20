@@ -46,7 +46,7 @@ def test_a_command_that_writes_or_reads_credentials_is_refused(command):
     assert "not read-only" in problem
 
 
-@pytest.mark.parametrize("interval", [60, 299, True, "300", 300.0])
+@pytest.mark.parametrize("interval", [60, 299, True, "300", 300.0, 2 ** 31])
 def test_an_interval_below_the_floor_or_not_an_integer_is_refused(interval):
     definition, problem = normalize_definition(_definition(interval_seconds=interval))
     assert definition is None

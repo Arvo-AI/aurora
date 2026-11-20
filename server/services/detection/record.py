@@ -100,11 +100,13 @@ def apply_outcome(cursor, fire_id: str, check_id: str, org_id: str, outcome: str
     """
     cursor.execute(
         "UPDATE detection_check_fires SET outcome = %s, graded_at = NOW(), "
-        "evidence_incident_id = %s WHERE id = %s AND outcome IS NULL",
+        "evidence_incident_id = %s WHERE id = %s AND outcome IS NULL RETURNING revision",
         (outcome, evidence_incident_id, fire_id),
     )
-    if cursor.rowcount == 0:
+    graded = cursor.fetchone()
+    if graded is None:
         return "", ""
+    fire_revision = graded[0]
 
     cursor.execute(
         "SELECT state, pattern, revision FROM detection_checks WHERE id = %s FOR UPDATE",
@@ -114,6 +116,18 @@ def apply_outcome(cursor, fire_id: str, check_id: str, org_id: str, outcome: str
     if row is None:
         return "", ""
     state, pattern, revision = row
+
+    if fire_revision != revision:
+        # A fire from an earlier version, graded after the check was revised. It
+        # goes into the lifetime totals and the pattern's record, but it says
+        # nothing about the current version: two old false fires must not demote
+        # a revision that has never failed.
+        column = "hit_count" if outcome == OUTCOME_HIT else "false_fire_count"
+        cursor.execute(
+            "UPDATE detection_checks SET " + column + " = " + column + " + 1 WHERE id = %s",
+            (check_id,),
+        )
+        return state, state
 
     if outcome == OUTCOME_HIT:
         cursor.execute(
@@ -212,7 +226,10 @@ def _independent_incident(cursor, org_id: str, asset: str, fired_at, until) -> O
     check opened, or None.
 
     Incidents Aurora opened from a check are excluded: a check's own case is
-    never evidence that the check was right.
+    never evidence that the check was right. So is an investigation someone
+    started by hand that nobody has resolved: it may be a person looking into
+    this very failure, which confirms nothing. An incident raised by an alert
+    source counts as it stands.
     """
     cursor.execute(
         """SELECT i.id, i.alert_service, i.affected_services
@@ -220,6 +237,7 @@ def _independent_incident(cursor, org_id: str, asset: str, fired_at, until) -> O
            WHERE i.org_id = %s
              AND i.created_at >= %s::timestamptz - %s * INTERVAL '1 hour'
              AND i.created_at <= %s::timestamptz
+             AND (i.source_type <> 'chat' OR i.status = 'resolved')
              AND NOT EXISTS (
                  SELECT 1 FROM detection_check_fires f
                  WHERE f.incident_id = i.id AND f.opened_incident
@@ -233,15 +251,22 @@ def _independent_incident(cursor, org_id: str, asset: str, fired_at, until) -> O
     return None
 
 
-def _own_case_was_corroborated(cursor, incident_id: Optional[str]) -> bool:
-    """Whether a real alert joined the case this fire opened."""
+def _own_case_was_corroborated(cursor, incident_id: Optional[str], asset: str) -> bool:
+    """Whether an alert about the same asset joined the case this fire opened.
+
+    The correlator attaches a later alert to an open incident instead of opening
+    a second one. Without this, a proven check that fires first would never be
+    credited: the monitor's alert lands inside its own case, no independent
+    incident ever exists, and two such "false" fires would demote a check for
+    being early. Only an alert naming the same asset counts; one the correlator
+    attached from a neighbouring service does not.
+    """
     if not incident_id:
         return False
     cursor.execute(
-        "SELECT COALESCE(correlated_alert_count, 0) FROM incidents WHERE id = %s", (incident_id,),
+        "SELECT alert_service FROM incident_alerts WHERE incident_id = %s", (incident_id,),
     )
-    row = cursor.fetchone()
-    return bool(row and row[0] > 0)
+    return asset_matches(asset, [row[0] for row in cursor.fetchall()])
 
 
 def grade_fires(cursor, org_id: str) -> Tuple[int, int]:
@@ -270,7 +295,7 @@ def grade_fires(cursor, org_id: str) -> Tuple[int, int]:
     for (fire_id, check_id, asset, pattern, fired_at, incident_id, opened, until,
          window_closed) in cursor.fetchall():
         evidence = _independent_incident(cursor, org_id, asset, fired_at, until)
-        if evidence is None and opened and _own_case_was_corroborated(cursor, incident_id):
+        if evidence is None and opened and _own_case_was_corroborated(cursor, incident_id, asset):
             evidence = str(incident_id)
         if evidence is not None:
             apply_outcome(cursor, str(fire_id), str(check_id), org_id, OUTCOME_HIT, evidence)

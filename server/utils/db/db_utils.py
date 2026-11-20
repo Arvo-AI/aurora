@@ -1689,6 +1689,7 @@ def initialize_tables():
                         graded_at TIMESTAMPTZ,
                         incident_id UUID,
                         evidence_incident_id UUID,
+                        case_claimed_at TIMESTAMPTZ,
                         opened_incident BOOLEAN NOT NULL DEFAULT FALSE
                     );
                     CREATE INDEX IF NOT EXISTS idx_detection_check_fires_check

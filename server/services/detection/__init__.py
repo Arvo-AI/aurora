@@ -16,6 +16,7 @@ STATUS_ERROR = "error"
 # Same floor as scheduled actions (services/actions/scheduler.py).
 MIN_INTERVAL_SECONDS = 300
 DEFAULT_INTERVAL_SECONDS = 900
+MAX_INTERVAL_SECONDS = 7 * 24 * 3600
 
 # Where a check came from. Answers "why are you watching this?".
 ORIGIN_KINDS = ("incident", "miss", "graph", "explore", "gap", "person")

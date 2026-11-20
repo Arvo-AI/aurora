@@ -71,3 +71,10 @@ def test_lines_counts_non_empty_output_lines():
     assert evaluate(none_failed, "\n  \n").status == STATUS_PASS
     verdict = evaluate(none_failed, "job-1 Failed\njob-2 Failed\n")
     assert verdict.status == STATUS_FAIL
+
+
+def test_a_stored_assertion_no_validator_saw_becomes_an_error_not_a_crash():
+    # A crash here happens after the command ran and before the run is recorded,
+    # so the check would look like it never ran.
+    assert evaluate({"expect": "number", "op": [], "value": 1}, "1").status == STATUS_ERROR
+    assert evaluate({"expect": "number", "op": "lt", "value": 10 ** 400}, "1").status == STATUS_ERROR

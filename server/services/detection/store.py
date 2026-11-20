@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from services.detection import (
     DEFAULT_INTERVAL_SECONDS,
+    MAX_INTERVAL_SECONDS,
     MIN_INTERVAL_SECONDS,
     ORIGIN_KINDS,
     PROVIDER_ONPREM_KUBECTL,
@@ -121,8 +122,10 @@ def normalize_definition(raw: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]],
     }
 
     interval = raw.get("interval_seconds", DEFAULT_INTERVAL_SECONDS)
-    if isinstance(interval, bool) or not isinstance(interval, int) or interval < MIN_INTERVAL_SECONDS:
-        return None, "interval_seconds must be an integer >= %d" % MIN_INTERVAL_SECONDS
+    if (isinstance(interval, bool) or not isinstance(interval, int)
+            or not MIN_INTERVAL_SECONDS <= interval <= MAX_INTERVAL_SECONDS):
+        return None, "interval_seconds must be an integer between %d and %d" % (
+            MIN_INTERVAL_SECONDS, MAX_INTERVAL_SECONDS)
     definition["interval_seconds"] = interval
     return definition, ""
 
@@ -175,27 +178,28 @@ def save_check(
     Raises CheckRetired when the name belongs to a retired check, so a check
     someone asked Aurora to stop is not quietly brought back.
     """
-    values = [definition[f] for f in DEFINITION_FIELDS]
-    values[DEFINITION_FIELDS.index("assertion")] = json.dumps(definition["assertion"])
-
-    cursor.execute(
-        """SELECT id, revision, state, retired_reason, """ + ", ".join(DEFINITION_FIELDS) + """
-           FROM detection_checks WHERE org_id = %s AND name = %s FOR UPDATE""",
-        (org_id, definition["name"]),
-    )
-    row = cursor.fetchone()
-
+    row = _lock_by_name(cursor, org_id, definition["name"])
     if row is None:
+        values = [definition[f] for f in DEFINITION_FIELDS]
+        values[DEFINITION_FIELDS.index("assertion")] = json.dumps(definition["assertion"])
         cursor.execute(
             """INSERT INTO detection_checks
                (org_id, created_by, name, origin, """ + ", ".join(DEFINITION_FIELDS) + """)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+               VALUES (""" + ", ".join(["%s"] * (4 + len(DEFINITION_FIELDS))) + """)
+               ON CONFLICT (org_id, name) DO NOTHING
                RETURNING id""",
             (org_id, user_id, definition["name"], json.dumps(origin), *values),
         )
-        check_id = str(cursor.fetchone()[0])
-        insert_revision(cursor, check_id, org_id, user_id, 1, definition, reason, source)
-        return check_id, 1, True
+        inserted = cursor.fetchone()
+        if inserted:
+            check_id = str(inserted[0])
+            insert_revision(cursor, check_id, org_id, user_id, 1, definition, reason, source)
+            return check_id, 1, True
+        # Another session created this name between the lookup and the insert.
+        # Its row is committed now; apply the usual rules to it.
+        row = _lock_by_name(cursor, org_id, definition["name"])
+        if row is None:
+            raise RuntimeError("detection check vanished during save")
 
     check_id, revision, state = str(row[0]), row[1], row[2]
     if state == STATE_RETIRED:
@@ -206,16 +210,34 @@ def save_check(
         return check_id, revision, False
 
     revision += 1
-    set_definition(cursor, check_id, definition, revision)
+    set_definition(cursor, check_id, definition, revision, owner=user_id)
     insert_revision(cursor, check_id, org_id, user_id, revision, definition, reason, source)
     return check_id, revision, True
 
 
-def set_definition(cursor, check_id: str, definition: Dict[str, Any], revision: int) -> None:
+def _lock_by_name(cursor, org_id: str, name: str):
+    cursor.execute(
+        """SELECT id, revision, state, retired_reason, """ + ", ".join(DEFINITION_FIELDS) + """
+           FROM detection_checks WHERE org_id = %s AND name = %s FOR UPDATE""",
+        (org_id, name),
+    )
+    return cursor.fetchone()
+
+
+def set_definition(cursor, check_id: str, definition: Dict[str, Any], revision: int,
+                   owner: Optional[str] = None) -> None:
     """Write *definition* onto the check as *revision*.
 
     Every change of definition sends the check back to ``silent`` and clears the
     per-revision counters: a new version earns its own record.
+
+    *owner* is who saved the revision. Scheduled runs execute as the check's
+    owner, and the command was gated under whoever saved it, so the two have to
+    be the same person or a revision could pass the gate and then fail on every
+    run. A restore by the system passes no owner and keeps the current one.
+
+    A fire still open from the previous version is closed here. Left open, it
+    would stop the new version from ever starting a fire of its own.
     """
     values = [definition[f] for f in DEFINITION_FIELDS]
     values[DEFINITION_FIELDS.index("assertion")] = json.dumps(definition["assertion"])
@@ -223,9 +245,15 @@ def set_definition(cursor, check_id: str, definition: Dict[str, Any], revision: 
     cursor.execute(
         "UPDATE detection_checks SET " + assignments + """,
                revision = %s, state = %s, revision_false_fires = 0,
-               consecutive_false_fires = 0, updated_at = NOW()
+               consecutive_false_fires = 0, created_by = COALESCE(%s, created_by),
+               updated_at = NOW()
            WHERE id = %s""",
-        (*values, revision, STATE_SILENT, check_id),
+        (*values, revision, STATE_SILENT, owner, check_id),
+    )
+    cursor.execute(
+        "UPDATE detection_check_fires SET cleared_at = NOW() "
+        "WHERE check_id = %s AND cleared_at IS NULL AND revision < %s",
+        (check_id, revision),
     )
 
 
@@ -279,8 +307,12 @@ def list_checks(cursor, org_id: str, include_retired: bool = False) -> List[Dict
     return checks
 
 
-def claim_due_checks(cursor, org_id: str, limit: int) -> List[Tuple[str, str]]:
-    """Claim up to *limit* due checks and return [(check_id, created_by)].
+def claim_due_checks(cursor, org_id: str, limit: int) -> List[Tuple[str, str, str]]:
+    """Claim up to *limit* due checks and return [(check_id, created_by, claim)].
+
+    *claim* identifies this claim. The run hands it back to record_result, which
+    only releases the claim it was given: a run that sat in the queue past the
+    claim's lifetime must not release the claim of the run that replaced it.
 
     The claim is what keeps two overlapping ticks, or a tick that outruns a slow
     command, from running one check twice. SKIP LOCKED lets concurrent ticks
@@ -299,23 +331,26 @@ def claim_due_checks(cursor, org_id: str, limit: int) -> List[Tuple[str, str]]:
                LIMIT %s
                FOR UPDATE SKIP LOCKED
            )
-           RETURNING id, created_by""",
+           RETURNING id, created_by, claimed_at""",
         (org_id, STATE_RETIRED, CLAIM_TTL_SECONDS, limit),
     )
-    return [(str(row[0]), row[1]) for row in cursor.fetchall()]
+    return [(str(row[0]), row[1], row[2].isoformat()) for row in cursor.fetchall()]
 
 
 def get_runnable_check(cursor, check_id: str) -> Optional[Dict[str, Any]]:
     """The fields a run needs, or None when the check is gone or retired."""
     cursor.execute(
-        """SELECT provider, command, assertion, target FROM detection_checks
+        """SELECT provider, command, assertion, target, revision FROM detection_checks
            WHERE id = %s AND state <> %s""",
         (check_id, STATE_RETIRED),
     )
     row = cursor.fetchone()
     if row is None:
         return None
-    return {"provider": row[0], "command": row[1], "assertion": row[2], "target": row[3]}
+    return {
+        "provider": row[0], "command": row[1], "assertion": row[2], "target": row[3],
+        "revision": row[4],
+    }
 
 
 @dataclass(frozen=True)
@@ -326,7 +361,8 @@ class Recorded:
     consecutive_errors: int = 0
 
 
-def record_result(cursor, check_id: str, org_id: str, verdict: Verdict, duration_ms: int) -> Recorded:
+def record_result(cursor, check_id: str, org_id: str, verdict: Verdict, duration_ms: int, *,
+                  revision: Optional[int] = None, claim: Optional[str] = None) -> Recorded:
     """Fold one run into the check's record and release its claim.
 
     A row goes into detection_check_runs only when the run is worth reading
@@ -337,6 +373,10 @@ def record_result(cursor, check_id: str, org_id: str, verdict: Verdict, duration
     A fire is the moment a check starts failing. It stays open while the check
     keeps failing or erroring, and clears on the next pass, so a check that
     fails for an hour is one fire, not twelve.
+
+    *revision* is the version that was executed. If the check was revised while
+    the command ran, the verdict belongs to a definition that no longer exists
+    and is dropped rather than counted against the new one.
     """
     cursor.execute(
         """SELECT last_status, revision, state, pattern, asset, consecutive_errors
@@ -346,7 +386,11 @@ def record_result(cursor, check_id: str, org_id: str, verdict: Verdict, duration
     row = cursor.fetchone()
     if row is None:
         return Recorded()
-    previous, revision, state, pattern, asset, consecutive_errors = row
+    previous, current_revision, state, pattern, asset, consecutive_errors = row
+    if revision is not None and revision != current_revision:
+        _release_claim(cursor, check_id, claim)
+        return Recorded()
+    revision = current_revision
     is_error = verdict.status == STATUS_ERROR
     consecutive_errors = consecutive_errors + 1 if is_error else 0
 
@@ -356,14 +400,14 @@ def record_result(cursor, check_id: str, org_id: str, verdict: Verdict, duration
                fail_count = fail_count + %s,
                error_count = error_count + %s,
                consecutive_errors = %s,
-               last_status = %s, last_observed = %s,
-               last_run_at = NOW(), claimed_at = NULL
+               last_status = %s, last_observed = %s, last_run_at = NOW()
            WHERE id = %s""",
         (
             int(verdict.status == STATUS_FAIL), int(is_error), consecutive_errors,
             verdict.status, verdict.observed, check_id,
         ),
     )
+    _release_claim(cursor, check_id, claim)
 
     fire_id = None
     if verdict.status == STATUS_PASS:
@@ -374,8 +418,9 @@ def record_result(cursor, check_id: str, org_id: str, verdict: Verdict, duration
         )
     elif verdict.status == STATUS_FAIL:
         cursor.execute(
-            "SELECT 1 FROM detection_check_fires WHERE check_id = %s AND cleared_at IS NULL",
-            (check_id,),
+            "SELECT 1 FROM detection_check_fires "
+            "WHERE check_id = %s AND revision = %s AND cleared_at IS NULL",
+            (check_id, revision),
         )
         if cursor.fetchone() is None:
             cursor.execute(
@@ -395,6 +440,15 @@ def record_result(cursor, check_id: str, org_id: str, verdict: Verdict, duration
              verdict.detail[:_DETAIL_MAX_CHARS], duration_ms),
         )
     return Recorded(state=state, fire_id=fire_id, consecutive_errors=consecutive_errors)
+
+
+def _release_claim(cursor, check_id: str, claim: Optional[str]) -> None:
+    """Release *claim*, or whatever claim is held when the caller has none to name."""
+    cursor.execute(
+        "UPDATE detection_checks SET claimed_at = NULL "
+        "WHERE id = %s AND (%s::timestamptz IS NULL OR claimed_at = %s::timestamptz)",
+        (check_id, claim, claim),
+    )
 
 
 _CASE_COLUMNS = (
@@ -430,9 +484,30 @@ def fires_awaiting_a_case(cursor, org_id: str, limit: int) -> List[Tuple[str, st
         """SELECT f.id, f.check_id, COALESCE(f.observed, ''), c.created_by
            FROM detection_check_fires f
            JOIN detection_checks c ON c.id = f.check_id
-           WHERE f.org_id = %s AND c.state = %s
+           WHERE f.org_id = %s AND c.state = %s AND f.revision = c.revision
              AND f.incident_id IS NULL AND f.cleared_at IS NULL AND f.outcome IS NULL
            ORDER BY f.fired_at LIMIT %s""",
         (org_id, STATE_PROVEN, limit),
     )
     return [(str(r[0]), str(r[1]), r[2], r[3]) for r in cursor.fetchall()]
+
+
+CASE_CLAIM_TTL_SECONDS = 600
+
+
+def reserve_case(cursor, fire_id: str) -> bool:
+    """Take the right to give this fire a case. False when it no longer needs one.
+
+    Checked here, under the write: the fire may have cleared, been graded or
+    been given a case since it was selected, and two workers may be looking at
+    it at once. A reservation expires, so a worker that died holding one does
+    not leave the fire without a case.
+    """
+    cursor.execute(
+        """UPDATE detection_check_fires SET case_claimed_at = NOW()
+           WHERE id = %s AND incident_id IS NULL AND cleared_at IS NULL AND outcome IS NULL
+             AND (case_claimed_at IS NULL
+                  OR case_claimed_at <= NOW() - %s * INTERVAL '1 second')""",
+        (fire_id, CASE_CLAIM_TTL_SECONDS),
+    )
+    return cursor.rowcount > 0
