@@ -340,7 +340,8 @@ def claim_due_checks(cursor, org_id: str, limit: int) -> List[Tuple[str, str, st
 def get_runnable_check(cursor, check_id: str) -> Optional[Dict[str, Any]]:
     """The fields a run needs, or None when the check is gone or retired."""
     cursor.execute(
-        """SELECT provider, command, assertion, target, revision FROM detection_checks
+        """SELECT provider, command, assertion, target, revision, created_by
+           FROM detection_checks
            WHERE id = %s AND state <> %s""",
         (check_id, STATE_RETIRED),
     )
@@ -349,7 +350,7 @@ def get_runnable_check(cursor, check_id: str) -> Optional[Dict[str, Any]]:
         return None
     return {
         "provider": row[0], "command": row[1], "assertion": row[2], "target": row[3],
-        "revision": row[4],
+        "revision": row[4], "created_by": row[5],
     }
 
 
@@ -377,16 +378,24 @@ def record_result(cursor, check_id: str, org_id: str, verdict: Verdict, duration
     *revision* is the version that was executed. If the check was revised while
     the command ran, the verdict belongs to a definition that no longer exists
     and is dropped rather than counted against the new one.
+
+    *claim* is the claim the run was started under. A run whose claim has been
+    taken over records nothing.
     """
     cursor.execute(
-        """SELECT last_status, revision, state, pattern, asset, consecutive_errors
+        """SELECT last_status, revision, state, pattern, asset, consecutive_errors, claimed_at
            FROM detection_checks WHERE id = %s FOR UPDATE""",
         (check_id,),
     )
     row = cursor.fetchone()
     if row is None:
         return Recorded()
-    previous, current_revision, state, pattern, asset, consecutive_errors = row
+    previous, current_revision, state, pattern, asset, consecutive_errors, held = row
+    if claim is not None and (held is None or held.isoformat() != claim):
+        # This run's claim expired and another run took the check. Whatever this
+        # one saw is older than what that run records: writing it now could put
+        # a stale failure over a newer pass and start a fire for it.
+        return Recorded()
     if revision is not None and revision != current_revision:
         _release_claim(cursor, check_id, claim)
         return Recorded()

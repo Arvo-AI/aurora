@@ -53,28 +53,29 @@ def _own_context(user_id: str, session_id: str, provider: str):
     The execution context is per thread and has no reset. A check can be run
     from inside an agent's turn (a replay while the agent saves it), and that
     agent's session and mode must be what they were when the run returns.
-    """
-    from utils.cloud.cloud_utils import (
-        get_mode_from_context,
-        get_provider_preference,
-        get_user_context,
-        set_user_context,
-    )
 
-    before = get_user_context()
-    before_mode, before_providers = get_mode_from_context(), get_provider_preference()
-    set_user_context(
+    Each field is restored to exactly what it was, including "not set":
+    set_user_context skips empty values, so it could install this run's session
+    and mode but never take them away again.
+    """
+    from utils.cloud import cloud_utils
+
+    before = cloud_utils.get_user_context()
+    saved = {
+        "user_id": before.get("user_id"),
+        "session_id": before.get("session_id"),
+        "provider_preference": cloud_utils.get_provider_preference(),
+        "mode": cloud_utils.get_mode_from_context(),
+    }
+    cloud_utils.set_user_context(
         user_id=user_id, session_id=session_id,
         provider_preference=provider, mode=_READ_ONLY_MODE,
     )
     try:
         yield
     finally:
-        if before.get("user_id"):
-            set_user_context(
-                user_id=before["user_id"], session_id=before.get("session_id"),
-                provider_preference=before_providers, mode=before_mode,
-            )
+        for field, value in saved.items():
+            cloud_utils._set_ctx(field, value)
 
 
 def _execute(check: dict, user_id: str, check_id: str) -> Verdict | str:

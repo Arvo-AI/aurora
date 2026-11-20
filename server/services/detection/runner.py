@@ -178,6 +178,9 @@ def run_check(check_id: str, org_id: str, user_id: str, claim: str | None = None
         if check is None:
             return
 
+        # The owner as of this read, from the same row as the definition: a
+        # revision saved while the run was queued changes both together.
+        user_id = check["created_by"]
         verdict = judge(check, user_id, check_id)
         duration_ms = int((time.monotonic() - started) * 1000)
 
@@ -224,15 +227,15 @@ def watch_access():
         conn.commit()
         for provider, checks, detail in access.providers_gone_blind(cur, org_id):
             # Claim first and commit: two workers must not both send the message.
-            claimed = access.open_alert(cur, org_id, provider, detail)
+            claim = access.open_alert(cur, org_id, provider, detail)
             conn.commit()
-            if not claimed:
+            if not claim:
                 continue
             if access.tell_installer(user_id, provider, checks, detail):
-                access.mark_delivered(cur, org_id, provider)
+                access.mark_delivered(cur, org_id, provider, claim)
             else:
                 # Not delivered (no Slack, send failed): let a later pass try again.
-                access.release_alert(cur, org_id, provider)
+                access.release_alert(cur, org_id, provider, claim)
             conn.commit()
 
     _for_each_org(_watch, "watching access")

@@ -37,6 +37,12 @@ RETIRE_AFTER_DAYS = 90
 MAX_ACTIVE_CHECKS_PER_ASSET = 8
 
 
+# How a pattern's hits are counted, as SQL over detection_check_fires with the
+# hit outcome as its one parameter. By incident, not by fire: a check that flaps
+# three times during one real incident has been right once.
+HITS_SQL = "COUNT(DISTINCT evidence_incident_id) FILTER (WHERE outcome = %s)"
+
+
 @dataclass(frozen=True)
 class PatternRecord:
     hits: int = 0
@@ -82,7 +88,7 @@ def pattern_record(cursor, org_id: str, pattern: str) -> PatternRecord:
     # Hits are counted by incident, not by fire: a check that flaps three times
     # during one real incident has been right once.
     cursor.execute(
-        """SELECT COUNT(DISTINCT evidence_incident_id) FILTER (WHERE outcome = %s),
+        "SELECT " + HITS_SQL + """,
                   COUNT(*) FILTER (WHERE outcome = %s)
            FROM detection_check_fires WHERE org_id = %s AND pattern = %s""",
         (OUTCOME_HIT, OUTCOME_FALSE, org_id, pattern),
@@ -251,7 +257,7 @@ def _independent_incident(cursor, org_id: str, asset: str, fired_at, until) -> O
     return None
 
 
-def _own_case_was_corroborated(cursor, incident_id: Optional[str], asset: str) -> bool:
+def _own_case_was_corroborated(cursor, incident_id: Optional[str], asset: str, until) -> bool:
     """Whether an alert about the same asset joined the case this fire opened.
 
     The correlator attaches a later alert to an open incident instead of opening
@@ -263,8 +269,12 @@ def _own_case_was_corroborated(cursor, incident_id: Optional[str], asset: str) -
     """
     if not incident_id:
         return False
+    # Bounded like any other evidence: an alert that arrives after the fire's
+    # window has closed does not turn a false fire into a hit.
     cursor.execute(
-        "SELECT alert_service FROM incident_alerts WHERE incident_id = %s", (incident_id,),
+        "SELECT alert_service FROM incident_alerts "
+        "WHERE incident_id = %s AND received_at <= %s::timestamptz",
+        (incident_id, until),
     )
     return asset_matches(asset, [row[0] for row in cursor.fetchall()])
 
@@ -283,19 +293,20 @@ def grade_fires(cursor, org_id: str) -> Tuple[int, int]:
         """SELECT id, check_id, asset, pattern, fired_at, incident_id, opened_incident, until,
                   until <= NOW() AS window_closed
            FROM (
-               SELECT *, LEAST(COALESCE(cleared_at, 'infinity'::timestamptz),
-                               fired_at + %s * INTERVAL '1 hour') + %s * INTERVAL '1 hour' AS until
+               SELECT *, LEAST(COALESCE(cleared_at, 'infinity'::timestamptz) + %s * INTERVAL '1 hour',
+                               fired_at + %s * INTERVAL '1 hour') AS until
                FROM detection_check_fires
                WHERE org_id = %s AND outcome IS NULL
            ) open_fires
            ORDER BY fired_at LIMIT %s""",
-        (GRADE_WINDOW_HOURS, GRADE_GRACE_HOURS, org_id, _GRADE_BATCH),
+        (GRADE_GRACE_HOURS, GRADE_WINDOW_HOURS, org_id, _GRADE_BATCH),
     )
     hits = false_fires = 0
     for (fire_id, check_id, asset, pattern, fired_at, incident_id, opened, until,
          window_closed) in cursor.fetchall():
         evidence = _independent_incident(cursor, org_id, asset, fired_at, until)
-        if evidence is None and opened and _own_case_was_corroborated(cursor, incident_id, asset):
+        if evidence is None and opened and _own_case_was_corroborated(
+                cursor, incident_id, asset, until):
             evidence = str(incident_id)
         if evidence is not None:
             apply_outcome(cursor, str(fire_id), str(check_id), org_id, OUTCOME_HIT, evidence)

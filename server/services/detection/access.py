@@ -46,14 +46,17 @@ def providers_gone_blind(cursor, org_id: str) -> List[Tuple[str, int, str]]:
     return [(row[0], row[1], row[2] or "") for row in cursor.fetchall()]
 
 
-def open_alert(cursor, org_id: str, provider: str, detail: str) -> bool:
-    """Claim the right to send the message. False when another worker has it.
+def open_alert(cursor, org_id: str, provider: str, detail: str) -> Optional[str]:
+    """Claim the right to send the message. Returns the claim, or None when another worker has it.
 
     The claim is pending until mark_delivered. A pending claim expires: if the
     worker dies between claiming and sending, a later pass takes the claim over
     instead of the outage going unannounced. If it dies after Slack accepted
     the message but before marking it, the message is sent once more; a second
     notice was judged better than none.
+
+    mark_delivered and release_alert take the claim back, so a worker that was
+    paused past the expiry cannot touch the claim of the worker that took over.
     """
     cursor.execute(
         """INSERT INTO detection_access_alerts (org_id, provider, detail)
@@ -61,29 +64,33 @@ def open_alert(cursor, org_id: str, provider: str, detail: str) -> bool:
            ON CONFLICT (org_id, provider) WHERE resolved_at IS NULL
            DO UPDATE SET alerted_at = NOW(), detail = EXCLUDED.detail
            WHERE NOT detection_access_alerts.delivered
-             AND detection_access_alerts.alerted_at <= NOW() - %s * INTERVAL '1 second'""",
+             AND detection_access_alerts.alerted_at <= NOW() - %s * INTERVAL '1 second'
+           RETURNING alerted_at""",
         (org_id, provider, detail[:_DETAIL_MAX_CHARS], PENDING_CLAIM_SECONDS),
     )
-    return cursor.rowcount > 0
+    row = cursor.fetchone()
+    return row[0].isoformat() if row else None
 
 
-def mark_delivered(cursor, org_id: str, provider: str) -> None:
+def mark_delivered(cursor, org_id: str, provider: str, claim: str) -> None:
     cursor.execute(
         "UPDATE detection_access_alerts SET delivered = TRUE "
-        "WHERE org_id = %s AND provider = %s AND resolved_at IS NULL",
-        (org_id, provider),
+        "WHERE org_id = %s AND provider = %s AND resolved_at IS NULL "
+        "AND alerted_at = %s::timestamptz",
+        (org_id, provider, claim),
     )
 
 
-def release_alert(cursor, org_id: str, provider: str) -> None:
+def release_alert(cursor, org_id: str, provider: str, claim: str) -> None:
     """Give up a claim whose message did not go out, so a later pass sends it.
 
     Without this, one failed send would silence the notice for the whole outage.
     """
     cursor.execute(
         "DELETE FROM detection_access_alerts "
-        "WHERE org_id = %s AND provider = %s AND resolved_at IS NULL",
-        (org_id, provider),
+        "WHERE org_id = %s AND provider = %s AND resolved_at IS NULL "
+        "AND NOT delivered AND alerted_at = %s::timestamptz",
+        (org_id, provider, claim),
     )
 
 

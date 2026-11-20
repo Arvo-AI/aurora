@@ -1894,6 +1894,21 @@ def initialize_tables():
             rls_tables.append("detection_access_alerts")
 
 
+            # Migration: columns added to the detection tables after they first
+            # shipped. On a new install the tables do not exist yet and CREATE
+            # TABLE includes these columns.
+            try:
+                cursor.execute("""
+                    ALTER TABLE detection_check_fires
+                    ADD COLUMN IF NOT EXISTS case_claimed_at TIMESTAMPTZ;
+                    ALTER TABLE detection_access_alerts
+                    ADD COLUMN IF NOT EXISTS delivered BOOLEAN NOT NULL DEFAULT FALSE;
+                """)
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error adding columns to detection tables: {e}")
+                conn.rollback()
+
             # Migration: Add rca_celery_task_id column to incidents table if it doesn't exist
             try:
                 cursor.execute("""

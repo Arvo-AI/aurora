@@ -172,7 +172,10 @@ function CheckRow({ check }: { readonly check: Check }) {
 export default function ChecksPage() {
   const [showRetired, setShowRetired] = useState(false);
   const { data, isLoading, error } = useQuery<Check[]>(
-    `/api/detection/checks${showRetired ? '?include_retired=true' : ''}`, checksFetcher, { staleTime: 10_000, refreshInterval: 30_000 },
+    `/api/detection/checks${showRetired ? '?include_retired=true' : ''}`, checksFetcher,
+    // No retries: the next poll is the retry. A retry sequence would be cancelled by
+    // the poll and restarted, leaving a failing page on "Loading..." for good.
+    { staleTime: 10_000, refreshInterval: 30_000, retryCount: 0 },
   );
   const checks = data ?? [];
   const active = checks.filter((c) => c.state !== 'retired');
