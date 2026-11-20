@@ -290,13 +290,16 @@ def spend_attention():
             # Marked first, so a crash after sending cannot say it twice.
             noted = attention.mark_clear_noted(cur, fire_id)
             conn.commit()
-            if noted:
-                _send(client, posted_channel, attention.cleared_message(hours), thread_ts=ts)
+            if noted and not _send(client, posted_channel, attention.cleared_message(hours), thread_ts=ts):
+                attention.unmark_clear_noted(cur, fire_id)
+                conn.commit()
 
         budget, spent = attention.channel_budget(cur, org_id, channel)
         for candidate in waiting[:max(0, budget - spent)]:
             # Claimed and committed before sending: two workers must not both post.
-            claimed = attention.claim(cur, candidate["fire_id"], channel)
+            # The claim re-reads the budget under a lock; the slice above only
+            # avoids asking for more than could possibly be granted.
+            claimed = attention.claim(cur, org_id, candidate["fire_id"], channel)
             conn.commit()
             if not claimed:
                 continue
@@ -346,7 +349,7 @@ def run_fire_drills():
                 if cur is None:
                     continue
                 replay.fail_drill(
-                    cur, str(target["id"]), org_id,
+                    cur, str(target["id"]), org_id, target["revision"],
                     "Fire drill: replayed over incident %s, this check no longer fails."
                     % target["replay"].get("incident_id"),
                 )

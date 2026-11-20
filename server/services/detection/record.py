@@ -326,7 +326,15 @@ def credit_replay(cursor, check_id: str, org_id: str, revision: int, pattern: st
     Stored as a fire at the incident's time, already cleared and graded, with
     the incident as its evidence. It counts once for the pattern like any hit:
     hits are counted by incident, so it cannot be earned twice for the same one.
+    Saving the same check again for the same incident does nothing.
     """
+    cursor.execute(
+        "SELECT 1 FROM detection_check_fires "
+        "WHERE check_id = %s AND replayed AND evidence_incident_id = %s",
+        (check_id, incident_id),
+    )
+    if cursor.fetchone() is not None:
+        return
     cursor.execute(
         """INSERT INTO detection_check_fires
            (check_id, org_id, revision, pattern, asset, observed, fired_at, cleared_at, replayed)

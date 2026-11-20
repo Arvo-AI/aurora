@@ -76,11 +76,14 @@ def replay_end(incident_at: datetime, window_seconds: int, now: Optional[datetim
     return min(incident_at + timedelta(seconds=window_seconds), now)
 
 
-def quiet_ends(cursor, org_id: str, end: datetime) -> List[datetime]:
-    """The same time on earlier days when the org had no incident at all.
+def quiet_ends(cursor, org_id: str, end: datetime, window_seconds: int) -> List[datetime]:
+    """The same time on earlier days whose whole replayed span had no incident.
 
-    A day with any incident is skipped rather than guessed at: a check failing
-    then may be right, and holding that against it would refuse a good check.
+    The span read for a candidate runs from *window_seconds* before it to the
+    candidate itself, so that is what has to be incident-free, with a margin
+    either side. Checking only around the end would call a two-day span quiet
+    while the incident sat inside it, and a correct check would then be refused
+    as noise. A day with any incident is skipped rather than guessed at.
     """
     ends = []
     for days_back in range(1, QUIET_DAYS_SEARCHED + 1):
@@ -88,10 +91,10 @@ def quiet_ends(cursor, org_id: str, end: datetime) -> List[datetime]:
         cursor.execute(
             """SELECT 1 FROM incidents
                WHERE org_id = %s
-                 AND created_at >= %s::timestamptz - INTERVAL '12 hours'
+                 AND created_at >= %s::timestamptz - %s * INTERVAL '1 second' - INTERVAL '12 hours'
                  AND created_at <= %s::timestamptz + INTERVAL '12 hours'
                LIMIT 1""",
-            (org_id, candidate, candidate),
+            (org_id, candidate, window_seconds, candidate),
         )
         if cursor.fetchone() is None:
             ends.append(candidate)
@@ -135,14 +138,14 @@ def drill_targets(cursor, org_id: str) -> List[Dict[str, Any]]:
     """Proven checks whose current revision once caught its incident in replay."""
     cursor.execute(
         """SELECT c.id, c.created_by, c.name, c.provider, c.target, c.command, c.assertion,
-                  c.window_seconds, r.replay
+                  c.window_seconds, c.revision, r.replay
            FROM detection_checks c
            JOIN detection_check_revisions r ON r.check_id = c.id AND r.revision = c.revision
            WHERE c.org_id = %s AND c.state = %s AND (r.replay->>'caught') = 'true'""",
         (org_id, STATE_PROVEN),
     )
     columns = ("id", "created_by", "name", "provider", "target", "command", "assertion",
-               "window_seconds", "replay")
+               "window_seconds", "revision", "replay")
     return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
 
@@ -155,18 +158,26 @@ def still_catches(target: Dict[str, Any], run: Runner = judge) -> Optional[bool]
     return verdict.status != STATUS_PASS
 
 
-def fail_drill(cursor, check_id: str, org_id: str, revision_note: str) -> None:
-    """A proven check that no longer catches its own incident goes back to silent."""
+def fail_drill(cursor, check_id: str, org_id: str, revision: int, revision_note: str) -> None:
+    """A proven check that no longer catches its own incident goes back to silent.
+
+    Matched on the revision that was replayed: if the check was revised and
+    proven again while the drill ran, the stale result changes nothing.
+
+    The revision is also marked as having fired falsely, which is what keeps
+    the next hit for its pattern from promoting it straight back. A new revision
+    that passes its own replay starts clean.
+    """
     cursor.execute(
-        "UPDATE detection_checks SET state = %s, updated_at = NOW() WHERE id = %s AND state = %s "
-        "RETURNING revision",
-        (STATE_SILENT, check_id, STATE_PROVEN),
+        """UPDATE detection_checks
+           SET state = %s, revision_false_fires = revision_false_fires + 1, updated_at = NOW()
+           WHERE id = %s AND state = %s AND revision = %s""",
+        (STATE_SILENT, check_id, STATE_PROVEN, revision),
     )
-    row = cursor.fetchone()
-    if row is None:
+    if cursor.rowcount == 0:
         return
     cursor.execute(
         """INSERT INTO detection_check_runs (check_id, org_id, revision, status, observed, detail)
            VALUES (%s, %s, %s, %s, %s, %s)""",
-        (check_id, org_id, row[0], STATUS_DRILL_FAILED, "", revision_note),
+        (check_id, org_id, revision, STATUS_DRILL_FAILED, "", revision_note),
     )

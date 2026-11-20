@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from services.detection import STATE_SILENT
 from services.detection.cases import healthy_condition, origin_sentence
-from services.detection.record import OUTCOME_FALSE, OUTCOME_HIT, PatternRecord, pattern_record
+from services.detection.record import OUTCOME_FALSE, OUTCOME_HIT, PatternRecord
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +62,9 @@ def strongest_first(candidates: List[Dict[str, Any]], records: Dict[str, Pattern
     """Order by how much the failure deserves attention.
 
     A kind of check that has been right before outranks one with no record, and
-    among equals the failure that has lasted longest goes first.
+    among equals the failure that has lasted longest goes first. This is the
+    rule the query in candidates() applies; it is kept as code so it can be
+    tested without a database.
     """
     def rank(candidate):
         record = records.get(candidate["pattern"], PatternRecord())
@@ -73,28 +75,48 @@ def strongest_first(candidates: List[Dict[str, Any]], records: Dict[str, Pattern
 def candidates(cursor, org_id: str) -> List[Dict[str, Any]]:
     """Open failures of silent checks that have lasted long enough, strongest first.
 
-    A fire that already belongs to a case is excluded: people have that thread.
+    Ranked in the query, before the limit: ranking a limited page afterwards
+    could leave out the one failure whose kind of check has a record, behind
+    fifty older ones that have none. A fire that already belongs to a case is
+    excluded: people have that thread.
     """
     cursor.execute(
-        """SELECT f.id, f.check_id, f.fired_at, COALESCE(f.observed, ''), c.name, c.asset,
+        """WITH pattern_records AS (
+               SELECT pattern,
+                      COUNT(DISTINCT evidence_incident_id) FILTER (WHERE outcome = %s) AS hits,
+                      COUNT(*) FILTER (WHERE outcome = %s) AS false_fires
+               FROM detection_check_fires WHERE org_id = %s GROUP BY pattern
+           )
+           SELECT f.id, f.check_id, f.fired_at, COALESCE(f.observed, ''), c.name, c.asset,
                   c.pattern, c.prediction, c.assertion, c.origin,
                   EXTRACT(EPOCH FROM (NOW() - f.fired_at)) / 3600.0
            FROM detection_check_fires f
            JOIN detection_checks c ON c.id = f.check_id
-           WHERE f.org_id = %s AND c.state = %s
+           LEFT JOIN pattern_records p ON p.pattern = c.pattern
+           WHERE f.org_id = %s AND c.state = %s AND f.revision = c.revision
              AND f.cleared_at IS NULL AND f.outcome IS NULL
              AND f.incident_id IS NULL AND f.nudged_at IS NULL
              AND f.fired_at <= NOW() - %s * INTERVAL '1 hour'
-           ORDER BY f.fired_at LIMIT %s""",
-        (org_id, STATE_SILENT, PERSIST_HOURS, _CANDIDATE_POOL),
+           ORDER BY COALESCE(p.hits::float / NULLIF(p.hits + p.false_fires, 0), 0) DESC,
+                    COALESCE(p.hits, 0) DESC, f.fired_at
+           LIMIT %s""",
+        (OUTCOME_HIT, OUTCOME_FALSE, org_id, org_id, STATE_SILENT, PERSIST_HOURS, _CANDIDATE_POOL),
     )
-    found = [dict(zip(_CANDIDATE_COLUMNS, row)) for row in cursor.fetchall()]
-    records = {p: pattern_record(cursor, org_id, p) for p in {c["pattern"] for c in found}}
-    return strongest_first(found, records)
+    return [dict(zip(_CANDIDATE_COLUMNS, row)) for row in cursor.fetchall()]
 
 
-def claim(cursor, fire_id: str, channel: str) -> bool:
-    """Mark the fire as posted before posting. False when another worker has it."""
+def claim(cursor, org_id: str, fire_id: str, channel: str) -> bool:
+    """Take one post out of the channel's budget for this fire. False when there is none left.
+
+    The budget is read and the post is counted in one transaction, behind a
+    lock on the channel that lasts until the caller commits. Two overlapping
+    runs therefore cannot both see the last free post and both spend it. The
+    per-fire condition alone only stops one fire being posted twice.
+    """
+    cursor.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", ("detection-attention:%s:%s" % (org_id, channel),))
+    budget, spent = channel_budget(cursor, org_id, channel)
+    if spent >= budget:
+        return False
     cursor.execute(
         "UPDATE detection_check_fires SET nudged_at = NOW(), nudge_channel = %s "
         "WHERE id = %s AND nudged_at IS NULL",
@@ -170,6 +192,13 @@ def mark_clear_noted(cursor, fire_id: str) -> bool:
         (fire_id,),
     )
     return cursor.rowcount > 0
+
+
+def unmark_clear_noted(cursor, fire_id: str) -> None:
+    """The thread reply did not go out: leave it to be sent on a later pass."""
+    cursor.execute(
+        "UPDATE detection_check_fires SET nudge_clear_noted = FALSE WHERE id = %s", (fire_id,),
+    )
 
 
 def cleared_message(hours: float) -> str:

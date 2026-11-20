@@ -281,7 +281,7 @@ def _replay_before_saving(user_id: str, definition: dict, origin: dict) -> Optio
         if incident_at is None:
             return None
         end = replay.replay_end(incident_at, definition["window_seconds"])
-        quiet = replay.quiet_ends(cursor, org_id, end)
+        quiet = replay.quiet_ends(cursor, org_id, end, definition["window_seconds"])
     result = replay.replay_origin(definition, user_id, end, quiet)
     return _Replayed(result, result.as_record(incident_id, end), incident_id, incident_at)
 
