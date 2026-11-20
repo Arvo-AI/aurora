@@ -15,6 +15,7 @@ from services.detection import DEFAULT_INTERVAL_SECONDS, MIN_INTERVAL_SECONDS, O
 from services.detection.execution import gated_form
 from services.detection.store import (
     CheckRetired,
+    TooManyChecks,
     list_checks,
     normalize_definition,
     normalize_origin,
@@ -38,7 +39,13 @@ _NO_ORG_CTX = json.dumps({"error": "No organization context available."})
 class SaveDetectionCheckArgs(BaseModel):
     name: str = Field(description="Short unique name. Saving an existing name revises that check.")
     prediction: str = Field(description="One sentence: the failure this check detects.")
-    asset: str = Field(description="The service, table, queue or resource it watches.")
+    asset: str = Field(
+        description=(
+            "The bare name of the service or resource it watches, exactly as an incident or alert "
+            "would name it, e.g. 'checkout' or 'orders-db'. No namespace, cluster or description: "
+            "a check is credited only when an incident names the same asset."
+        )
+    )
     pattern: str = Field(
         description="The kind of check, reusable across assets, e.g. 'pod-crashloop', 'table-freshness'."
     )
@@ -57,8 +64,10 @@ class SaveDetectionCheckArgs(BaseModel):
     )
     command: str = Field(
         description=(
-            "A read-only command, as you would pass to cloud_exec or on_prem_kubectl. Shape its "
-            "output to one number or a short text. Cloud providers may pipe into `grep -c`, `jq` "
+            "A read-only command, as you would pass to cloud_exec or on_prem_kubectl, that answers "
+            "once and exits (no -w, --watch or --follow). Shape its output to one number or a "
+            "short text, and prefer a form that always prints something: an expected number that "
+            "comes back empty is treated as a failure. Cloud providers may pipe into `grep -c`, `jq` "
             "or `wc -l`. onprem_kubectl runs with no shell: no pipes; use -o jsonpath or "
             "--no-headers with expect 'lines' or 'text'."
         )
@@ -106,6 +115,23 @@ def _connection(user_id: str, operation: str):
         yield cursor, conn, org_id
 
 
+def _may_write(user_id: str) -> bool:
+    """Whether this user may create, change or stop checks (editor and above).
+
+    A check runs commands on a schedule with the org's access, and stopping one
+    removes monitoring others may rely on. Reading memory is for everyone;
+    this is not.
+    """
+    from utils.auth.enforcer import enforce_with_reload
+    from utils.auth.stateless_auth import get_org_id_for_user
+
+    org_id = get_org_id_for_user(user_id)
+    return bool(org_id) and enforce_with_reload(user_id, org_id, "detection_checks", "write")
+
+
+_NOT_ALLOWED = json.dumps({"error": "Saving or retiring checks needs the editor role."})
+
+
 def save_detection_check(user_id: str | None = None, **fields) -> str:
     """Create a check, or revise the one with the same name.
 
@@ -113,6 +139,8 @@ def save_detection_check(user_id: str | None = None, **fields) -> str:
     """
     if not user_id:
         return _NO_USER_CTX
+    if not _may_write(user_id):
+        return _NOT_ALLOWED
     try:
         args = SaveDetectionCheckArgs(
             **{name: fields[name] for name in SaveDetectionCheckArgs.model_fields if name in fields}
@@ -159,6 +187,11 @@ def save_detection_check(user_id: str | None = None, **fields) -> str:
                     "error": "A check with this name was retired and is not brought back.",
                     "retired_reason": str(retired),
                 })
+            except TooManyChecks:
+                conn.rollback()
+                return json.dumps({
+                    "error": "This organization is at its limit of active checks. Retire one first.",
+                })
             # Read back: an unchanged save of a proven check is still proven.
             cursor.execute("SELECT state FROM detection_checks WHERE id = %s", (check_id,))
             state = cursor.fetchone()[0]
@@ -189,6 +222,10 @@ def list_detection_checks(
     try:
         with _connection(user_id, "list") as (cursor, _conn, org_id):
             checks = list_checks(cursor, org_id, include_retired=include_retired)
+        if not _may_write(user_id):
+            # What a command printed can be more than a viewer may see elsewhere.
+            for check in checks:
+                check.pop("last_observed", None)
     except ValueError:
         return _NO_ORG_CTX
     except Exception:
@@ -206,6 +243,8 @@ def retire_detection_check(
     """Stop running a check. Its record and revisions are kept."""
     if not user_id:
         return _NO_USER_CTX
+    if not _may_write(user_id):
+        return _NOT_ALLOWED
     try:
         with _connection(user_id, "retire") as (cursor, conn, org_id):
             retired = retire_check(cursor, org_id, name, reason)

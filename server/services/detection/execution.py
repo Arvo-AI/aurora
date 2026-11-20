@@ -15,7 +15,9 @@ from utils.security.read_only_classifier import describe_rejection
 
 logger = logging.getLogger(__name__)
 
-COMMAND_TIMEOUT_SECONDS = 60
+# Short on purpose: checks share workers with investigations, and a check that
+# needs longer than this is the wrong shape for something run every few minutes.
+COMMAND_TIMEOUT_SECONDS = 30
 # Checks only ever run in the read-only mode cloud_exec already enforces.
 _READ_ONLY_MODE = "ask"
 
@@ -109,10 +111,10 @@ def _execute(check: dict, user_id: str, check_id: str) -> Verdict | str:
     try:
         result = json.loads(raw)
     except (TypeError, ValueError):
-        return Verdict(STATUS_ERROR, detail="command returned an unreadable result")
+        return Verdict(STATUS_ERROR, detail="command returned an unreadable result", ran=False)
     if not isinstance(result, dict) or not result.get("success"):
         error = result.get("error") if isinstance(result, dict) else None
-        return Verdict(STATUS_ERROR, detail=str(error or "command failed"))
+        return Verdict(STATUS_ERROR, detail=str(error or "command failed"), ran=False)
     output = result.get("output")
     if output is None:
         output = result.get("chat_output")
@@ -130,7 +132,7 @@ def judge(check: dict, user_id: str, check_id: str) -> Verdict:
         outcome = _execute(check, user_id, check_id)
     except Exception as exc:
         logger.exception("[DetectionExecution] Check %s raised while executing", sanitize(check_id))
-        return Verdict(STATUS_ERROR, detail="execution raised %s" % type(exc).__name__)
+        return Verdict(STATUS_ERROR, detail="execution raised %s" % type(exc).__name__, ran=False)
     if isinstance(outcome, Verdict):
         return outcome
     return evaluate(check["assertion"], outcome)

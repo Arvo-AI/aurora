@@ -49,6 +49,10 @@ class Verdict:
     status: str
     observed: str = ""
     detail: str = ""
+    # False when the command could not be executed at all (no access, blocked,
+    # timed out). An error with ran=True reached the system and could not read
+    # what came back, which says nothing about Aurora's access.
+    ran: bool = True
 
 
 def _as_number(value: Any) -> Optional[float]:
@@ -108,6 +112,13 @@ def evaluate(assertion: dict, output: str) -> Verdict:
         seen = float(sum(1 for line in text.splitlines() if line.strip()))
         healthy = _NUMBER_OPS[op](seen, _as_number(assertion["value"]))
     elif assertion["expect"] == EXPECT_NUMBER:
+        if not text:
+            # The command ran and printed nothing where a number was expected.
+            # That is what "gone" looks like: Kubernetes omits readyReplicas at
+            # zero replicas. Calling it an error would hide the full outage the
+            # check exists for, and calling it zero could pass `lt` checks, so
+            # it is a failure whatever the condition.
+            return Verdict(STATUS_FAIL, "", "the command printed nothing")
         seen = _as_number(text)
         if seen is None:
             return Verdict(STATUS_ERROR, observed, "output is not a single number")

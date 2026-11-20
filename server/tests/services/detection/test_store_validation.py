@@ -100,3 +100,35 @@ def test_a_run_that_names_no_claim_releases_none():
     assert cursor.statements == []
     _release_claim(cursor, "check-1", "2026-11-20T10:00:00+00:00")
     assert len(cursor.statements) == 1
+
+
+@pytest.mark.parametrize("asset", [
+    "nginx deployment (demo namespace, kind-aurora-detect)",
+    "checkout service",
+    "checkout,payments",
+])
+def test_an_asset_must_be_the_bare_name_an_incident_would_carry(asset):
+    # A check is credited only when an incident names the same asset. A
+    # descriptive asset can never match one, so the check could never be promoted.
+    definition, problem = normalize_definition(_definition(asset=asset))
+    assert definition is None
+    assert "asset" in problem
+
+
+@pytest.mark.parametrize("asset", ["checkout", "orders-db", "shop/checkout", "api.v2", "queue:orders"])
+def test_ordinary_service_names_are_accepted(asset):
+    assert normalize_definition(_definition(asset=asset))[1] == ""
+
+
+@pytest.mark.parametrize("command", [
+    "kubectl get pods -n checkout -w",
+    "kubectl get pods -n checkout --watch=true",
+    "kubectl logs deploy/checkout -n checkout --follow",
+    "kubectl logs deploy/checkout -n checkout -f",
+])
+def test_a_command_that_never_finishes_is_refused(command):
+    # These are reads, so the read-only classifier lets them through, but each
+    # run would hold a worker until the timeout.
+    definition, problem = normalize_definition(_definition(command=command))
+    assert definition is None
+    assert "answer once" in problem

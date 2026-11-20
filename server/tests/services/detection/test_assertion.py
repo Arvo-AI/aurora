@@ -24,7 +24,6 @@ def test_number_outside_the_healthy_condition_fails_and_keeps_the_value():
 
 
 @pytest.mark.parametrize("output", [
-    "",                                   # command printed nothing
     "error: You must be logged in",       # auth failure text instead of a count
     "0 pods",                             # a number with trailing text
     "nan",
@@ -78,3 +77,13 @@ def test_a_stored_assertion_no_validator_saw_becomes_an_error_not_a_crash():
     # so the check would look like it never ran.
     assert evaluate({"expect": "number", "op": [], "value": 1}, "1").status == STATUS_ERROR
     assert evaluate({"expect": "number", "op": "lt", "value": 10 ** 400}, "1").status == STATUS_ERROR
+
+
+def test_a_number_that_comes_back_empty_is_a_failure_whatever_the_condition():
+    # Kubernetes omits readyReplicas at zero replicas, so the full outage prints
+    # nothing. An error would hide exactly that. Reading it as zero would pass
+    # an `lt` check, so it fails for every condition.
+    for op, value in (("eq", 2), ("lt", 100), ("gte", 0)):
+        verdict = evaluate({"expect": "number", "op": op, "value": value}, "  \n")
+        assert verdict.status == STATUS_FAIL
+        assert verdict.ran

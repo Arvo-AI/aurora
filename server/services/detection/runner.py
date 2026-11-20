@@ -18,7 +18,8 @@ import time
 from contextlib import contextmanager
 
 from celery_config import celery_app
-from services.detection import STATE_PROVEN
+from services.detection import STATE_PROVEN, STATUS_ERROR
+from services.detection.assertion import Verdict
 from services.detection import access, cases, consolidation, record
 from services.detection.execution import judge
 from services.detection.store import (
@@ -175,13 +176,24 @@ def run_check(check_id: str, org_id: str, user_id: str, claim: str | None = None
     try:
         with _org_cursor(user_id, org_id) as (cur, _conn):
             check = get_runnable_check(cur, check_id) if cur is not None else None
+            owner_org = None
+            if check is not None:
+                cur.execute("SELECT org_id FROM users WHERE id = %s", (check["created_by"],))
+                owner = cur.fetchone()
+                owner_org = owner[0] if owner else None
         if check is None:
             return
 
         # The owner as of this read, from the same row as the definition: a
         # revision saved while the run was queued changes both together.
         user_id = check["created_by"]
-        verdict = judge(check, user_id, check_id)
+        if owner_org != org_id:
+            # Credentials and command policy are resolved from the user's
+            # current org. An owner who has moved would run this org's check
+            # with another org's access and write the output back here.
+            verdict = Verdict(STATUS_ERROR, detail="the check's owner is no longer in this organization")
+        else:
+            verdict = judge(check, user_id, check_id)
         duration_ms = int((time.monotonic() - started) * 1000)
 
         with _org_cursor(user_id, org_id) as (cur, conn):

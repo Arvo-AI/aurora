@@ -2,6 +2,9 @@
 
 import { useState } from 'react';
 import { ChevronDown, ChevronRight, Radar } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
 import { useQuery } from '@/lib/query';
 import { formatTimeAgo } from '@/lib/utils/time-format';
 
@@ -28,7 +31,7 @@ interface Check {
   hit_count: number;
   false_fire_count: number;
   last_status: 'pass' | 'fail' | 'error' | null;
-  last_observed: string | null;
+  last_observed?: string | null;
   last_run_at: string | null;
   retired_reason: string | null;
 }
@@ -42,29 +45,53 @@ const ORIGIN_WORDS: Record<string, string> = {
   person: 'Someone asked Aurora to watch this',
 };
 
-const STATE_STYLES: Record<CheckState, string> = {
-  proven: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
-  silent: 'bg-zinc-800 text-zinc-400 border-zinc-700/60',
+// What the badge shows is the check's health, in the words any monitor uses.
+// Whether a firing check may open a case is said separately, in a sentence.
+type Health = 'ok' | 'firing' | 'error' | 'pending' | 'retired';
+
+const HEALTH_LABEL: Record<Health, string> = {
+  ok: 'OK', firing: 'Firing', error: 'Error', pending: 'Pending', retired: 'Retired',
+};
+
+const HEALTH_STYLES: Record<Health, string> = {
+  ok: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
+  firing: 'bg-red-500/10 text-red-400 border-red-500/20',
+  error: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
+  pending: 'bg-zinc-800 text-zinc-400 border-zinc-700/60',
   retired: 'bg-zinc-900 text-zinc-600 border-zinc-800',
 };
 
-const STATE_HINTS: Record<CheckState, string> = {
-  proven: 'A failure opens a case',
-  silent: 'Records results, notifies no one',
+const HEALTH_HINTS: Record<Health, string> = {
+  ok: 'The last run was healthy',
+  firing: 'The last run found the problem this check looks for',
+  error: 'The check itself could not run or could not read its output',
+  pending: 'Not run yet',
   retired: 'No longer runs',
 };
 
-const STATUS_DOT: Record<string, string> = {
-  pass: 'bg-emerald-400',
-  fail: 'bg-red-400',
-  error: 'bg-amber-400',
-};
+function healthOf(check: Check): Health {
+  if (check.state === 'retired') return 'retired';
+  if (check.last_status === 'fail') return 'firing';
+  if (check.last_status === 'error') return 'error';
+  return check.last_status === 'pass' ? 'ok' : 'pending';
+}
 
-const checksFetcher = async (key: string, signal: AbortSignal) => {
+function onFiring(check: Check): string {
+  if (check.state === 'proven') return 'Opens an incident when it fires';
+  if (check.state === 'silent') return 'Records only for now: it has not caught enough real incidents to notify anyone';
+  return 'Stopped';
+}
+
+interface ChecksResponse {
+  checks: Check[];
+  can_edit: boolean;
+}
+
+const checksFetcher = async (key: string, signal: AbortSignal): Promise<ChecksResponse> => {
   const res = await fetch(key, { credentials: 'include', signal });
   if (!res.ok) throw new Error(`Failed to load checks: ${res.status}`);
   const data = await res.json();
-  return (data.checks || []) as Check[];
+  return { checks: data.checks || [], can_edit: Boolean(data.can_edit) };
 };
 
 function every(seconds: number): string {
@@ -102,8 +129,36 @@ function Field({ label, children }: { readonly label: string; readonly children:
   );
 }
 
-function CheckRow({ check }: { readonly check: Check }) {
+function CheckRow({ check, canEdit, onChanged }: {
+  readonly check: Check;
+  readonly canEdit: boolean;
+  readonly onChanged: () => void;
+}) {
   const [open, setOpen] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  const [stopError, setStopError] = useState('');
+  const health = healthOf(check);
+
+  const stop = async () => {
+    setStopping(true);
+    setStopError('');
+    try {
+      const res = await fetch(`/api/detection/checks/${check.id}/retire`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'Stopped from the Checks page.' }),
+      });
+      if (!res.ok) throw new Error(String(res.status));
+      onChanged();
+    } catch {
+      setStopError('Could not stop this check.');
+    } finally {
+      setStopping(false);
+      setConfirming(false);
+    }
+  };
   const origin = ORIGIN_WORDS[check.origin?.kind ?? ''] ?? 'Origin not recorded';
   const Chevron = open ? ChevronDown : ChevronRight;
 
@@ -120,19 +175,16 @@ function CheckRow({ check }: { readonly check: Check }) {
             <div className="flex items-center gap-2.5 mb-1 flex-wrap">
               <h3 className="text-sm font-medium text-zinc-100">{check.name}</h3>
               <span
-                title={STATE_HINTS[check.state]}
-                className={`px-1.5 py-0.5 rounded text-[10px] font-medium border ${STATE_STYLES[check.state]}`}
+                title={HEALTH_HINTS[health]}
+                className={`px-1.5 py-0.5 rounded text-[10px] font-medium border ${HEALTH_STYLES[health]}`}
               >
-                {check.state}
+                {HEALTH_LABEL[health]}
               </span>
             </div>
             <p className="text-xs text-zinc-500 leading-relaxed">{check.prediction}</p>
             <div className="flex items-center gap-3 mt-3 flex-wrap text-xs text-zinc-500">
               <span className="text-zinc-400">{check.asset}</span>
-              <span className="flex items-center gap-1.5">
-                <span className={`h-1.5 w-1.5 rounded-full ${STATUS_DOT[check.last_status ?? ''] ?? 'bg-zinc-700'}`} />
-                {check.last_status ?? 'pending'} · {check.last_run_at ? formatTimeAgo(check.last_run_at) : 'not run yet'}
-              </span>
+              <span>{check.last_run_at ? `checked ${formatTimeAgo(check.last_run_at)}` : 'not run yet'}</span>
               <span className="text-zinc-600">{check.run_count} {check.run_count === 1 ? 'run' : 'runs'}</span>
               <span className="text-zinc-600">{check.hit_count} real · {check.false_fire_count} false</span>
             </div>
@@ -144,12 +196,15 @@ function CheckRow({ check }: { readonly check: Check }) {
       {open && (
         <div className="px-5 pb-5 pt-1 space-y-4 border-t border-zinc-800/80">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-4">
+            <Field label="When it fires">{onFiring(check)}</Field>
             <Field label="Why it exists">
               {origin}{check.origin?.ref ? ` (${check.origin.ref})` : ''}
             </Field>
             <Field label="Kind">{check.pattern} · {check.provider}{check.target ? ` (${check.target})` : ''} · {every(check.interval_seconds)}</Field>
             <Field label="Healthy when">{healthyWhen(check.assertion)}</Field>
-            <Field label="Last value seen">{check.last_observed || '—'}</Field>
+            {check.last_observed !== undefined && (
+              <Field label="Last value seen">{check.last_observed || '—'}</Field>
+            )}
             <Field label="Record">
               {check.fail_count} failing {check.fail_count === 1 ? 'run' : 'runs'} · {check.error_count} errors · revision {check.revision}
             </Field>
@@ -158,6 +213,24 @@ function CheckRow({ check }: { readonly check: Check }) {
           <Field label="Command">
             <pre className="whitespace-pre-wrap break-all font-mono text-[11px] text-zinc-400 bg-zinc-950/60 border border-zinc-800/80 rounded-lg p-3">{check.command}</pre>
           </Field>
+          {canEdit && check.state !== 'retired' && (
+            <div className="flex items-center gap-2">
+              {confirming ? (
+                <>
+                  <span className="text-xs text-zinc-400">Stop this check? Its record is kept and Aurora will not recreate it.</span>
+                  <Button variant="destructive" size="sm" disabled={stopping} onClick={stop}>
+                    {stopping ? 'Stopping...' : 'Stop check'}
+                  </Button>
+                  <Button variant="outline" size="sm" disabled={stopping} onClick={() => setConfirming(false)}>
+                    Cancel
+                  </Button>
+                </>
+              ) : (
+                <Button variant="outline" size="sm" onClick={() => setConfirming(true)}>Stop this check</Button>
+              )}
+              {stopError && <span className="text-xs text-red-400">{stopError}</span>}
+            </div>
+          )}
           {check.consecutive_errors >= 3 && (
             <p className="text-xs text-amber-400">
               This check has not been able to run {check.consecutive_errors} times in a row. An error is never counted as healthy.
@@ -171,16 +244,18 @@ function CheckRow({ check }: { readonly check: Check }) {
 
 export default function ChecksPage() {
   const [showRetired, setShowRetired] = useState(false);
-  const { data, isLoading, error } = useQuery<Check[]>(
-    `/api/detection/checks${showRetired ? '?include_retired=true' : ''}`, checksFetcher,
+  const { data, isLoading, error, mutate } = useQuery<ChecksResponse>(
+    `/api/detection/checks${showRetired ? '?include_retired=true' : ''}`,
+    checksFetcher,
     // No retries: the next poll is the retry. A retry sequence would be cancelled by
     // the poll and restarted, leaving a failing page on "Loading..." for good.
     { staleTime: 10_000, refreshInterval: 30_000, retryCount: 0 },
   );
-  const checks = data ?? [];
+  const checks = data?.checks ?? [];
+  const canEdit = data?.can_edit ?? false;
   const active = checks.filter((c) => c.state !== 'retired');
-  const proven = active.filter((c) => c.state === 'proven').length;
-  const failing = active.filter((c) => c.last_status === 'fail').length;
+  const firing = active.filter((c) => c.last_status === 'fail').length;
+  const erroring = active.filter((c) => c.last_status === 'error').length;
 
   const renderBody = () => {
     if (isLoading) return <div className="text-sm text-zinc-500 py-12 text-center">Loading...</div>;
@@ -196,7 +271,13 @@ export default function ChecksPage() {
         </div>
       );
     }
-    return <div className="space-y-3">{checks.map((check) => <CheckRow key={check.id} check={check} />)}</div>;
+    return (
+      <div className="space-y-3">
+        {checks.map((check) => (
+          <CheckRow key={check.id} check={check} canEdit={canEdit} onChanged={() => mutate()} />
+        ))}
+      </div>
+    );
   };
 
   return (
@@ -204,18 +285,18 @@ export default function ChecksPage() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-2xl font-bold">Checks</h2>
-          <p className="text-sm text-zinc-500 mt-1">What Aurora watches by itself, why, and how often it has been right</p>
+          <p className="text-sm text-zinc-500 mt-1">What Aurora watches by itself, and why</p>
         </div>
-        <label className="flex items-center gap-2 text-xs text-zinc-500 cursor-pointer">
-          <input type="checkbox" checked={showRetired} onChange={(e) => setShowRetired(e.target.checked)} />
-          <span>Show retired</span>
-        </label>
+        <div className="flex items-center gap-2">
+          <Switch id="show-retired" checked={showRetired} onCheckedChange={setShowRetired} />
+          <Label htmlFor="show-retired" className="text-xs text-zinc-500">Show retired</Label>
+        </div>
       </div>
 
       <div className="grid grid-cols-3 gap-4 mb-6">
         <Stat label="Running" value={String(active.length)} />
-        <Stat label="Proven" value={String(proven)} sub="A failure opens a case" />
-        <Stat label="Failing now" value={String(failing)} />
+        <Stat label="Firing" value={String(firing)} sub="Found the problem they look for" />
+        <Stat label="Errors" value={String(erroring)} sub="Could not run or read their output" />
       </div>
 
       {renderBody()}

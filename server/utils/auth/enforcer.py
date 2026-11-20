@@ -63,6 +63,7 @@ _DEFAULT_POLICIES = [
     ("editor", "*", "notification_settings", "write"),
     ("editor", "*", "graph", "write"),
     ("editor", "*", "actions", "write"),
+    ("editor", "*", "detection_checks", "write"),
 
     # --- admin-only permissions ---
     ("admin", "*", "users", "manage"),

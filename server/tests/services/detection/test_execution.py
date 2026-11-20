@@ -103,7 +103,18 @@ def test_healthy_and_unhealthy_output(monkeypatch):
 def test_a_command_that_did_not_run_is_an_error_even_if_it_carries_output(monkeypatch, payload):
     # Lost access must not look like "zero crashlooping pods".
     _cloud_exec_returning(monkeypatch, payload)
-    assert runner.judge(_CHECK, "user-1", "check-1").status == STATUS_ERROR
+    verdict = runner.judge(_CHECK, "user-1", "check-1")
+    assert verdict.status == STATUS_ERROR
+    # Marked as not having run: this, not unreadable output, is what "Aurora
+    # has lost access" is counted from.
+    assert not verdict.ran
+
+
+def test_output_that_ran_but_cannot_be_read_does_not_look_like_lost_access(monkeypatch):
+    _cloud_exec_returning(monkeypatch, {"success": True, "output": "three pods"})
+    verdict = runner.judge(_CHECK, "user-1", "check-1")
+    assert verdict.status == STATUS_ERROR
+    assert verdict.ran
 
 
 def test_an_exception_while_executing_is_an_error(monkeypatch):

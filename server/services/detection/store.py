@@ -10,6 +10,8 @@ reach a person on an earlier version's record.
 """
 
 import json
+import re
+import shlex
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -53,6 +55,19 @@ class CheckRetired(Exception):
     """Raised when a save targets a check that was retired."""
 
 
+class TooManyChecks(Exception):
+    """Raised when an org is at its ceiling of active checks."""
+
+
+# Every active check is a command run every few minutes on shared workers.
+MAX_ACTIVE_CHECKS_PER_ORG = 200
+# An asset is matched exactly against the service an incident names, so it has
+# to be that bare name: no namespace, cluster or description around it.
+_ASSET = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]*$")
+# Flags that keep a command open instead of answering once.
+_STREAMING_FLAGS = ("-w", "--watch", "--watch-only", "-f", "--follow")
+
+
 def _clean(value: Any) -> str:
     return value.strip() if isinstance(value, str) else ""
 
@@ -84,7 +99,28 @@ def _text_fields(raw: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], str]:
         definition[field] = value
     definition["provider"] = definition["provider"].lower()
     definition["pattern"] = definition["pattern"].lower()
+    if not _ASSET.match(definition["asset"]):
+        return None, ("asset must be the bare service or resource name an incident would carry "
+                      "(for example 'checkout'), with no spaces, namespace or description")
     return definition, ""
+
+
+def streaming_flag(command: str) -> str:
+    """The flag that would keep *command* running instead of answering, or ''.
+
+    `kubectl get pods -w` and `logs --follow` are reads, so the read-only
+    classifier accepts them, but they never finish: each run would hold a
+    worker until the timeout.
+    """
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return ""
+    for token in tokens:
+        flag = token.split("=", 1)[0]
+        if flag in _STREAMING_FLAGS:
+            return flag
+    return ""
 
 
 def normalize_definition(raw: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], str]:
@@ -108,6 +144,9 @@ def normalize_definition(raw: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]],
     rejection = describe_rejection(definition["command"])
     if rejection:
         return None, "command is not read-only: " + rejection
+    flag = streaming_flag(definition["command"])
+    if flag:
+        return None, "command must answer once and exit: remove %s" % flag
     if definition["provider"] == PROVIDER_ONPREM_KUBECTL:
         problem = _onprem_problem(definition)
         if problem:
@@ -180,6 +219,12 @@ def save_check(
     """
     row = _lock_by_name(cursor, org_id, definition["name"])
     if row is None:
+        cursor.execute(
+            "SELECT COUNT(*) FROM detection_checks WHERE org_id = %s AND state <> %s",
+            (org_id, STATE_RETIRED),
+        )
+        if cursor.fetchone()[0] >= MAX_ACTIVE_CHECKS_PER_ORG:
+            raise TooManyChecks()
         values = [definition[f] for f in DEFINITION_FIELDS]
         values[DEFINITION_FIELDS.index("assertion")] = json.dumps(definition["assertion"])
         cursor.execute(
@@ -268,6 +313,17 @@ def insert_revision(cursor, check_id, org_id, user_id, revision, definition, rea
             _clean(reason)[:_DETAIL_MAX_CHARS], source,
         ),
     )
+
+
+def retire_check_by_id(cursor, org_id: str, check_id: str, reason: str) -> bool:
+    """Stop running the check with this id. Its record and revisions are kept."""
+    cursor.execute(
+        """UPDATE detection_checks
+           SET state = %s, retired_reason = %s, updated_at = NOW()
+           WHERE org_id = %s AND id = %s AND state <> %s""",
+        (STATE_RETIRED, _clean(reason)[:_DETAIL_MAX_CHARS], org_id, check_id, STATE_RETIRED),
+    )
+    return cursor.rowcount > 0
 
 
 def retire_check(cursor, org_id: str, name: str, reason: str) -> bool:
@@ -401,7 +457,10 @@ def record_result(cursor, check_id: str, org_id: str, verdict: Verdict, duration
         return Recorded()
     revision = current_revision
     is_error = verdict.status == STATUS_ERROR
-    consecutive_errors = consecutive_errors + 1 if is_error else 0
+    # Counts runs that could not execute, which is what "Aurora has lost access"
+    # is read from. A run that executed and returned something unreadable is an
+    # error in the totals but resets this.
+    consecutive_errors = consecutive_errors + 1 if not verdict.ran else 0
 
     cursor.execute(
         """UPDATE detection_checks

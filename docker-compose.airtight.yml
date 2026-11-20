@@ -297,7 +297,7 @@ services:
       celery -A celery_config worker
         --loglevel=info
         --concurrency=${CELERY_CONCURRENCY:-4}
-        -Q high,celery
+        -Q high,celery,detection
     environment:
       <<: *common-env
       # GitHub App private key (wins over the secrets backend when set): only services that sign App JWTs get it.
