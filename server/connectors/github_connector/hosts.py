@@ -66,7 +66,9 @@ def _parse_https_url(raw: str) -> tuple[str, str] | None:
         return None
     if not parts.hostname or parts.username is not None or parts.password is not None:
         return None
-    host = parts.hostname.lower()
+    # urlsplit already lowercases the hostname, leaving an IPv6 zone ID
+    # (``%25eth0``) in its original case, which must not change.
+    host = parts.hostname
     if ":" in host:  # IPv6 literal: urlsplit strips the brackets
         host = f"[{host}]"
     authority = host + (f":{port}" if port else "")
@@ -222,3 +224,22 @@ def github_oauth_token(creds: dict | None) -> str | None:
         )
         return None
     return token
+
+
+def github_identity_host() -> str:
+    """The host a GitHub numeric user ID belongs to, as stored with the user.
+
+    IDs are only unique per host: the same number on github.com and on an
+    enterprise host are different people. Rows saved before the host was
+    recorded came from github.com.
+    """
+    return github_web_url()
+
+
+def is_on_current_host(url: str | None) -> bool:
+    """True when ``url`` (a GitHub web link) points at the configured host."""
+    parsed = _parse_https_url((url or "").strip())
+    if parsed is None:
+        return False
+    authority = "github.com" if parsed[0] in _GITHUB_COM_AUTHORITIES else parsed[0]
+    return f"https://{authority}" == github_web_url()

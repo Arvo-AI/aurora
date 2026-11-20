@@ -705,9 +705,12 @@ Things that differ from github.com:
   `REQUESTS_CA_BUNDLE`; the GitHub MCP server uses the system trust store).
 - **Network egress.** The server, Celery worker and chatbot must reach both
   the web host and the API host.
-- **Changing host.** OAuth connections are tied to the host that issued them.
-  After repointing an existing deployment to another GitHub host, users
-  reconnect GitHub; tokens from the old host are never sent to the new one.
+- **Changing host.** OAuth connections, linked GitHub identities and
+  Aurora-opened PRs are tied to the host they came from. After repointing an
+  existing deployment to another GitHub host, users reconnect GitHub; tokens
+  from the old host are never sent to the new one, a GitHub user ID from the
+  old host never signs anyone in, and PRs opened on the old host are not
+  closed from Aurora.
 
 #### Troubleshooting
 

@@ -160,3 +160,19 @@ def test_oauth_token_only_used_on_its_issuing_host(monkeypatch):
 def test_ipv6_override_keeps_brackets(monkeypatch):
     monkeypatch.setenv(API, "https://[fd00::1]:8443/api/v3")
     assert hosts.github_api_url() == "https://[fd00::1]:8443/api/v3"
+
+
+def test_ipv6_zone_id_case_is_kept(monkeypatch):
+    monkeypatch.setenv(API, "https://[fe80::1%25ETH0]:8443/api/v3")
+    assert hosts.github_api_url() == "https://[fe80::1%25ETH0]:8443/api/v3"
+
+
+def test_is_on_current_host(monkeypatch):
+    assert hosts.is_on_current_host("https://github.com/o/r/pull/1")
+    assert hosts.is_on_current_host("https://www.github.com/o/r/pull/1")
+    assert not hosts.is_on_current_host("https://acme.ghe.com/o/r/pull/1")
+    assert not hosts.is_on_current_host(None)
+    monkeypatch.setenv(SLUG, "https://acme.ghe.com/apps/acme/aurora")
+    assert hosts.is_on_current_host("https://acme.ghe.com/o/r/pull/1")
+    assert not hosts.is_on_current_host("https://github.com/o/r/pull/1")
+    assert hosts.github_identity_host() == "https://acme.ghe.com"

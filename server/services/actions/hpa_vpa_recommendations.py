@@ -24,7 +24,7 @@ from typing import Any, Optional
 
 import requests
 
-from connectors.github_connector.hosts import github_api_url
+from connectors.github_connector.hosts import github_api_url, is_on_current_host
 from utils.auth.stateless_auth import set_rls_context
 from utils.db.connection_pool import db_pool
 from utils.log_sanitizer import sanitize
@@ -705,7 +705,8 @@ def supported_vcs_providers() -> frozenset:
 
 
 def close_pull_request(
-    user_id: str, vcs_provider: str, repo_full_name: str, pr_number: int, timeout: int = 30
+    user_id: str, vcs_provider: str, repo_full_name: str, pr_number: int, timeout: int = 30,
+    pr_url: str | None = None,
 ) -> dict:
     """Close an open PR/MR on the provider that hosts it.
 
@@ -736,6 +737,12 @@ def close_pull_request(
         return {"error": f"Cannot close PR: PR number '{pr_number}' is not an integer"}
     if pr_number <= 0:
         return {"error": f"Cannot close PR: PR number {pr_number} is not positive"}
+    # The PR was opened on whatever GitHub host was configured then. If the
+    # deployment now points at another host, the same owner/repo#number there
+    # is someone else's PR: refuse rather than close it.
+    if provider == "github" and pr_url and not is_on_current_host(pr_url):
+        return {"error": ("Cannot close PR: it was opened on a different GitHub host than "
+                          "the one configured now. Close it there manually.")}
 
     logger.info(
         "[HpaVpaRecs] Closing %s PR #%s in %s for user=%s",

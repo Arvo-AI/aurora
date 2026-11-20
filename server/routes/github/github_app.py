@@ -59,6 +59,8 @@ from utils.auth.stateless_auth import (
 )
 from utils.db.connection_pool import db_pool
 from connectors.github_connector.hosts import (
+    GITHUB_COM_WEB_URL,
+    github_identity_host,
     github_oauth_token,
     github_api_url,
     github_app_install_url as _build_install_url,
@@ -1030,13 +1032,16 @@ def _enqueue_enrolled_import(user_id: str, installation_id: int, log_prefix: str
 def _claim_refusal(cur, user_id: str, claim: dict) -> dict | None:
     """Why ``user_id`` may not redeem ``claim``, or None when it may."""
     cur.execute(
-        "SELECT LOWER(email), github_user_id FROM users WHERE id = %s", (user_id,)
+        "SELECT LOWER(email), github_user_id, COALESCE(github_host, %s) "
+        "FROM users WHERE id = %s",
+        (GITHUB_COM_WEB_URL, user_id),
     )
     row = cur.fetchone()
     if not row or row[0] != claim["email"]:
         logger.warning("[GITHUB-APP-CLAIM-PENDING] email mismatch user=%s", user_id)
         return {"error": "Signed in as a different account", "code": "CLAIM_EMAIL_MISMATCH"}
-    if row[1] is not None and row[1] != claim["gh_id"]:
+    # A linked ID only means the same person on the same GitHub host.
+    if row[1] is not None and (row[1] != claim["gh_id"] or row[2] != github_identity_host()):
         return {"error": "Account is linked to another GitHub user",
                 "code": "CLAIM_IDENTITY_MISMATCH"}
     cur.execute(
@@ -1106,8 +1111,9 @@ def github_app_claim_pending(user_id):
                 # Remember the GitHub identity so the next one-click install
                 # logs this person straight in.
                 cur.execute(
-                    "UPDATE users SET github_user_id = %s, github_login = %s WHERE id = %s",
-                    (claim["gh_id"], claim["gh_login"], user_id),
+                    "UPDATE users SET github_user_id = %s, github_host = %s, github_login = %s "
+                    "WHERE id = %s",
+                    (claim["gh_id"], github_identity_host(), claim["gh_login"], user_id),
                 )
                 from routes.github.github_signup import _link_installation
 

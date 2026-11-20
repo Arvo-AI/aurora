@@ -231,3 +231,15 @@ def test_confirm_needs_the_installers_browser_and_a_link_state(env):
     ticket = parse_qs(urlparse(resp.location).query)["gh_link"][0]
     with app.test_request_context():
         assert mod.verify_link_ticket(ticket, token) == ("user-1", "org-1")
+
+
+def test_same_github_id_from_another_host_is_refused(env, monkeypatch):
+    # The account is linked to GitHub user 42 on github.com; the claim is for
+    # user 42 on an enterprise host, a different person.
+    monkeypatch.setenv("NEXT_PUBLIC_GITHUB_APP_SLUG", "https://acme.ghe.com/apps/acme/aurora")
+    resp, status, conn, task = _claim(
+        env, env[2], [(_IDENTITY["email"], _IDENTITY["id"], "https://github.com")]
+    )
+    assert status == 403
+    assert resp.get_json()["code"] == "CLAIM_IDENTITY_MISMATCH"
+    conn.commit.assert_not_called()
