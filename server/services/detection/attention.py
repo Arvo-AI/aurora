@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from services.detection import STATE_SILENT
 from services.detection.cases import healthy_condition, origin_sentence
-from services.detection.record import OUTCOME_FALSE, OUTCOME_HIT, PatternRecord
+from services.detection.record import HITS_SQL, OUTCOME_FALSE, OUTCOME_HIT, PatternRecord
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +83,7 @@ def candidates(cursor, org_id: str) -> List[Dict[str, Any]]:
     cursor.execute(
         """WITH pattern_records AS (
                SELECT pattern,
-                      COUNT(DISTINCT evidence_incident_id) FILTER (WHERE outcome = %s) AS hits,
+                      """ + HITS_SQL + """ AS hits,
                       COUNT(*) FILTER (WHERE outcome = %s) AS false_fires
                FROM detection_check_fires WHERE org_id = %s GROUP BY pattern
            )
