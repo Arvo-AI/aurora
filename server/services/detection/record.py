@@ -29,6 +29,10 @@ DEMOTE_AFTER_CONSECUTIVE_FALSE = 2
 # the real problem.
 GRADE_WINDOW_HOURS = 24
 GRADE_LOOKBACK_HOURS = 1
+# Evidence has to fall within the failure itself, give or take: an incident
+# declared up to this long after the check went healthy again still counts,
+# one declared the next day does not.
+GRADE_GRACE_HOURS = 2
 RETIRE_AFTER_DAYS = 90
 MAX_ACTIVE_CHECKS_PER_ASSET = 8
 
@@ -203,8 +207,9 @@ def _restore_previous_revision(cursor, check_id: str, org_id: str, revision: int
 _GRADE_BATCH = 200
 
 
-def _independent_incident(cursor, org_id: str, asset: str, fired_at) -> Optional[str]:
-    """An incident on *asset* around *fired_at* that no check opened, or None.
+def _independent_incident(cursor, org_id: str, asset: str, fired_at, until) -> Optional[str]:
+    """An incident on *asset* between shortly before *fired_at* and *until* that no
+    check opened, or None.
 
     Incidents Aurora opened from a check are excluded: a check's own case is
     never evidence that the check was right.
@@ -214,13 +219,13 @@ def _independent_incident(cursor, org_id: str, asset: str, fired_at) -> Optional
            FROM incidents i
            WHERE i.org_id = %s
              AND i.created_at >= %s::timestamptz - %s * INTERVAL '1 hour'
-             AND i.created_at <= %s::timestamptz + %s * INTERVAL '1 hour'
+             AND i.created_at <= %s::timestamptz
              AND NOT EXISTS (
                  SELECT 1 FROM detection_check_fires f
                  WHERE f.incident_id = i.id AND f.opened_incident
              )
            ORDER BY i.created_at""",
-        (org_id, fired_at, GRADE_LOOKBACK_HOURS, fired_at, GRADE_WINDOW_HOURS),
+        (org_id, fired_at, GRADE_LOOKBACK_HOURS, until),
     )
     for incident_id, service, affected in cursor.fetchall():
         if asset_matches(asset, [service, *(affected or [])]):
@@ -245,17 +250,26 @@ def grade_fires(cursor, org_id: str) -> Tuple[int, int]:
     A hit is recorded as soon as the evidence exists. A fire is only called
     false once its whole window has passed with none.
     """
+    # A fire's window runs from the failure to a little after it cleared, and at
+    # most GRADE_WINDOW_HOURS for one that never clears. Without the bound, a
+    # failure that cleared in minutes would be credited with whatever happened
+    # to the same asset the next day.
     cursor.execute(
-        """SELECT id, check_id, asset, pattern, fired_at, incident_id, opened_incident,
-                  fired_at <= NOW() - %s * INTERVAL '1 hour' AS window_closed
-           FROM detection_check_fires
-           WHERE org_id = %s AND outcome IS NULL
+        """SELECT id, check_id, asset, pattern, fired_at, incident_id, opened_incident, until,
+                  until <= NOW() AS window_closed
+           FROM (
+               SELECT *, LEAST(COALESCE(cleared_at, 'infinity'::timestamptz),
+                               fired_at + %s * INTERVAL '1 hour') + %s * INTERVAL '1 hour' AS until
+               FROM detection_check_fires
+               WHERE org_id = %s AND outcome IS NULL
+           ) open_fires
            ORDER BY fired_at LIMIT %s""",
-        (GRADE_WINDOW_HOURS, org_id, _GRADE_BATCH),
+        (GRADE_WINDOW_HOURS, GRADE_GRACE_HOURS, org_id, _GRADE_BATCH),
     )
     hits = false_fires = 0
-    for fire_id, check_id, asset, pattern, fired_at, incident_id, opened, window_closed in cursor.fetchall():
-        evidence = _independent_incident(cursor, org_id, asset, fired_at)
+    for (fire_id, check_id, asset, pattern, fired_at, incident_id, opened, until,
+         window_closed) in cursor.fetchall():
+        evidence = _independent_incident(cursor, org_id, asset, fired_at, until)
         if evidence is None and opened and _own_case_was_corroborated(cursor, incident_id):
             evidence = str(incident_id)
         if evidence is not None:
