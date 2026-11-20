@@ -740,9 +740,11 @@ def close_pull_request(
     # The PR was opened on whatever GitHub host was configured then. If the
     # deployment now points at another host, the same owner/repo#number there
     # is someone else's PR: refuse rather than close it.
-    if provider == "github" and pr_url and not is_on_current_host(pr_url):
-        return {"error": ("Cannot close PR: it was opened on a different GitHub host than "
-                          "the one configured now. Close it there manually.")}
+    # Without a recorded URL there is no way to tell which host the PR is on,
+    # so a GitHub close is refused rather than guessed.
+    if provider == "github" and not (pr_url and is_on_current_host(pr_url)):
+        return {"error": ("Cannot close PR: it was not recorded on the GitHub host configured "
+                          "now (or its link is missing). Close it on GitHub manually.")}
 
     logger.info(
         "[HpaVpaRecs] Closing %s PR #%s in %s for user=%s",

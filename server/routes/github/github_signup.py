@@ -187,7 +187,19 @@ def _sign_claim_token(installation_id: int, identity: dict) -> str:
         "gh_id": identity["id"],
         "gh_login": identity["login"],
         "email": identity["email"],
+        # The numeric ID only means this person on this host.
+        "h": github_identity_host(),
     })
+
+
+def _issued_on_current_host(payload: dict) -> bool:
+    """Whether a signed token was minted for the GitHub host configured now.
+
+    Tokens carry a numeric GitHub user ID, which is only unique per host; one
+    minted before the host changed must not be redeemed against the new one.
+    The host is removed from the payload once checked.
+    """
+    return payload.pop("h", None) == github_identity_host()
 
 
 def verify_claim_token(token: str) -> dict | None:
@@ -206,6 +218,8 @@ def verify_claim_token(token: str) -> dict | None:
         and isinstance(payload.get("gh_login"), str)
         and isinstance(payload.get("email"), str)
     ):
+        return None
+    if not _issued_on_current_host(payload):
         return None
     return payload
 
@@ -226,6 +240,7 @@ def _sign_pending_signup(
         "identity": {k: identity[k] for k in ("id", "login", "name", "email")},
         "attr": attribution or {},
         "b": hashlib.sha256(bind.encode()).hexdigest(),
+        "h": github_identity_host(),
     })
 
 
@@ -248,6 +263,8 @@ def verify_pending_signup(token: str | None) -> dict | None:
         and isinstance(identity.get("login"), str)
         and isinstance(identity.get("email"), str)
     ):
+        return None
+    if not _issued_on_current_host(payload):
         return None
     attr = payload.get("attr")
     payload["attr"] = _attribution_from(attr) if isinstance(attr, dict) else {}
