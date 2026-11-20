@@ -63,7 +63,8 @@ def test_a_claim_is_one_capped_line_that_cannot_mention_anyone():
         {"ts": "1795100000.000100", "kind": "report", "asset": "checkout", "claim": hostile},
     ), _MESSAGES, _ASSETS)
     claim = readings[0].claim
-    assert "\n" not in claim and "<" not in claim and ">" not in claim and "`" not in claim
+    for forbidden in ("\n", "<", ">", "`"):
+        assert forbidden not in claim
     assert len(claim) <= CLAIM_MAX_CHARS
 
 
@@ -110,7 +111,8 @@ def test_a_case_opened_because_of_a_report_says_so():
         "origin": {"kind": "person", "ref": "someone"},
     }
     with_report = case_description(check, "1", reported="checkout returns 500s")
-    assert "a person reported" in with_report and "checkout returns 500s" in with_report
+    assert "a person reported" in with_report
+    assert "checkout returns 500s" in with_report
     assert "No person or alert reported this" in case_description(check, "1")
 
 
