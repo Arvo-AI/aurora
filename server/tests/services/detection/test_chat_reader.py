@@ -112,3 +112,51 @@ def test_a_case_opened_because_of_a_report_says_so():
     with_report = case_description(check, "1", reported="checkout returns 500s")
     assert "a person reported" in with_report and "checkout returns 500s" in with_report
     assert "No person or alert reported this" in case_description(check, "1")
+
+
+def test_an_answer_with_a_malformed_ts_does_not_cost_the_rest_of_the_batch():
+    readings = parse(_answer(
+        {"ts": [], "kind": "report", "asset": "checkout", "claim": "x"},
+        {"ts": {"a": 1}, "kind": "report", "asset": "checkout", "claim": "x"},
+        {"ts": "1795100000.000100", "kind": "report", "asset": "checkout", "claim": "real"},
+    ), _MESSAGES, _ASSETS)
+    assert [r.claim for r in readings] == ["real"]
+
+
+class _PagedSlack:
+    """conversations.history as Slack serves it: newest page first, with a cursor."""
+
+    def __init__(self, pages):
+        self.pages, self.requests = pages, []
+
+    def _make_request(self, method, endpoint, params):
+        self.requests.append(dict(params))
+        index = int(params.get("cursor") or 0)
+        more = index + 1 < len(self.pages)
+        return {
+            "messages": self.pages[index], "has_more": more,
+            "response_metadata": {"next_cursor": str(index + 1) if more else ""},
+        }
+
+
+def test_a_busy_channel_is_read_back_to_the_cursor_not_just_its_newest_page():
+    # One page would move the cursor past the older messages for good, and one
+    # of them can be the only problem report in the channel.
+    from services.detection import runner
+
+    client = _PagedSlack([[{"ts": "30.0"}, {"ts": "29.0"}], [{"ts": "12.0"}, {"ts": "11.0"}]])
+    messages, complete = runner._new_messages(client, "C1", "10.0")
+
+    assert [m["ts"] for m in messages] == ["30.0", "29.0", "12.0", "11.0"]
+    assert complete
+    assert all(r["oldest"] == "10.0" for r in client.requests)
+
+
+def test_a_backlog_longer_than_one_turn_reads_is_reported_as_incomplete():
+    from services.detection import runner
+
+    client = _PagedSlack([[{"ts": "%d.0" % (100 - i)}] for i in range(10)])
+    messages, complete = runner._new_messages(client, "C1", "10.0")
+
+    assert not complete
+    assert len(messages) == runner._HISTORY_MAX_PAGES

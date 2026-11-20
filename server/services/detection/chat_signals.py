@@ -122,6 +122,10 @@ def corroborated(cursor, org_id: str, limit: int) -> List[Tuple[str, str, str, s
 
     [(fire_id, check_id, observed, created_by, signal_id, claim)], oldest fire
     first, one row per fire. A fire that already has a case is not returned.
+
+    The report has to fall within an hour of the fire starting, before or
+    after. A fire that grading has already credited with the report is still
+    returned: being graded must not cost it the case the report earned it.
     """
     cursor.execute(
         """SELECT DISTINCT ON (f.fired_at, f.id)
@@ -131,9 +135,9 @@ def corroborated(cursor, org_id: str, limit: int) -> List[Tuple[str, str, str, s
            JOIN detection_chat_signals s
              ON s.org_id = f.org_id AND lower(s.asset) = lower(f.asset)
             AND s.said_at >= f.fired_at - %s * INTERVAL '1 minute'
-            AND s.said_at >= NOW() - %s * INTERVAL '1 minute'
+            AND s.said_at <= f.fired_at + %s * INTERVAL '1 minute'
            WHERE f.org_id = %s AND c.state = %s AND f.revision = c.revision
-             AND f.cleared_at IS NULL AND f.outcome IS NULL AND f.incident_id IS NULL
+             AND f.cleared_at IS NULL AND f.incident_id IS NULL
            ORDER BY f.fired_at, f.id, s.said_at
            LIMIT %s""",
         (CORROBORATION_MINUTES, CORROBORATION_MINUTES, org_id, STATE_SILENT, limit),
@@ -150,24 +154,17 @@ def link_signal_to_case(cursor, signal_id: str, incident_id: str) -> None:
 def report_near(cursor, org_id: str, asset: str, fired_at, until, lookback_hours: int) -> Optional[str]:
     """A report about *asset* during a failure, as evidence for grading, or None.
 
-    Returns the first report about that asset on the same day, whichever report
-    fell inside the window. Three people saying "checkout is down" during one
-    outage are one piece of evidence, and a check that flaps through that
-    outage must not collect a separate hit from each of them.
+    Which report is returned does not affect how often the outage is counted:
+    hits are counted once per asset per day (record.HITS_SQL), so three people
+    saying "checkout is down" are one piece of evidence.
     """
     cursor.execute(
-        """SELECT (
-               SELECT first.id FROM detection_chat_signals first
-               WHERE first.org_id = s.org_id AND lower(first.asset) = lower(s.asset)
-                 AND (first.said_at AT TIME ZONE 'UTC')::date = (s.said_at AT TIME ZONE 'UTC')::date
-               ORDER BY first.said_at, first.id LIMIT 1
-           )
-           FROM detection_chat_signals s
-           WHERE s.org_id = %s AND lower(s.asset) = lower(%s)
-             AND s.said_at >= %s::timestamptz - %s * INTERVAL '1 hour'
-             AND s.said_at <= %s::timestamptz
-           ORDER BY s.said_at LIMIT 1""",
+        """SELECT id FROM detection_chat_signals
+           WHERE org_id = %s AND lower(asset) = lower(%s)
+             AND said_at >= %s::timestamptz - %s * INTERVAL '1 hour'
+             AND said_at <= %s::timestamptz
+           ORDER BY said_at, id LIMIT 1""",
         (org_id, asset, fired_at, lookback_hours, until),
     )
     row = cursor.fetchone()
-    return str(row[0]) if row and row[0] else None
+    return str(row[0]) if row else None

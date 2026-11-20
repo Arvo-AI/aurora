@@ -591,20 +591,24 @@ def fires_awaiting_a_case(cursor, org_id: str, limit: int) -> List[Tuple[str, st
 CASE_CLAIM_TTL_SECONDS = 600
 
 
-def reserve_case(cursor, fire_id: str) -> bool:
+def reserve_case(cursor, fire_id: str, allow_graded: bool = False) -> bool:
     """Take the right to give this fire a case. False when it no longer needs one.
 
     Checked here, under the write: the fire may have cleared, been graded or
     been given a case since it was selected, and two workers may be looking at
     it at once. A reservation expires, so a worker that died holding one does
     not leave the fire without a case.
+
+    *allow_graded* is for a fire a person's report backs: grading may already
+    have credited it with that report, and that must not cost it its case.
     """
     cursor.execute(
         """UPDATE detection_check_fires SET case_claimed_at = NOW()
-           WHERE id = %s AND incident_id IS NULL AND cleared_at IS NULL AND outcome IS NULL
+           WHERE id = %s AND incident_id IS NULL AND cleared_at IS NULL
+             AND (outcome IS NULL OR %s)
              AND (case_claimed_at IS NULL
                   OR case_claimed_at <= NOW() - %s * INTERVAL '1 second')""",
-        (fire_id, CASE_CLAIM_TTL_SECONDS),
+        (fire_id, allow_graded, CASE_CLAIM_TTL_SECONDS),
     )
     return cursor.rowcount > 0
 

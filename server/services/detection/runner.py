@@ -18,7 +18,7 @@ import time
 from contextlib import contextmanager
 
 from celery_config import celery_app
-from services.detection import STATE_PROVEN, STATUS_ERROR
+from services.detection import STATE_PROVEN, STATE_RETIRED, STATUS_ERROR
 from services.detection import (
     access,
     attention,
@@ -174,11 +174,15 @@ def _open_or_join_case(fire_id: str, check_id: str, org_id: str, user_id: str, o
                                _LOG, sanitize(check_id))
                 return
             check = get_check_for_case(cur, check_id)
-            if check is None or (check["state"] != STATE_PROVEN and report is None):
+            # A retired check gets no case, report or not: retiring leaves its
+            # open fire in place, and a report must not bring it back to life.
+            if check is None or check["state"] == STATE_RETIRED:
+                return
+            if check["state"] != STATE_PROVEN and report is None:
                 return
             # Re-checked under the write: the fire may have cleared or been given
             # a case since the tick selected it, and another worker may hold it.
-            reserved = reserve_case(cur, fire_id)
+            reserved = reserve_case(cur, fire_id, allow_graded=report is not None)
             existing = cases.find_open_case(cur, org_id, check["asset"]) if reserved else None
             if existing:
                 _link(cur, fire_id, existing, False, report)
@@ -418,6 +422,28 @@ def run_fire_drills():
 
 
 _HISTORY_LIMIT = 15
+# Pages read per turn when a channel has more new messages than one page holds.
+_HISTORY_MAX_PAGES = 4
+
+
+def _new_messages(client, channel_id: str, last_ts: str):
+    """Messages after *last_ts*: (messages, whether that is all of them).
+
+    Slack returns the newest page first, so stopping at one page would move the
+    cursor past older messages that were never read. This follows the pages
+    back to the cursor, up to a bound.
+    """
+    messages, page_cursor = [], None
+    for _ in range(_HISTORY_MAX_PAGES):
+        params = {"channel": channel_id, "oldest": last_ts, "limit": _HISTORY_LIMIT}
+        if page_cursor:
+            params["cursor"] = page_cursor
+        result = client._make_request("GET", "conversations.history", params) or {}
+        messages.extend(m for m in result.get("messages", []) if m.get("ts"))
+        page_cursor = (result.get("response_metadata") or {}).get("next_cursor")
+        if not result.get("has_more") or not page_cursor:
+            return messages, True
+    return messages, False
 
 
 @celery_app.task(name="services.detection.runner.read_chat")
@@ -460,11 +486,13 @@ def _read_one_channel(user_id: str, org_id: str) -> None:
 
     readings, newest_ts = None, last_ts
     try:
-        result = client._make_request(
-            "GET", "conversations.history",
-            {"channel": channel_id, "oldest": last_ts, "limit": _HISTORY_LIMIT},
-        )
-        messages = [m for m in (result or {}).get("messages", []) if m.get("ts")]
+        messages, complete = _new_messages(client, channel_id, last_ts)
+        if not complete:
+            # More arrived since the last turn than one turn reads. The oldest
+            # are skipped, and said so here: Slack returns newest first, so the
+            # only way to reach them is to page through everything newer.
+            logger.warning("%s Channel %s had more than %d new messages; the oldest were not read",
+                           _LOG, sanitize(channel_id), _HISTORY_LIMIT * _HISTORY_MAX_PAGES)
         if messages:
             newest_ts = max((m["ts"] for m in messages), key=float)
         readings = chat_reader.read(

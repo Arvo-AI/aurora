@@ -108,7 +108,8 @@ def parse(raw: str, messages: List[Dict[str, Any]], known_assets: List[str]) -> 
         if not isinstance(answer, dict):
             continue
         ts = answer.get("ts")
-        if ts not in asked or ts in seen:
+        # A ts that is not a string (a list, an object) would raise on the lookups.
+        if not isinstance(ts, str) or ts not in asked or ts in seen:
             continue
         seen.add(ts)
         if answer.get("kind") != KIND_REPORT:
