@@ -82,6 +82,14 @@ from utils.auth.github_app_jwt import GitHubAppJWTError, mint_app_jwt
 from utils.auth import normalize_email
 from utils.auth.handoff import mint_handoff as _mint_handoff
 from utils.db.connection_pool import db_pool
+from connectors.github_connector.hosts import (
+    GITHUB_COM_WEB_URL,
+    github_api_url,
+    github_app_install_url,
+    github_app_page_url,
+    github_identity_host,
+    github_web_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +124,10 @@ _ERROR_INSTALL_NOT_AUTHORIZED = (
     "Your GitHub account does not have access to this installation"
 )
 _ERROR_INTERNAL = "An internal error occurred while creating your account"
+_ERROR_IDENTITY_OTHER_HOST = (
+    "This GitHub account ID is already linked to an Aurora user from another "
+    "GitHub host. Sign in with your Aurora account and connect GitHub from Connectors."
+)
 _ERROR_LINK_EXPIRED = (
     "This GitHub install link expired or was opened in a different browser. "
     "Install Aurora again from Connectors."
@@ -175,7 +187,19 @@ def _sign_claim_token(installation_id: int, identity: dict) -> str:
         "gh_id": identity["id"],
         "gh_login": identity["login"],
         "email": identity["email"],
+        # The numeric ID only means this person on this host.
+        "h": github_identity_host(),
     })
+
+
+def _issued_on_current_host(payload: dict) -> bool:
+    """Whether a signed token was minted for the GitHub host configured now.
+
+    Tokens carry a numeric GitHub user ID, which is only unique per host; one
+    minted before the host changed must not be redeemed against the new one.
+    The host is removed from the payload once checked.
+    """
+    return payload.pop("h", None) == github_identity_host()
 
 
 def verify_claim_token(token: str) -> dict | None:
@@ -194,6 +218,8 @@ def verify_claim_token(token: str) -> dict | None:
         and isinstance(payload.get("gh_login"), str)
         and isinstance(payload.get("email"), str)
     ):
+        return None
+    if not _issued_on_current_host(payload):
         return None
     return payload
 
@@ -214,6 +240,7 @@ def _sign_pending_signup(
         "identity": {k: identity[k] for k in ("id", "login", "name", "email")},
         "attr": attribution or {},
         "b": hashlib.sha256(bind.encode()).hexdigest(),
+        "h": github_identity_host(),
     })
 
 
@@ -236,6 +263,8 @@ def verify_pending_signup(token: str | None) -> dict | None:
         and isinstance(identity.get("login"), str)
         and isinstance(identity.get("email"), str)
     ):
+        return None
+    if not _issued_on_current_host(payload):
         return None
     attr = payload.get("attr")
     payload["attr"] = _attribution_from(attr) if isinstance(attr, dict) else {}
@@ -370,8 +399,7 @@ def github_app_signup_start():
     if not _signup_ready():
         return _render_error(_ERROR_NOT_AVAILABLE)
 
-    slug = (os.getenv("NEXT_PUBLIC_GITHUB_APP_SLUG") or "").strip()
-    if not slug:
+    if github_app_page_url() is None:
         logger.error("[GITHUB-SIGNUP] NEXT_PUBLIC_GITHUB_APP_SLUG missing")
         return _render_error(_ERROR_NOT_AVAILABLE)
 
@@ -381,9 +409,7 @@ def github_app_signup_start():
         logger.exception("[GITHUB-SIGNUP] failed to sign signup state")
         return _render_error(_ERROR_INTERNAL)
 
-    return flask.redirect(
-        f"https://github.com/apps/{slug}/installations/new?state={state}", code=302
-    )
+    return flask.redirect(github_app_install_url(state), code=302)
 
 
 def _verify_installation(installation_id: int) -> dict | None:
@@ -398,7 +424,7 @@ def _verify_installation(installation_id: int) -> dict | None:
         return None
     try:
         resp = requests.get(
-            f"https://api.github.com/app/installations/{installation_id}",
+            f"{github_api_url()}/app/installations/{installation_id}",
             headers={
                 "Authorization": f"Bearer {app_jwt}",
                 "Accept": _GH_JSON_MEDIA_TYPE,
@@ -438,7 +464,7 @@ def _exchange_code_for_identity(code: str) -> tuple[dict, str] | None:
 
     try:
         token_resp = requests.post(
-            "https://github.com/login/oauth/access_token",
+            f"{github_web_url()}/login/oauth/access_token",
             json={"client_id": client_id, "client_secret": client_secret, "code": code},
             headers={"Accept": "application/json"},
             timeout=GITHUB_TIMEOUT,
@@ -466,7 +492,7 @@ def _exchange_code_for_identity(code: str) -> tuple[dict, str] | None:
     }
     try:
         user_resp = requests.get(
-            "https://api.github.com/user", headers=headers, timeout=GITHUB_TIMEOUT
+            f"{github_api_url()}/user", headers=headers, timeout=GITHUB_TIMEOUT
         )
     except requests.RequestException:
         logger.exception("[GITHUB-SIGNUP] /user request failed")
@@ -492,7 +518,7 @@ def _exchange_code_for_identity(code: str) -> tuple[dict, str] | None:
         # to GitHub's stable noreply convention rather than failing signup.
         try:
             emails_resp = requests.get(
-                "https://api.github.com/user/emails",
+                f"{github_api_url()}/user/emails",
                 headers=headers,
                 timeout=GITHUB_TIMEOUT,
             )
@@ -542,7 +568,7 @@ def _user_authorized_for_installation(access_token: str, installation_id: int) -
     for page in range(1, _USER_INSTALLATIONS_MAX_PAGES + 1):
         try:
             resp = requests.get(
-                "https://api.github.com/user/installations",
+                f"{github_api_url()}/user/installations",
                 headers=headers,
                 params={"per_page": _USER_INSTALLATIONS_PER_PAGE, "page": page},
                 timeout=GITHUB_TIMEOUT,
@@ -729,8 +755,14 @@ def _provision_and_handoff(
         with conn as held_conn:
             with held_conn.cursor() as cur:
                 # users/organizations are not RLS-protected (matches register).
+                # GitHub user IDs are only unique per host, so match the
+                # identity on the host that issued it (rows from before the
+                # host was recorded are github.com).
+                identity_host = github_identity_host()
                 cur.execute(
-                    "SELECT id FROM users WHERE github_user_id = %s", (gh_id,)
+                    "SELECT id FROM users WHERE github_user_id = %s "
+                    "AND COALESCE(github_host, %s) = %s",
+                    (gh_id, GITHUB_COM_WEB_URL, identity_host),
                 )
                 row = cur.fetchone()
                 created = False
@@ -749,6 +781,17 @@ def _provision_and_handoff(
                     if _linked_elsewhere(cur, installation_id, org_id):
                         return (_linked_elsewhere_redirect(), None, None, False)
                 else:
+                    # Same number linked from another host: a different
+                    # person. Never log in as them, and the unique index would
+                    # refuse a second row anyway.
+                    cur.execute(
+                        "SELECT 1 FROM users WHERE github_user_id = %s", (gh_id,)
+                    )
+                    if cur.fetchone():
+                        logger.warning(
+                            "[GITHUB-SIGNUP] GitHub user ID already linked from another host; refusing"
+                        )
+                        return (_render_error(_ERROR_IDENTITY_OTHER_HOST), None, None, False)
                     # Normalized comparison so an existing mixed-case account
                     # is still detected as a collision rather than duplicated.
                     cur.execute(
@@ -790,15 +833,16 @@ def _provision_and_handoff(
                     cur.execute(
                         """INSERT INTO users (email, password_hash, name, role,
                                               email_verified, must_change_password,
-                                              github_user_id,
+                                              github_user_id, github_host,
                                               github_login, created_at)
-                           VALUES (%s, %s, %s, 'admin', TRUE, TRUE, %s, %s, NOW())
+                           VALUES (%s, %s, %s, 'admin', TRUE, TRUE, %s, %s, %s, NOW())
                            RETURNING id""",
                         (
                             identity["email"],
                             unusable.decode("utf-8"),
                             identity["name"],
                             gh_id,
+                            identity_host,
                             login,
                         ),
                     )

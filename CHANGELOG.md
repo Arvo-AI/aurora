@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- GitHub Enterprise: Aurora works with GitHub Enterprise Cloud (`*.ghe.com`)
+  and GitHub Enterprise Server. Set `NEXT_PUBLIC_GITHUB_APP_SLUG` to the App's
+  full URL (for example `https://acme.ghe.com/apps/acme/aurora`) and the install
+  link, OAuth, API calls, links and the GitHub MCP server all use that host.
+  The API base is derived from it; `GITHUB_API_URL` overrides it when needed.
+  A bare slug keeps working on github.com as before.
+
 ## [1.5.25] - 2026-11-16
 
 ### Changed

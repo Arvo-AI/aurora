@@ -426,3 +426,45 @@ def test_dismiss_raises_rather_than_silently_truncating_a_short_row():
 
     with pytest.raises(ValueError):
         dismiss_recommendation(cur, "rec-1", "org-1", "U123")
+
+
+
+def test_pr_from_another_github_host_is_never_closed(monkeypatch):
+    """A PR opened on github.com must not be closed by number on an enterprise
+    host the deployment was repointed to: that is someone else's PR."""
+    calls = []
+    monkeypatch.setitem(
+        _CLOSERS, "github", lambda *args, **_kwargs: calls.append(args) or {"success": True}
+    )
+    monkeypatch.setenv("NEXT_PUBLIC_GITHUB_APP_SLUG", "https://acme.ghe.com/apps/acme/aurora")
+    result = close_pull_request(
+        "user-1", "github", "owner/repo", 5, pr_url="https://github.com/owner/repo/pull/5"
+    )
+    assert "Close it on GitHub manually" in result["error"]
+    # No recorded link: the host cannot be confirmed, so no close either.
+    for missing in (None, ""):
+        assert "error" in close_pull_request("user-1", "github", "owner/repo", 5, pr_url=missing)
+    assert calls == []
+
+    ok = close_pull_request(
+        "user-1", "github", "owner/repo", 5, pr_url="https://acme.ghe.com/owner/repo/pull/5"
+    )
+    assert ok == {"success": True}
+    assert len(calls) == 1
+
+
+
+def test_pending_and_claim_tokens_are_bound_to_their_host(monkeypatch):
+    from flask import Flask
+    monkeypatch.setenv("FLASK_SECRET_KEY", "test-secret")
+    from routes.github import github_signup as mod
+
+    identity = {"id": 42, "login": "octo", "name": "Octo", "email": "o@c.dev"}
+    with Flask(__name__).test_request_context():  # NOSONAR
+        claim = mod._sign_claim_token(7, identity)
+        pending = mod._sign_pending_signup(7, identity, {}, "acme", "bind")
+        assert mod.verify_claim_token(claim) is not None
+        assert mod.verify_pending_signup(pending) is not None
+        monkeypatch.setenv("NEXT_PUBLIC_GITHUB_APP_SLUG", "https://acme.ghe.com/apps/acme/aurora")
+        assert mod.verify_claim_token(claim) is None
+        assert mod.verify_pending_signup(pending) is None

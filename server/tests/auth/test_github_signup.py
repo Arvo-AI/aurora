@@ -119,7 +119,7 @@ class TestStartRedirect:
 class TestAttribution:
     @pytest.mark.parametrize("db_rows, expected_prefix", [
         ([("user-9",), ("org-9",)], "/sign-in?handoff="),          # returning GitHub user
-        ([None, ("existing-user",)], "/sign-in?error=account_exists"),  # email collision
+        ([None, None, ("existing-user",)], "/sign-in?error=account_exists"),  # email collision
     ])
     def test_website_attribution_reaches_the_app_redirect(self, signup_app, db_rows, expected_prefix):
         app, mod = signup_app
@@ -540,7 +540,7 @@ class TestProvisioning:
     def test_email_collision_redirects_to_signin(self, signup_app):
         app, mod = signup_app
         # fetchone: no github_user_id match, then email EXISTS.
-        db_pool, conn, cur = _mock_db(mod, [None, ("existing-user",)])
+        db_pool, conn, cur = _mock_db(mod, [None, None, ("existing-user",)])
         with app.test_request_context(), patch.object(mod, "db_pool", db_pool):
             response, user_id, install_id, created = mod._provision_and_handoff(
                 self._IDENTITY, _install_payload()
@@ -557,6 +557,24 @@ class TestProvisioning:
         with app.test_request_context():
             payload = mod.verify_claim_token(claim)
         assert payload == {"iid": 777, "gh_id": 42, "gh_login": "octocat", "email": "octo@cat.dev"}
+
+    def test_identity_is_matched_on_its_own_host(self, signup_app, monkeypatch):
+        app, mod = signup_app
+        monkeypatch.setenv("NEXT_PUBLIC_GITHUB_APP_SLUG", "https://acme.ghe.com/apps/acme/aurora")
+        # No user with this ID on acme.ghe.com, but the same number is linked
+        # from github.com: a different person, so no login and no new row.
+        db_pool, conn, cur = _mock_db(mod, [None, ("github-com-user",)])
+        with app.test_request_context(), patch.object(mod, "db_pool", db_pool):
+            response, user_id, _, created = mod._provision_and_handoff(
+                self._IDENTITY, _install_payload()
+            )
+        assert user_id is None and created is False
+        assert b"another GitHub host" in response.get_data()
+        first = cur.execute.call_args_list[0].args
+        assert "github_host" in first[0]
+        assert first[1] == (42, "https://github.com", "https://acme.ghe.com")
+        assert not [c for c in cur.execute.call_args_list if "INSERT INTO users" in c.args[0]]
+        conn.commit.assert_not_called()
 
     def test_claim_token_does_not_verify_as_signup_state(self, signup_app):
         app, mod = signup_app
@@ -590,7 +608,7 @@ class TestProvisioning:
         "fetchone_seq",
         [
             [("user-9",), ("org-9",)],  # their GitHub id matches a user in another org
-            [None, None],  # no Aurora account for this GitHub user yet
+            [None, None, None],  # no Aurora account for this GitHub user yet
         ],
     )
     def test_install_linked_by_another_org_is_never_provisioned(
@@ -618,7 +636,7 @@ class TestProvisioning:
         # A browser already signed in to Aurora must get the choice to connect
         # the install to that org, so nothing is created on the first hop.
         app, mod = signup_app
-        db_pool, conn, cur = _mock_db(mod, [None, None])
+        db_pool, conn, cur = _mock_db(mod, [None, None, None])
         with app.test_request_context(), patch.object(mod, "db_pool", db_pool):
             response, user_id, _, created = mod._provision_and_handoff(
                 self._IDENTITY, _install_payload(), attribution={"utm_source": "hn"}
@@ -652,7 +670,7 @@ class TestProvisioning:
         # RETURNING; org-name check (None); slug check (None); INSERT org
         # RETURNING.
         db_pool, conn, cur = _mock_db(
-            mod, [None, None, ("new-user",), None, None, ("new-org",)]
+            mod, [None, None, None, ("new-user",), None, None, ("new-org",)]
         )
         with app.test_request_context(), patch.object(mod, "db_pool", db_pool), \
              patch("utils.auth.enforcer.assign_role_to_user") as role, \
@@ -678,7 +696,7 @@ class TestProvisioning:
         # gh-id miss, email miss, INSERT users RETURNING, org-name check,
         # slug check, INSERT org RETURNING.
         db_pool, conn, cur = _mock_db(
-            mod, [None, None, ("new-user",), None, None, ("new-org",)]
+            mod, [None, None, None, ("new-user",), None, None, ("new-org",)]
         )
         with app.test_request_context(), patch.object(mod, "db_pool", db_pool), \
              patch("utils.auth.enforcer.assign_role_to_user"), \
@@ -705,7 +723,7 @@ class TestProvisioning:
     def _provision_new_user(self, signup_app):
         app, mod = signup_app
         db_pool, conn, cur = _mock_db(
-            mod, [None, None, ("new-user",), None, None, ("new-org",)]
+            mod, [None, None, None, ("new-user",), None, None, ("new-org",)]
         )
         with app.test_request_context(), patch.object(mod, "db_pool", db_pool), \
              patch("utils.auth.enforcer.assign_role_to_user"), \

@@ -3340,6 +3340,9 @@ def initialize_tables():
                 cursor.execute("""
                     ALTER TABLE users ADD COLUMN IF NOT EXISTS github_user_id BIGINT;
                     ALTER TABLE users ADD COLUMN IF NOT EXISTS github_login VARCHAR(255);
+                    -- Host that issued github_user_id (NULL = github.com, from before
+                    -- enterprise hosts were supported). IDs are unique per host only.
+                    ALTER TABLE users ADD COLUMN IF NOT EXISTS github_host VARCHAR(255);
                     ALTER TABLE users ADD COLUMN IF NOT EXISTS signup_handoff_hash VARCHAR(64);
                     ALTER TABLE users ADD COLUMN IF NOT EXISTS signup_handoff_expires_at TIMESTAMP;
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_users_github_user_id

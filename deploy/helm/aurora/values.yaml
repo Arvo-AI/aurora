@@ -584,7 +584,8 @@ secrets:
     NEXT_PUBLIC_ENABLE_INCIDENT_PREVENTION: "true"  # false = disable PR change-gating entirely
     GITHUB_APP_ID: ""                      # Numeric App ID from App settings
     GITHUB_APP_CLIENT_ID: ""               # Starts with Iv23l...
-    NEXT_PUBLIC_GITHUB_APP_SLUG: ""        # URL slug (e.g. aurora-acme-prod)
+    NEXT_PUBLIC_GITHUB_APP_SLUG: ""        # Slug (aurora-acme-prod), or the App's full URL on GitHub Enterprise (https://acme.ghe.com/apps/acme/aurora)
+    GITHUB_API_URL: ""                     # Optional. API base when it can't be derived from the App URL (e.g. a proxy)
     GITHUB_APP_WEBHOOK_URL: ""             # https://<your-host>/github/webhook
     GITHUB_APP_SETUP_URL: ""               # https://<your-host>/github
     GITHUB_APP_CLIENT_SECRET: ""            # OAuth client secret (for hosted signup flow)
