@@ -55,4 +55,5 @@ def test_an_incident_is_refused_rather_than_created_in_another_org(monkeypatch):
     result = json.loads(trigger_rca_tool.trigger_rca(
         issue_description="check failed", user_id="user-1", expected_org_id="org-a",
     ))
-    assert "error" in result and "incident_id" not in result
+    assert "error" in result
+    assert "incident_id" not in result
