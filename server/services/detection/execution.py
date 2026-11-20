@@ -88,24 +88,23 @@ def _execute(check: dict, user_id: str, check_id: str) -> Verdict | str:
 
     provider, command, target = check["provider"], check["command"], check.get("target") or ""
     session_id = "detection-check-%s" % check_id
-    with _own_context(user_id, session_id, provider):
-        # The judge needs a conversation to compare the command with, and a
-        # scheduled run has none: it judged this command when the check was saved
-        # (detection_check_tool). The signature matcher and org policy still run.
-        with judged_at_save(gated_form(provider, command)):
-            if _is_onprem(provider):
-                from chat.backend.agent.tools.kubectl_onprem_tool import on_prem_kubectl
-                raw = on_prem_kubectl(
-                    command, cluster_id=target, user_id=user_id, session_id=session_id,
-                    timeout=COMMAND_TIMEOUT_SECONDS,
-                )
-            else:
-                from chat.backend.agent.tools.cloud_exec_tool import cloud_exec
-                raw = cloud_exec(
-                    provider, command, user_id=user_id, session_id=session_id,
-                    provider_preference=provider, timeout=COMMAND_TIMEOUT_SECONDS,
-                    account_id=target or None,
-                )
+    # The judge needs a conversation to compare the command with, and a scheduled
+    # run has none: it judged this command when the check was saved
+    # (detection_check_tool). The signature matcher and org policy still run.
+    with _own_context(user_id, session_id, provider), judged_at_save(gated_form(provider, command)):
+        if _is_onprem(provider):
+            from chat.backend.agent.tools.kubectl_onprem_tool import on_prem_kubectl
+            raw = on_prem_kubectl(
+                command, cluster_id=target, user_id=user_id, session_id=session_id,
+                timeout=COMMAND_TIMEOUT_SECONDS,
+            )
+        else:
+            from chat.backend.agent.tools.cloud_exec_tool import cloud_exec
+            raw = cloud_exec(
+                provider, command, user_id=user_id, session_id=session_id,
+                provider_preference=provider, timeout=COMMAND_TIMEOUT_SECONDS,
+                account_id=target or None,
+            )
     try:
         result = json.loads(raw)
     except (TypeError, ValueError):
