@@ -64,11 +64,19 @@ def case_title(check: Dict[str, Any]) -> str:
     return "Aurora check: %s failing on %s" % (name, asset)
 
 
-def case_description(check: Dict[str, Any], observed: str) -> str:
+def case_description(check: Dict[str, Any], observed: str, reported: str = "") -> str:
+    """*reported* is what a person said in chat about the same asset, when that is why
+    an unproven check's failure is being raised."""
     assertion = check["assertion"]
     healthy = healthy_condition(assertion)
+    opening = (
+        "One of Aurora's own checks is failing, and a person reported a problem with the same "
+        "asset in chat. They said: %s" % reported
+        if reported else
+        "One of Aurora's own checks started failing. No person or alert reported this."
+    )
     return "\n".join((
-        "One of Aurora's own checks started failing. No person or alert reported this.",
+        opening,
         "",
         "Check: %s (revision %s)" % (check["name"], check["revision"]),
         "Asset: %s" % check["asset"],
@@ -98,7 +106,7 @@ def find_open_case(cursor, org_id: str, asset: str) -> Optional[str]:
 
 
 def open_case(check: Dict[str, Any], observed: str, user_id: str, *, org_id: str,
-              fire_id: str) -> Optional[str]:
+              fire_id: str, reported: str = "") -> Optional[str]:
     """Create the incident and start its RCA. Returns the incident id, or None.
 
     None means nothing was opened (rate limit, dispatch failure); the caller
@@ -112,7 +120,7 @@ def open_case(check: Dict[str, Any], observed: str, user_id: str, *, org_id: str
 
     try:
         raw = trigger_rca(
-            issue_description=case_description(check, observed),
+            issue_description=case_description(check, observed, reported),
             title=case_title(check),
             service=check["asset"],
             severity="medium",
