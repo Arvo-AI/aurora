@@ -131,6 +131,9 @@ celery_app.conf.update(
         "routes.slack.slack_onboarding.publish_home_task": {"queue": "high"},
         "routes.slack.slack_onboarding.send_welcome_dm_task": {"queue": "high"},
         "routes.teams.teams_channel_metadata.bulk_activate_channels_task": {"queue": "high"},
+        # Check runs get their own queue, listed last on the workers. A backlog of
+        # checks must never sit in front of an investigation in the default queue.
+        "services.detection.runner.run_check": {"queue": "detection"},
     },
     # Explicitly include task modules from their new locations
     include=[
@@ -172,6 +175,7 @@ celery_app.conf.update(
         'routes.teams.teams_channel_metadata',
         'utils.repo_metadata',
         'services.actions.scheduler',
+        'services.detection.runner',
         'services.connectors.heal',
     ],
     # Periodic task schedule
@@ -203,6 +207,23 @@ celery_app.conf.update(
         'run-scheduled-actions': {
             'task': 'services.actions.scheduler.run_scheduled_actions',
             'schedule': 60.0,  # Check every minute
+        },
+        # Detection checks: saved read-only commands, run with no model.
+        'run-due-detection-checks': {
+            'task': 'services.detection.runner.run_due_checks',
+            'schedule': 60.0,  # Check every minute; each check has its own interval
+        },
+        'grade-detection-fires': {
+            'task': 'services.detection.runner.grade_fires',
+            'schedule': 600.0,
+        },
+        'watch-detection-access': {
+            'task': 'services.detection.runner.watch_access',
+            'schedule': 900.0,
+        },
+        'consolidate-detection-checks': {
+            'task': 'services.detection.runner.consolidate_checks',
+            'schedule': 86400.0,
         },
         # Safety net for connector rows whose owner was removed outside the
         # member-deletion path. Not on the minute action tick.

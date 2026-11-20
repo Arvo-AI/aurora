@@ -2107,6 +2107,48 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
     except Exception as e:
         logging.warning(f"Failed to add memory tools: {e}")
 
+    # Detection memory: checks Aurora saves and runs by itself, with no model.
+    # Saving one touches nothing in the customer's systems and notifies no one.
+    if not is_pr_review:
+        try:
+            from chat.backend.agent.tools.detection_check_tool import (
+                save_detection_check,
+                list_detection_checks,
+                retire_detection_check,
+                SaveDetectionCheckArgs,
+                ListDetectionChecksArgs,
+                RetireDetectionCheckArgs,
+            )
+
+            detection_tools = (
+                (
+                    save_detection_check, "save_detection_check", SaveDetectionCheckArgs,
+                    "Save a check: a read-only command plus the healthy condition for its output. "
+                    "Aurora then runs it on a schedule by itself and records the results. Use it when "
+                    "an investigation shows what would have caught the problem earlier, or when "
+                    "someone asks you to watch something. A new check is silent: it notifies no one.",
+                ),
+                (
+                    list_detection_checks, "list_detection_checks", ListDetectionChecksArgs,
+                    "List the checks Aurora runs by itself, with why each exists and its record "
+                    "(runs, failures, errors, last value seen). Use it to answer what Aurora is watching.",
+                ),
+                (
+                    retire_detection_check, "retire_detection_check", RetireDetectionCheckArgs,
+                    "Stop running a check, for example when someone says to stop watching something. "
+                    "Its record is kept and the name is not reused.",
+                ),
+            )
+            for func, tool_name, args_schema, description in detection_tools:
+                wrapped = with_completion_notification(with_user_context(func))
+                if tool_capture:
+                    wrapped = wrap_func_with_capture(wrapped, tool_name)
+                tools.append(StructuredTool.from_function(
+                    func=wrapped, name=tool_name, description=description, args_schema=args_schema,
+                ))
+        except Exception as e:
+            logging.warning(f"Failed to add detection check tools: {e}")
+
     # Introspection tools — incident/infra/actions/metrics self-audit (always available)
     if user_id:
         try:

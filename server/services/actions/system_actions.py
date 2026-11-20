@@ -173,6 +173,16 @@ def seed_system_actions(org_id: str, user_id: Optional[str] = None) -> int:
                         (org_id, key),
                     )
                     if cur.fetchone():
+                        # A built-in nobody edited follows the code. One that was
+                        # edited (instructions != default_instructions) is left alone.
+                        cur.execute(
+                            """UPDATE actions
+                               SET instructions = %s, default_instructions = %s
+                               WHERE org_id = %s AND system_key = %s
+                                 AND instructions = default_instructions
+                                 AND default_instructions IS DISTINCT FROM %s""",
+                            (instructions, instructions, org_id, key, instructions),
+                        )
                         continue
 
                     enabled = action_def.get("enabled", True)

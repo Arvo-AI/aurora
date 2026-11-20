@@ -8,7 +8,7 @@ import { signOut } from "next-auth/react";
 import dynamic from "next/dynamic";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Gauge, LogOut, Plug, Settings, SquarePen, Workflow, Zap } from "lucide-react";
+import { Gauge, LogOut, Plug, Radar, Settings, SquarePen, Workflow, Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   Tooltip,
@@ -83,6 +83,7 @@ const SidebarStrip = ({
     { href: "/chat", label: "New Chat", icon: SquarePen, active: pathname?.startsWith("/chat") },
     { href: "/incidents", label: "Incidents", icon: Zap, active: pathname?.startsWith("/incidents"), showIndicator: true },
     { href: "/actions", label: "Actions", icon: Workflow, active: pathname?.startsWith("/actions") },
+    { href: "/checks", label: "Checks", icon: Radar, active: pathname?.startsWith("/checks") },
     { href: "/monitor", label: "Monitor", icon: Gauge, active: pathname?.startsWith("/monitor") },
     { href: "/connectors", label: "Connectors", icon: Plug, active: pathname === "/connectors" },
   ];

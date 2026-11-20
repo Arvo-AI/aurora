@@ -62,6 +62,9 @@ _TOOL_METADATA: dict = {
     "append_to_memory": {"capability_tags": ["memory"], "mutates": True, "cacheable": False},
     "edit_memory": {"capability_tags": ["memory"], "mutates": True, "cacheable": False},
     "grep_memories": {"capability_tags": ["memory", "runbooks"], "mutates": False, "cacheable": True},
+    "save_detection_check": {"capability_tags": ["memory"], "mutates": True, "cacheable": False},
+    "list_detection_checks": {"capability_tags": ["memory"], "mutates": False, "cacheable": False},
+    "retire_detection_check": {"capability_tags": ["memory"], "mutates": True, "cacheable": False},
     # Ticket / incident history
     "list_incidentio_incidents": {"capability_tags": ["ticket_history", "on_call"], "mutates": False, "cacheable": True},
     "get_incidentio_incident": {"capability_tags": ["ticket_history", "on_call"], "mutates": False, "cacheable": True},
