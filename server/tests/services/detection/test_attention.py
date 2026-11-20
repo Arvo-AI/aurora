@@ -65,10 +65,12 @@ def test_text_from_a_model_or_a_customer_system_cannot_mention_anyone():
         asset="<@U123ABC>", prediction="<!here> look", observed="<!everyone> & more",
     )
     message = worth_a_look_message(hostile, budget=3)
-    assert "<!" not in message and "<@" not in message
+    assert "<!" not in message
+    assert "<@" not in message
 
     blind = blind_message("gcp <!channel>", 2, "denied for <@U123ABC>")
-    assert "<!" not in blind and "<@" not in blind
+    assert "<!" not in blind
+    assert "<@" not in blind
 
 
 def test_the_post_says_how_long_it_has_failed_and_why_aurora_watches():
