@@ -443,11 +443,18 @@ def record_result(cursor, check_id: str, org_id: str, verdict: Verdict, duration
 
 
 def _release_claim(cursor, check_id: str, claim: Optional[str]) -> None:
-    """Release *claim*, or whatever claim is held when the caller has none to name."""
+    """Release *claim* if it is still the one held.
+
+    A caller with no claim to name releases nothing: a run queued before claims
+    were passed along must not clear a claim it never held. That check then
+    waits out the claim's lifetime, which costs one late run.
+    """
+    if claim is None:
+        return
     cursor.execute(
         "UPDATE detection_checks SET claimed_at = NULL "
-        "WHERE id = %s AND (%s::timestamptz IS NULL OR claimed_at = %s::timestamptz)",
-        (check_id, claim, claim),
+        "WHERE id = %s AND claimed_at = %s::timestamptz",
+        (check_id, claim),
     )
 
 

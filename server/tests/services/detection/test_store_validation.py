@@ -82,3 +82,21 @@ def test_an_identifier_cannot_carry_chat_mention_syntax(field):
     definition, problem = normalize_definition(_definition(**{field: "checkout <!channel>"}))
     assert definition is None
     assert field in problem
+
+
+def test_a_run_that_names_no_claim_releases_none():
+    # A task queued by an earlier version carries no claim. It must not clear
+    # the claim of the run that has since replaced it.
+    from services.detection.store import _release_claim
+
+    class Cursor:
+        statements = []
+
+        def execute(self, sql, params=None):
+            self.statements.append(sql)
+
+    cursor = Cursor()
+    _release_claim(cursor, "check-1", None)
+    assert cursor.statements == []
+    _release_claim(cursor, "check-1", "2026-11-20T10:00:00+00:00")
+    assert len(cursor.statements) == 1

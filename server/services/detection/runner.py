@@ -30,7 +30,7 @@ from services.detection.store import (
     record_result,
     reserve_case,
 )
-from utils.auth.stateless_auth import get_org_id_for_user, set_rls_context
+from utils.auth.stateless_auth import set_rls_context
 from utils.db.connection_pool import db_pool
 from utils.log_sanitizer import sanitize
 
@@ -124,15 +124,20 @@ def run_due_checks():
 
 def _open_or_join_case(fire_id: str, check_id: str, org_id: str, user_id: str, observed: str) -> None:
     """Give a proven check's fire its case: join a fresh one on the asset, or open one."""
-    # The incident is created as *user_id*, in whatever org that user is in now.
-    # A creator who has moved would carry this org's command and output into
-    # another org's incident, so the case waits until the check has an owner here.
-    if get_org_id_for_user(user_id) != org_id:
-        logger.warning("%s Check %s has no owner in its org; case not opened", _LOG, sanitize(check_id))
-        return
     try:
         with _org_cursor(user_id, org_id) as (cur, conn):
             if cur is None:
+                return
+            # The incident is created as *user_id*. A creator who has moved to
+            # another org would carry this org's command and output with them,
+            # so the case waits until the check has an owner here. Read from
+            # the table, not the membership cache; open_case then has the
+            # incident refused if it would land anywhere but this org.
+            cur.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
+            owner = cur.fetchone()
+            if owner is None or owner[0] != org_id:
+                logger.warning("%s Check %s has no owner in its org; case not opened",
+                               _LOG, sanitize(check_id))
                 return
             check = get_check_for_case(cur, check_id)
             if check is None or check["state"] != STATE_PROVEN:
@@ -147,7 +152,7 @@ def _open_or_join_case(fire_id: str, check_id: str, org_id: str, user_id: str, o
             if not reserved or existing:
                 return
 
-        incident_id = cases.open_case(check, observed, user_id)
+        incident_id = cases.open_case(check, observed, user_id, org_id=org_id, fire_id=fire_id)
         if not incident_id:
             return
         with _org_cursor(user_id, org_id) as (cur, conn):
@@ -221,10 +226,14 @@ def watch_access():
             # Claim first and commit: two workers must not both send the message.
             claimed = access.open_alert(cur, org_id, provider, detail)
             conn.commit()
-            if claimed and not access.tell_installer(user_id, provider, checks, detail):
+            if not claimed:
+                continue
+            if access.tell_installer(user_id, provider, checks, detail):
+                access.mark_delivered(cur, org_id, provider)
+            else:
                 # Not delivered (no Slack, send failed): let a later pass try again.
                 access.release_alert(cur, org_id, provider)
-                conn.commit()
+            conn.commit()
 
     _for_each_org(_watch, "watching access")
 

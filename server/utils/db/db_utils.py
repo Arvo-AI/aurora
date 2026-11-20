@@ -1707,6 +1707,7 @@ def initialize_tables():
                         org_id VARCHAR(255) NOT NULL,
                         provider VARCHAR(32) NOT NULL,
                         detail TEXT,
+                        delivered BOOLEAN NOT NULL DEFAULT FALSE,
                         alerted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                         resolved_at TIMESTAMPTZ
                     );

@@ -97,11 +97,16 @@ def find_open_case(cursor, org_id: str, asset: str) -> Optional[str]:
     return str(row[0]) if row else None
 
 
-def open_case(check: Dict[str, Any], observed: str, user_id: str) -> Optional[str]:
+def open_case(check: Dict[str, Any], observed: str, user_id: str, *, org_id: str,
+              fire_id: str) -> Optional[str]:
     """Create the incident and start its RCA. Returns the incident id, or None.
 
     None means nothing was opened (rate limit, dispatch failure); the caller
     leaves the fire unmarked so the next tick tries again.
+
+    *org_id* is the check's org: the incident is refused rather than created
+    anywhere else. *fire_id* makes the incident's identity stable, so a retry
+    after a crash between creating it and linking it finds the same incident.
     """
     from chat.backend.agent.tools.trigger_rca_tool import trigger_rca
 
@@ -112,6 +117,8 @@ def open_case(check: Dict[str, Any], observed: str, user_id: str) -> Optional[st
             service=check["asset"],
             severity="medium",
             user_id=user_id,
+            expected_org_id=org_id,
+            dedupe_key="detection-fire:%s" % fire_id,
         )
         result = json.loads(raw)
     except Exception:

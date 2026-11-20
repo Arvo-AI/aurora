@@ -42,3 +42,17 @@ def test_the_description_carries_what_was_seen_and_why_the_check_exists():
 def test_an_unrecorded_origin_is_stated_rather_than_invented():
     assert "not recorded" in origin_sentence({})
     assert "not recorded" in origin_sentence({"kind": "mystery"})
+
+
+def test_an_incident_is_refused_rather_than_created_in_another_org(monkeypatch):
+    # A check's owner moved orgs. Opening the case as them would put the old
+    # org's command and output into the new org's incident.
+    import json
+
+    from chat.backend.agent.tools import trigger_rca_tool
+
+    monkeypatch.setattr("utils.auth.stateless_auth.get_org_id_for_user", lambda _uid: "org-b")
+    result = json.loads(trigger_rca_tool.trigger_rca(
+        issue_description="check failed", user_id="user-1", expected_org_id="org-a",
+    ))
+    assert "error" in result and "incident_id" not in result

@@ -19,6 +19,8 @@ logger = logging.getLogger(__name__)
 # many times in a row. One check erroring is a bad command, not lost access.
 BLIND_AFTER_CONSECUTIVE_ERRORS = 3
 _DETAIL_MAX_CHARS = 300
+# How long a claim may sit unsent before another worker may take it over.
+PENDING_CLAIM_SECONDS = 900
 
 
 def providers_gone_blind(cursor, org_id: str) -> List[Tuple[str, int, str]]:
@@ -36,21 +38,41 @@ def providers_gone_blind(cursor, org_id: str) -> List[Tuple[str, int, str]]:
               AND NOT EXISTS (
                   SELECT 1 FROM detection_access_alerts a
                   WHERE a.org_id = %s AND a.provider = c.provider AND a.resolved_at IS NULL
+                    AND (a.delivered OR a.alerted_at > NOW() - %s * INTERVAL '1 second')
               )""",
-        (org_id, STATUS_ERROR, org_id, STATE_RETIRED, BLIND_AFTER_CONSECUTIVE_ERRORS, org_id),
+        (org_id, STATUS_ERROR, org_id, STATE_RETIRED, BLIND_AFTER_CONSECUTIVE_ERRORS, org_id,
+         PENDING_CLAIM_SECONDS),
     )
     return [(row[0], row[1], row[2] or "") for row in cursor.fetchall()]
 
 
 def open_alert(cursor, org_id: str, provider: str, detail: str) -> bool:
-    """Claim the right to send the message. False when another worker has it."""
+    """Claim the right to send the message. False when another worker has it.
+
+    The claim is pending until mark_delivered. A pending claim expires: if the
+    worker dies between claiming and sending, a later pass takes the claim over
+    instead of the outage going unannounced. If it dies after Slack accepted
+    the message but before marking it, the message is sent once more; a second
+    notice was judged better than none.
+    """
     cursor.execute(
         """INSERT INTO detection_access_alerts (org_id, provider, detail)
            VALUES (%s, %s, %s)
-           ON CONFLICT (org_id, provider) WHERE resolved_at IS NULL DO NOTHING""",
-        (org_id, provider, detail[:_DETAIL_MAX_CHARS]),
+           ON CONFLICT (org_id, provider) WHERE resolved_at IS NULL
+           DO UPDATE SET alerted_at = NOW(), detail = EXCLUDED.detail
+           WHERE NOT detection_access_alerts.delivered
+             AND detection_access_alerts.alerted_at <= NOW() - %s * INTERVAL '1 second'""",
+        (org_id, provider, detail[:_DETAIL_MAX_CHARS], PENDING_CLAIM_SECONDS),
     )
     return cursor.rowcount > 0
+
+
+def mark_delivered(cursor, org_id: str, provider: str) -> None:
+    cursor.execute(
+        "UPDATE detection_access_alerts SET delivered = TRUE "
+        "WHERE org_id = %s AND provider = %s AND resolved_at IS NULL",
+        (org_id, provider),
+    )
 
 
 def release_alert(cursor, org_id: str, provider: str) -> None:
