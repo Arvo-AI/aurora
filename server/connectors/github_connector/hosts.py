@@ -183,10 +183,16 @@ def github_installation_settings_url(
 
 
 def github_avatar_url(account_login: str | None) -> str | None:
-    """Avatar for a user or organization login."""
-    if not account_login:
+    """Avatar for a user or organization login, or None off github.com.
+
+    Enterprise hosts serve ``/<login>.png`` only to signed-in users (a private
+    GHE.com tenant redirects it to its login page), and the API's own
+    ``avatar_url`` carries a short-lived token, so neither can be stored or
+    embedded. The UI shows the account's initial instead.
+    """
+    if not account_login or not is_github_com():
         return None
-    return f"{github_web_url()}/{account_login}.png?size=40"
+    return f"{GITHUB_COM_WEB_URL}/{account_login}.png?size=40"
 
 
 def github_mcp_host() -> str:

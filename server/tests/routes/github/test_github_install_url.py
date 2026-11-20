@@ -79,4 +79,4 @@ def test_installations_list_links_use_configured_host(app_mod, monkeypatch):
     resp = out[0] if isinstance(out, tuple) else out
     inst = resp.get_json()["installations"][0]
     assert inst["manage_url"] == "https://acme.ghe.com/organizations/acme/settings/installations/7"
-    assert inst["avatar_url"] == "https://acme.ghe.com/acme.png?size=40"
+    assert inst["avatar_url"] is None

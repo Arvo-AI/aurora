@@ -80,8 +80,14 @@ def test_installation_links(monkeypatch):
     assert hosts.github_installation_settings_url(7, "jo", "User") == (
         "https://acme.ghe.com/settings/installations/7"
     )
-    assert hosts.github_avatar_url("acme") == "https://acme.ghe.com/acme.png?size=40"
+    # Enterprise avatars need a signed-in session, so none is offered.
+    assert hosts.github_avatar_url("acme") is None
     assert hosts.github_avatar_url(None) is None
+
+
+def test_github_com_avatar(monkeypatch):
+    monkeypatch.setenv(SLUG, "aurora")
+    assert hosts.github_avatar_url("acme") == "https://github.com/acme.png?size=40"
 
 
 @pytest.mark.parametrize(
