@@ -685,7 +685,10 @@ The API base is derived from the host:
 | anything else (GitHub Enterprise Server) | `https://<host>/api/v3` |
 
 Set `GITHUB_API_URL` only when that rule does not hold (for example, a
-proxy in front of GitHub). In OAuth-only mode there is no App: set
+proxy in front of GitHub). The GitHub MCP server only accepts a host, so it
+still talks to the derived API host, not to `GITHUB_API_URL`. Both values must
+be `https://` URLs; anything else is ignored with a warning, because App and
+OAuth credentials are sent to them. In OAuth-only mode there is no App: set
 `NEXT_PUBLIC_GITHUB_APP_SLUG` to your GitHub host URL so OAuth and API calls
 go there.
 
@@ -702,6 +705,9 @@ Things that differ from github.com:
   `REQUESTS_CA_BUNDLE`; the GitHub MCP server uses the system trust store).
 - **Network egress.** The server, Celery worker and chatbot must reach both
   the web host and the API host.
+- **Changing host.** OAuth connections are tied to the host that issued them.
+  After repointing an existing deployment to another GitHub host, users
+  reconnect GitHub; tokens from the old host are never sent to the new one.
 
 #### Troubleshooting
 

@@ -55,7 +55,7 @@ from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_credentials_from_db, get_org_id_for_user
 from utils.db.connection_pool import db_pool
 from utils.log_sanitizer import sanitize
-from connectors.github_connector.hosts import github_api_url
+from connectors.github_connector.hosts import github_api_url, github_oauth_token
 
 github_user_repos_bp = Blueprint('github_user_repos', __name__)
 logger = logging.getLogger(__name__)
@@ -280,7 +280,7 @@ def _list_repos_for_user(user_id: str) -> list[dict[str, Any]]:
                 user_id, exc_info=True,
             )
             creds = None
-        oauth_token = (creds or {}).get("access_token")
+        oauth_token = github_oauth_token(creds)
         if oauth_token:
             for repo in _fetch_oauth_repos(oauth_token):
                 full_name = repo.get("full_name")

@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field
 from langchain_core.tools import StructuredTool
 
 from utils.security.subprocess_env import deny_same_uid_proc_access, mcp_base_env
-from connectors.github_connector.hosts import github_api_url, github_mcp_host
+from connectors.github_connector.hosts import github_api_url, github_mcp_host, github_oauth_token
 
 # Real MCP client integration
 REAL_MCP_SERVER_PATHS = {
@@ -494,7 +494,7 @@ output = json
                         credentials = {
                             "github": {
                                 "access_token": flat_credentials.get("GITHUB_PERSONAL_ACCESS_TOKEN"),
-                                "api_url": flat_credentials.get("GITHUB_API_URL") or github_api_url()
+                                "api_url": github_api_url()
                             }
                         }
                     else:
@@ -769,7 +769,7 @@ output = json
             #     }
             elif server_type == "github":
                 github_creds = credentials.get("github", {})
-                token = github_creds.get("access_token", "")
+                token = github_oauth_token(github_creds) or ""
                 # App-mode users have no OAuth access_token in user_tokens.
                 # Fall back to minting an installation token via the auth
                 # router — the GitHub MCP server accepts an installation
@@ -807,7 +807,7 @@ output = json
                 return {
                     # @modelcontextprotocol/server-github uses GITHUB_PERSONAL_ACCESS_TOKEN
                     "GITHUB_PERSONAL_ACCESS_TOKEN": token,
-                    "GITHUB_API_URL": github_creds.get("api_url") or github_api_url(),
+                    "GITHUB_API_URL": github_api_url(),
                     "GITHUB_USERNAME": github_creds.get("username", "")
                 }
             else:

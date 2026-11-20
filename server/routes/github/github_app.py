@@ -59,6 +59,7 @@ from utils.auth.stateless_auth import (
 )
 from utils.db.connection_pool import db_pool
 from connectors.github_connector.hosts import (
+    github_oauth_token,
     github_api_url,
     github_app_install_url as _build_install_url,
     github_app_page_url,
@@ -1431,7 +1432,7 @@ def github_status(user_id):
             )
             return jsonify({"connected": False, "error": "Failed to check status"}), 500
 
-        if creds and creds.get("access_token"):
+        if github_oauth_token(creds):
             return jsonify(
                 {
                     "connected": True,

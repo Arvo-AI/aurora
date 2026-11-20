@@ -73,7 +73,8 @@ def test_installations_list_links_use_configured_host(app_mod, monkeypatch):
 
     pool = MagicMock()
     pool.get_admin_connection.side_effect = _conn
-    with app.test_request_context(), patch.object(mod, "db_pool", pool):
+    with app.test_request_context(), patch.object(mod, "db_pool", pool), \
+            patch.object(mod, "_reconcile_user_installations"):
         out = mod.github_app_list_installations.__wrapped__("user-1")
     resp = out[0] if isinstance(out, tuple) else out
     inst = resp.get_json()["installations"][0]
