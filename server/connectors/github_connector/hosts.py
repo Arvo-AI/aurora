@@ -66,7 +66,10 @@ def _parse_https_url(raw: str) -> tuple[str, str] | None:
         return None
     if not parts.hostname or parts.username is not None or parts.password is not None:
         return None
-    authority = parts.hostname.lower() + (f":{port}" if port else "")
+    host = parts.hostname.lower()
+    if ":" in host:  # IPv6 literal: urlsplit strips the brackets
+        host = f"[{host}]"
+    authority = host + (f":{port}" if port else "")
     return authority, parts.path.rstrip("/")
 
 

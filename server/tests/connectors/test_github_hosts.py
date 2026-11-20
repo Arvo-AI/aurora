@@ -155,3 +155,8 @@ def test_oauth_token_only_used_on_its_issuing_host(monkeypatch):
     assert hosts.github_oauth_token(legacy) is None
     assert hosts.github_oauth_token(from_com) is None
     assert hosts.github_oauth_token(from_ghe) == "t"
+
+
+def test_ipv6_override_keeps_brackets(monkeypatch):
+    monkeypatch.setenv(API, "https://[fd00::1]:8443/api/v3")
+    assert hosts.github_api_url() == "https://[fd00::1]:8443/api/v3"
