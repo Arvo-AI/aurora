@@ -246,7 +246,10 @@ def _build_action_prompt(instructions: str, incident: dict) -> str:
         "- After saving the postmortem: if the investigation shows one read-only command that "
         "would have caught this problem earlier, save it with save_detection_check "
         "(origin_kind \"incident\", origin_ref \"INC " + incident["incident_id"] + "\"). "
-        "Aurora then runs it by itself. Skip this when no such command is clear.",
+        "Aurora then runs it by itself. If the signal is in logs or metrics, write the command with "
+        "{from} and {to} for its time span and set window_seconds: Aurora replays it over this "
+        "incident first and refuses it if it would not have caught it. Skip this when no such "
+        "command is clear.",
     ]
 
     return "\n".join(parts)

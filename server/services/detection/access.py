@@ -110,6 +110,9 @@ def resolve_recovered(cursor, org_id: str) -> int:
 
 
 def blind_message(provider: str, checks: int, detail: str) -> str:
+    from services.detection.attention import slack_text
+
+    provider, detail = slack_text(provider), slack_text(detail)
     lines = [
         "I can't reach *%s* any more, so the %d check%s I run there %s stopped working."
         % (provider, checks, "" if checks == 1 else "s", "has" if checks == 1 else "have"),

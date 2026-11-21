@@ -8,17 +8,23 @@ nothing in the customer's systems and notifies no one.
 import json
 import logging
 from contextlib import contextmanager
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Optional
 
 from pydantic import BaseModel, Field, StrictFloat, StrictInt, StrictStr, ValidationError
 
 from services.detection import DEFAULT_INTERVAL_SECONDS, MIN_INTERVAL_SECONDS, ORIGIN_KINDS
+from services.detection import replay, window
 from services.detection.execution import gated_form
+from services.detection.record import credit_replay
 from services.detection.store import (
     CheckRetired,
     TooManyChecks,
     list_checks,
     normalize_definition,
     normalize_origin,
+    record_replay,
     retire_check,
     save_check,
 )
@@ -90,6 +96,16 @@ class SaveDetectionCheckArgs(BaseModel):
         default="", description="The incident id, or the person who asked, that this check came from."
     )
     reason: str = Field(default="", description="Why it is being created or changed.")
+    window_seconds: StrictInt = Field(
+        default=0,
+        description=(
+            "For a check over logs or metrics: the span it reads, in seconds. Put {from} and {to} "
+            "in the command where the start and end timestamps go (RFC 3339, UTC). Aurora fills "
+            "them in on every run. With origin_kind 'incident' and both placeholders, Aurora "
+            "first replays the check over that incident and refuses it if it would not have "
+            "caught it. Leave 0 for a check that reads the present."
+        ),
+    )
     interval_seconds: StrictInt = Field(
         default=DEFAULT_INTERVAL_SECONDS,
         description="How often to run it. Minimum %d." % MIN_INTERVAL_SECONDS,
@@ -154,6 +170,7 @@ def save_detection_check(user_id: str | None = None, **fields) -> str:
         "name": args.name, "prediction": args.prediction, "asset": args.asset,
         "pattern": args.pattern, "provider": args.provider, "target": args.target,
         "command": args.command, "interval_seconds": args.interval_seconds,
+        "window_seconds": args.window_seconds,
         "assertion": {"expect": args.expect, "op": args.op, "value": args.value},
     })
     if problem:
@@ -167,10 +184,23 @@ def save_detection_check(user_id: str | None = None, **fields) -> str:
     # only the judge, and only for this exact command.
     gate = gate_command(
         user_id=user_id, tool_name="save_detection_check",
-        command=gated_form(definition["provider"], definition["command"]),
+        command=gated_form(
+            definition["provider"],
+            window.render(definition["command"], definition["window_seconds"]),
+        ),
     )
     if not gate.allowed:
         return json.dumps({"error": gate.block_reason, "code": gate.code})
+
+    try:
+        replayed = _replay_before_saving(user_id, definition, origin)
+    except Exception:
+        # A replay that cannot run is not a reason to refuse: the check is
+        # admitted silent and proves itself forward.
+        logger.exception("[DetectionTool] Replay failed to run")
+        replayed = None
+    if replayed and replay.refusal(replayed.result):
+        return json.dumps({"error": replay.refusal(replayed.result), "replay": replayed.record})
 
     try:
         with _connection(user_id, "save") as (cursor, conn, org_id):
@@ -192,6 +222,20 @@ def save_detection_check(user_id: str | None = None, **fields) -> str:
                 return json.dumps({
                     "error": "This organization is at its limit of active checks. Retire one first.",
                 })
+            if replayed:
+                # Kept on a changed revision, and on an unchanged one that has now
+                # caught an incident: the weekly fire drill finds its checks by
+                # this record, so a check proven by replay must carry it.
+                if changed or replayed.result.caught:
+                    record_replay(cursor, check_id, revision, replayed.record)
+                # Not tied to the definition changing: the same check saved for a
+                # second incident has caught a second incident. credit_replay is a
+                # no-op when this check was already credited with this one.
+                if replayed.result.caught:
+                    credit_replay(
+                        cursor, check_id, org_id, revision, definition["pattern"],
+                        definition["asset"], replayed.incident_id, replayed.incident_at,
+                    )
             # Read back: an unchanged save of a proven check is still proven.
             cursor.execute("SELECT state FROM detection_checks WHERE id = %s", (check_id,))
             state = cursor.fetchone()[0]
@@ -202,13 +246,47 @@ def save_detection_check(user_id: str | None = None, **fields) -> str:
         logger.exception("[DetectionTool] Failed to save check")
         return json.dumps({"error": "Failed to save the check."})
 
-    return json.dumps({
+    response = {
         "status": "saved" if changed else "unchanged",
         "check_id": check_id,
         "revision": revision,
         "state": state,
         "note": _STATE_NOTES.get(state, ""),
-    })
+    }
+    if replayed:
+        response["replay"] = replayed.record
+    return json.dumps(response)
+
+
+@dataclass(frozen=True)
+class _Replayed:
+    result: replay.ReplayResult
+    record: dict
+    incident_id: str
+    incident_at: datetime
+
+
+def _replay_before_saving(user_id: str, definition: dict, origin: dict) -> Optional[_Replayed]:
+    """Replay a check written for an incident over that incident, or None when it cannot be.
+
+    Runs under the gate decision just made for this command: the replayed
+    commands differ from it only in the timestamps Aurora fills in.
+    """
+    if origin["kind"] not in ("incident", "miss"):
+        return None
+    if not window.is_replayable(definition["command"], definition["window_seconds"]):
+        return None
+    incident_id = replay.incident_id_from(origin["ref"])
+    if not incident_id:
+        return None
+    with _connection(user_id, "replay") as (cursor, _conn, org_id):
+        incident_at = replay.incident_time(cursor, org_id, incident_id)
+        if incident_at is None:
+            return None
+        end = replay.replay_end(incident_at, definition["window_seconds"])
+        quiet = replay.quiet_ends(cursor, org_id, end, definition["window_seconds"])
+    result = replay.replay_origin(definition, user_id, end, quiet)
+    return _Replayed(result, result.as_record(incident_id, end), incident_id, incident_at)
 
 
 def list_detection_checks(

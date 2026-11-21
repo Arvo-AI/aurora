@@ -19,8 +19,8 @@ from contextlib import contextmanager
 
 from celery_config import celery_app
 from services.detection import STATE_PROVEN, STATUS_ERROR
+from services.detection import access, attention, cases, consolidation, ownership, record, replay
 from services.detection.assertion import Verdict
-from services.detection import access, cases, consolidation, record
 from services.detection.execution import judge
 from services.detection.store import (
     claim_due_checks,
@@ -101,6 +101,9 @@ def run_due_checks():
     claimed, awaiting = [], []
 
     def _claim(cur, conn, _user_id, org_id):
+        # Before claiming: a check claimed under a creator who has left would
+        # run, and fail, as that creator.
+        ownership.reassign_orphaned_checks(cur, org_id)
         due = claim_due_checks(cur, org_id, MAX_CHECKS_PER_ORG_PER_TICK)
         conn.commit()
         claimed.extend((check_id, org_id, created_by, claim) for check_id, created_by, claim in due)
@@ -266,3 +269,110 @@ def consolidate_checks():
             logger.info("%s Consolidated org %s: %s", _LOG, sanitize(org_id), retired)
 
     _for_each_org(_consolidate, "consolidating checks")
+
+
+@celery_app.task(name="services.detection.runner.spend_attention")
+def spend_attention():
+    """Post "worth a look" for long failures of unproven checks, within the weekly budget."""
+    if not checks_enabled():
+        return
+
+    def _spend(cur, conn, user_id, org_id):
+        waiting = attention.candidates(cur, org_id)
+        cleared = attention.cleared_to_note(cur, org_id)
+        if not waiting and not cleared:
+            return
+        client, channel = attention.slack_target(user_id)
+        if client is None:
+            return
+
+        for fire_id, posted_channel, ts, hours in cleared:
+            # Marked first, so a crash after sending cannot say it twice.
+            noted = attention.mark_clear_noted(cur, fire_id)
+            conn.commit()
+            if noted:
+                _sent, refused = _send(client, posted_channel, attention.cleared_message(hours), thread_ts=ts)
+                if refused:
+                    attention.unmark_clear_noted(cur, fire_id)
+                    conn.commit()
+
+        budget, spent = attention.channel_budget(cur, org_id, channel)
+        for candidate in waiting[:max(0, budget - spent)]:
+            # Claimed and committed before sending: two workers must not both post.
+            # The claim re-reads the budget under a lock; the slice above only
+            # avoids asking for more than could possibly be granted.
+            claimed = attention.claim(cur, org_id, candidate["fire_id"], channel)
+            conn.commit()
+            if not claimed:
+                continue
+            ts, refused = _send(client, channel, attention.worth_a_look_message(candidate, budget))
+            if ts:
+                attention.record_post(cur, candidate["fire_id"], ts)
+            elif refused:
+                attention.release(cur, candidate["fire_id"])
+            # Neither: the outcome is unknown and the claim is kept. See _send.
+            conn.commit()
+
+    _for_each_org(_spend, "spending attention")
+
+
+def _send(client, channel: str, text: str, thread_ts: str | None = None) -> tuple[str | None, bool]:
+    """Post to Slack. Returns (message ts, whether Slack refused it).
+
+    Three outcomes, and they are not the same:
+    - (ts, False): posted.
+    - (None, True): Slack answered and said no. Nothing was posted, so the
+      caller may give the post back to be tried again.
+    - (None, False): the request failed in transit. Slack may have accepted it
+      before the connection dropped, so the caller must not try again: a second
+      attempt could post the same thing twice. One possibly-missing post was
+      judged better than a possible duplicate in a tier that promises to be quiet.
+    """
+    from connectors.slack_connector.client import SlackAPIError
+
+    try:
+        result = client.send_message(channel=channel, text=text, thread_ts=thread_ts)
+    except SlackAPIError:
+        logger.warning("%s Slack refused a post", _LOG, exc_info=True)
+        return None, True
+    except Exception:
+        logger.exception("%s Slack post failed in transit", _LOG)
+        return None, False
+    ts = (result or {}).get("ts")
+    return (ts, False) if ts else (None, True)
+
+
+@celery_app.task(name="services.detection.runner.run_fire_drills")
+def run_fire_drills():
+    """Re-run the replay that admitted each proven check; demote one that now misses.
+
+    A check can stop catching its own incident without anyone revising it: a
+    log format changes, a metric is renamed. The replay that let it in is the
+    test that says so.
+    """
+    if not checks_enabled():
+        return
+
+    targets = []
+
+    def _collect(cur, _conn, user_id, org_id):
+        targets.extend((org_id, user_id, target) for target in replay.drill_targets(cur, org_id))
+
+    _for_each_org(_collect, "collecting fire drills")
+
+    for org_id, user_id, target in targets:
+        try:
+            if replay.still_catches(target) is not False:
+                continue
+            with _org_cursor(user_id, org_id) as (cur, conn):
+                if cur is None:
+                    continue
+                replay.fail_drill(
+                    cur, str(target["id"]), org_id, target["revision"],
+                    "Fire drill: replayed over incident %s, this check no longer fails."
+                    % target["replay"].get("incident_id"),
+                )
+                conn.commit()
+            logger.info("%s Fire drill demoted check %s", _LOG, sanitize(str(target["id"])))
+        except Exception:
+            logger.exception("%s Fire drill failed for check %s", _LOG, sanitize(str(target["id"])))

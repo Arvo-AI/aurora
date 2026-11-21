@@ -12,6 +12,8 @@ STATE_RETIRED = "retired"
 STATUS_PASS = "pass"
 STATUS_FAIL = "fail"
 STATUS_ERROR = "error"
+# A run-log entry, not a verdict: a fire drill found the check no longer catches its incident.
+STATUS_DRILL_FAILED = "drill_failed"
 
 # Same floor as scheduled actions (services/actions/scheduler.py).
 MIN_INTERVAL_SECONDS = 300

@@ -9,6 +9,7 @@ import logging
 from contextlib import contextmanager
 
 from services.detection import PROVIDER_ONPREM_KUBECTL, STATUS_ERROR
+from services.detection import window
 from services.detection.assertion import Verdict, evaluate
 from utils.log_sanitizer import sanitize
 from utils.security.read_only_classifier import describe_rejection
@@ -80,7 +81,7 @@ def _own_context(user_id: str, session_id: str, provider: str):
             cloud_utils._set_ctx(field, value)
 
 
-def _execute(check: dict, user_id: str, check_id: str) -> Verdict | str:
+def _execute(check: dict, user_id: str, check_id: str, at=None) -> Verdict | str:
     """Run the check's command and return its output, or an error Verdict.
 
     The command goes through the same executor an agent would use, in Ask mode,
@@ -89,7 +90,9 @@ def _execute(check: dict, user_id: str, check_id: str) -> Verdict | str:
     """
     from utils.auth.command_gate import judged_at_save
 
-    provider, command, target = check["provider"], check["command"], check.get("target") or ""
+    provider, target = check["provider"], check.get("target") or ""
+    # A windowed check reads the span ending now, or ending at *at* for a replay.
+    command = window.render(check["command"], check.get("window_seconds"), at)
     session_id = "detection-check-%s" % check_id
     # The judge needs a conversation to compare the command with, and a scheduled
     # run has none: it judged this command when the check was saved
@@ -121,15 +124,18 @@ def _execute(check: dict, user_id: str, check_id: str) -> Verdict | str:
     return output if isinstance(output, str) else ""
 
 
-def judge(check: dict, user_id: str, check_id: str) -> Verdict:
-    """Produce the verdict for one run of *check*. Never raises."""
+def judge(check: dict, user_id: str, check_id: str, at=None) -> Verdict:
+    """Produce the verdict for one run of *check*. Never raises.
+
+    *at* replays a windowed check over the span ending then.
+    """
     # Checked on every run, not only when the check was saved: a row changed
     # some other way must still be unable to run a write.
-    rejection = describe_rejection(check["command"])
+    rejection = describe_rejection(window.render(check["command"], check.get("window_seconds"), at))
     if rejection:
         return Verdict(STATUS_ERROR, detail="command is not read-only: " + rejection)
     try:
-        outcome = _execute(check, user_id, check_id)
+        outcome = _execute(check, user_id, check_id, at)
     except Exception as exc:
         logger.exception("[DetectionExecution] Check %s raised while executing", sanitize(check_id))
         return Verdict(STATUS_ERROR, detail="execution raised %s" % type(exc).__name__, ran=False)
