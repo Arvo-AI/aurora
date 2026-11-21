@@ -290,9 +290,11 @@ def spend_attention():
             # Marked first, so a crash after sending cannot say it twice.
             noted = attention.mark_clear_noted(cur, fire_id)
             conn.commit()
-            if noted and not _send(client, posted_channel, attention.cleared_message(hours), thread_ts=ts):
-                attention.unmark_clear_noted(cur, fire_id)
-                conn.commit()
+            if noted:
+                _sent, refused = _send(client, posted_channel, attention.cleared_message(hours), thread_ts=ts)
+                if refused:
+                    attention.unmark_clear_noted(cur, fire_id)
+                    conn.commit()
 
         budget, spent = attention.channel_budget(cur, org_id, channel)
         for candidate in waiting[:max(0, budget - spent)]:
@@ -303,24 +305,41 @@ def spend_attention():
             conn.commit()
             if not claimed:
                 continue
-            ts = _send(client, channel, attention.worth_a_look_message(candidate, budget))
+            ts, refused = _send(client, channel, attention.worth_a_look_message(candidate, budget))
             if ts:
                 attention.record_post(cur, candidate["fire_id"], ts)
-            else:
+            elif refused:
                 attention.release(cur, candidate["fire_id"])
+            # Neither: the outcome is unknown and the claim is kept. See _send.
             conn.commit()
 
     _for_each_org(_spend, "spending attention")
 
 
-def _send(client, channel: str, text: str, thread_ts: str | None = None) -> str | None:
-    """Post to Slack. Returns the message ts, or None when it did not go out."""
+def _send(client, channel: str, text: str, thread_ts: str | None = None) -> tuple[str | None, bool]:
+    """Post to Slack. Returns (message ts, whether Slack refused it).
+
+    Three outcomes, and they are not the same:
+    - (ts, False): posted.
+    - (None, True): Slack answered and said no. Nothing was posted, so the
+      caller may give the post back to be tried again.
+    - (None, False): the request failed in transit. Slack may have accepted it
+      before the connection dropped, so the caller must not try again: a second
+      attempt could post the same thing twice. One possibly-missing post was
+      judged better than a possible duplicate in a tier that promises to be quiet.
+    """
+    from connectors.slack_connector.client import SlackAPIError
+
     try:
         result = client.send_message(channel=channel, text=text, thread_ts=thread_ts)
-        return (result or {}).get("ts") or None
+    except SlackAPIError:
+        logger.warning("%s Slack refused a post", _LOG, exc_info=True)
+        return None, True
     except Exception:
-        logger.exception("%s Slack post failed", _LOG)
-        return None
+        logger.exception("%s Slack post failed in transit", _LOG)
+        return None, False
+    ts = (result or {}).get("ts")
+    return (ts, False) if ts else (None, True)
 
 
 @celery_app.task(name="services.detection.runner.run_fire_drills")

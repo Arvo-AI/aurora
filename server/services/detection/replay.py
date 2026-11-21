@@ -89,10 +89,14 @@ def quiet_ends(cursor, org_id: str, end: datetime, window_seconds: int) -> List[
     for days_back in range(1, QUIET_DAYS_SEARCHED + 1):
         candidate = end - timedelta(days=days_back)
         cursor.execute(
+            # The same "when it began" as incident_time(): an incident whose alert
+            # fired before its row was created began at the alert.
             """SELECT 1 FROM incidents
                WHERE org_id = %s
-                 AND created_at >= %s::timestamptz - %s * INTERVAL '1 second' - INTERVAL '12 hours'
-                 AND created_at <= %s::timestamptz + INTERVAL '12 hours'
+                 AND COALESCE(alert_fired_at, started_at, created_at)::timestamptz
+                     >= %s::timestamptz - %s * INTERVAL '1 second' - INTERVAL '12 hours'
+                 AND COALESCE(alert_fired_at, started_at, created_at)::timestamptz
+                     <= %s::timestamptz + INTERVAL '12 hours'
                LIMIT 1""",
             (org_id, candidate, window_seconds, candidate),
         )
@@ -120,6 +124,11 @@ def replay_origin(check: Dict[str, Any], user_id: str, end: datetime,
             continue
         quiet_runs += 1
         quiet_fails += verdict.status == STATUS_FAIL
+    if quiet_runs == 0:
+        # Failing over the incident is only half of a replay. With no quiet day
+        # read, nothing shows the check is ever healthy, and a check that always
+        # fails would look exactly like this. Not replayed, so not credited.
+        return ReplayResult(None, detail="no quiet day could be read to compare against")
     return ReplayResult(over_incident.status == STATUS_FAIL, quiet_runs, quiet_fails)
 
 

@@ -117,9 +117,13 @@ def claim(cursor, org_id: str, fire_id: str, channel: str) -> bool:
     budget, spent = channel_budget(cursor, org_id, channel)
     if spent >= budget:
         return False
+    # Eligibility is checked again here, under the write. The candidate list is a
+    # snapshot: the check may have passed, been given a case or been graded since,
+    # and posting "still failing" about it would be wrong and cost a post.
     cursor.execute(
-        "UPDATE detection_check_fires SET nudged_at = NOW(), nudge_channel = %s "
-        "WHERE id = %s AND nudged_at IS NULL",
+        """UPDATE detection_check_fires SET nudged_at = NOW(), nudge_channel = %s
+           WHERE id = %s AND nudged_at IS NULL
+             AND cleared_at IS NULL AND outcome IS NULL AND incident_id IS NULL""",
         (channel, str(fire_id)),
     )
     return cursor.rowcount > 0

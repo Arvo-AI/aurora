@@ -223,7 +223,10 @@ def save_detection_check(user_id: str | None = None, **fields) -> str:
                     "error": "This organization is at its limit of active checks. Retire one first.",
                 })
             if replayed:
-                if changed:
+                # Kept on a changed revision, and on an unchanged one that has now
+                # caught an incident: the weekly fire drill finds its checks by
+                # this record, so a check proven by replay must carry it.
+                if changed or replayed.result.caught:
                     record_replay(cursor, check_id, revision, replayed.record)
                 # Not tied to the definition changing: the same check saved for a
                 # second incident has caught a second incident. credit_replay is a

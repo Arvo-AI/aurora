@@ -78,3 +78,24 @@ def test_the_post_says_how_long_it_has_failed_and_why_aurora_watches():
     assert "2h 30m" in message
     assert "Riley asked Aurora to watch this" in message
     assert "at least 2" in message
+
+
+class _Slack:
+    def __init__(self, outcome):
+        self.outcome = outcome
+
+    def send_message(self, channel, text, thread_ts=None):
+        if isinstance(self.outcome, Exception):
+            raise self.outcome
+        return self.outcome
+
+
+def test_only_a_post_slack_refused_may_be_tried_again():
+    # A request that died in transit may already have been posted. Trying again
+    # could post it twice, in the one tier that promises to be quiet.
+    from connectors.slack_connector.client import SlackAPIError
+    from services.detection import runner
+
+    assert runner._send(_Slack({"ok": True, "ts": "1.2"}), "C1", "x") == ("1.2", False)
+    assert runner._send(_Slack(SlackAPIError("channel_not_found")), "C1", "x") == (None, True)
+    assert runner._send(_Slack(ConnectionError("reset by peer")), "C1", "x") == (None, False)

@@ -129,3 +129,11 @@ def test_a_windowed_check_is_validated_as_the_command_that_will_actually_run():
     assert "between" in _saved(window_seconds=5)[1]
     # A write hidden behind the placeholders is still a write once they are filled in.
     assert "not read-only" in _saved(command="logging sinks delete audit --since {from}")[1]
+
+
+def test_a_replay_with_no_readable_quiet_day_earns_nothing():
+    # Failing over the incident alone proves little: a check that always fails
+    # does that too. With no quiet day to compare, it is admitted without credit.
+    every_quiet_day_unreadable = _runner({_END: STATUS_FAIL, **{q: STATUS_ERROR for q in _QUIET}})
+    assert replay_origin(_CHECK, "u", _END, _QUIET, run=every_quiet_day_unreadable).caught is None
+    assert replay_origin(_CHECK, "u", _END, [], run=_runner({_END: STATUS_FAIL})).caught is None
