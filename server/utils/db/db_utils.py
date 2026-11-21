@@ -1707,6 +1707,37 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_detection_check_fires_pattern
                         ON detection_check_fires(org_id, pattern) WHERE outcome IS NOT NULL;
                 """,
+                # Problem reports Aurora read in chat (services/detection/chat_signals.py).
+                # claim is the one-line statement Aurora read out of the message; the
+                # message itself is not stored. said_at is when the person said it.
+                "detection_chat_signals": """
+                    CREATE TABLE IF NOT EXISTS detection_chat_signals (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        org_id VARCHAR(255) NOT NULL,
+                        source VARCHAR(20) NOT NULL DEFAULT 'slack',
+                        channel_id VARCHAR(64) NOT NULL,
+                        message_ts VARCHAR(64) NOT NULL,
+                        said_at TIMESTAMPTZ NOT NULL,
+                        asset VARCHAR(512),
+                        claim TEXT NOT NULL,
+                        incident_id UUID,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    );
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_detection_chat_signals_message
+                        ON detection_chat_signals(org_id, channel_id, message_ts);
+                    CREATE INDEX IF NOT EXISTS idx_detection_chat_signals_asset
+                        ON detection_chat_signals(org_id, lower(asset), said_at DESC);
+                """,
+                # How far each channel has been read.
+                "detection_chat_cursors": """
+                    CREATE TABLE IF NOT EXISTS detection_chat_cursors (
+                        org_id VARCHAR(255) NOT NULL,
+                        channel_id VARCHAR(64) NOT NULL,
+                        last_ts VARCHAR(64) NOT NULL,
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        PRIMARY KEY (org_id, channel_id)
+                    );
+                """,
                 # One row while Aurora cannot run checks against a provider, so the
                 # "I have lost access" message is sent once per outage, not per check.
                 "detection_access_alerts": """
@@ -1900,6 +1931,8 @@ def initialize_tables():
             rls_tables.append("detection_check_runs")
             rls_tables.append("detection_check_fires")
             rls_tables.append("detection_access_alerts")
+            rls_tables.append("detection_chat_signals")
+            rls_tables.append("detection_chat_cursors")
 
 
             # Migration: columns added to the detection tables after they first

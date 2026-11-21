@@ -18,8 +18,18 @@ import time
 from contextlib import contextmanager
 
 from celery_config import celery_app
-from services.detection import STATE_PROVEN, STATUS_ERROR
-from services.detection import access, attention, cases, consolidation, ownership, record, replay
+from services.detection import STATE_PROVEN, STATE_RETIRED, STATUS_ERROR
+from services.detection import (
+    access,
+    attention,
+    cases,
+    chat_reader,
+    chat_signals,
+    consolidation,
+    ownership,
+    record,
+    replay,
+)
 from services.detection.assertion import Verdict
 from services.detection.execution import judge
 from services.detection.store import (
@@ -49,6 +59,15 @@ _LOG = "[DetectionRunner]"
 def checks_enabled() -> bool:
     """Off switch for the runner (DETECTION_CHECKS_ENABLED=false)."""
     return (os.getenv("DETECTION_CHECKS_ENABLED") or "true").strip().lower() != "false"
+
+
+def chat_intake_enabled() -> bool:
+    """Reading chat channels is opt-in (DETECTION_CHAT_INTAKE_ENABLED=true).
+
+    It sends every message of the channels Aurora is in through a model, which
+    is a decision for whoever runs the install, not a default.
+    """
+    return (os.getenv("DETECTION_CHAT_INTAKE_ENABLED") or "false").strip().lower() == "true"
 
 
 def _org_representatives():
@@ -108,9 +127,15 @@ def run_due_checks():
         conn.commit()
         claimed.extend((check_id, org_id, created_by, claim) for check_id, created_by, claim in due)
         awaiting.extend(
-            (fire_id, check_id, org_id, created_by, observed)
+            (fire_id, check_id, org_id, created_by, observed, None)
             for fire_id, check_id, observed, created_by
             in fires_awaiting_a_case(cur, org_id, MAX_CASE_RETRIES_PER_ORG_PER_TICK)
+        )
+        # An unproven check failing where a person just reported a problem.
+        awaiting.extend(
+            (fire_id, check_id, org_id, created_by, observed, (signal_id, claim))
+            for fire_id, check_id, observed, created_by, signal_id, claim
+            in chat_signals.corroborated(cur, org_id, MAX_CASE_RETRIES_PER_ORG_PER_TICK)
         )
 
     _for_each_org(_claim, "claiming due checks")
@@ -122,12 +147,17 @@ def run_due_checks():
             # The claim expires by itself, so the check is picked up again later.
             logger.exception("%s Failed to queue check %s", _LOG, sanitize(check_id))
 
-    for fire_id, check_id, org_id, created_by, observed in awaiting:
-        _open_or_join_case(fire_id, check_id, org_id, created_by, observed)
+    for fire_id, check_id, org_id, created_by, observed, report in awaiting:
+        _open_or_join_case(fire_id, check_id, org_id, created_by, observed, report)
 
 
-def _open_or_join_case(fire_id: str, check_id: str, org_id: str, user_id: str, observed: str) -> None:
-    """Give a proven check's fire its case: join a fresh one on the asset, or open one."""
+def _open_or_join_case(fire_id: str, check_id: str, org_id: str, user_id: str, observed: str,
+                       report: tuple | None = None) -> None:
+    """Give a fire its case: join a fresh one on the asset, or open one.
+
+    A proven check earns a case by failing. An unproven one only gets a case
+    when *report* (signal_id, claim) says a person reported the same asset.
+    """
     try:
         with _org_cursor(user_id, org_id) as (cur, conn):
             if cur is None:
@@ -144,28 +174,41 @@ def _open_or_join_case(fire_id: str, check_id: str, org_id: str, user_id: str, o
                                _LOG, sanitize(check_id))
                 return
             check = get_check_for_case(cur, check_id)
-            if check is None or check["state"] != STATE_PROVEN:
+            # A retired check gets no case, report or not: retiring leaves its
+            # open fire in place, and a report must not bring it back to life.
+            if check is None or check["state"] == STATE_RETIRED:
+                return
+            if check["state"] != STATE_PROVEN and report is None:
                 return
             # Re-checked under the write: the fire may have cleared or been given
             # a case since the tick selected it, and another worker may hold it.
-            reserved = reserve_case(cur, fire_id)
+            reserved = reserve_case(cur, fire_id, allow_graded=report is not None)
             existing = cases.find_open_case(cur, org_id, check["asset"]) if reserved else None
             if existing:
-                link_fire_to_case(cur, fire_id, existing, opened=False)
+                _link(cur, fire_id, existing, False, report)
             conn.commit()
             if not reserved or existing:
                 return
 
-        incident_id = cases.open_case(check, observed, user_id, org_id=org_id, fire_id=fire_id)
+        incident_id = cases.open_case(
+            check, observed, user_id, org_id=org_id, fire_id=fire_id,
+            reported=report[1] if report else "",
+        )
         if not incident_id:
             return
         with _org_cursor(user_id, org_id) as (cur, conn):
             if cur is None:
                 return
-            link_fire_to_case(cur, fire_id, incident_id, opened=True)
+            _link(cur, fire_id, incident_id, True, report)
             conn.commit()
     except Exception:
         logger.exception("%s Failed to open a case for check %s", _LOG, sanitize(check_id))
+
+
+def _link(cur, fire_id: str, incident_id: str, opened: bool, report: tuple | None) -> None:
+    link_fire_to_case(cur, fire_id, incident_id, opened=opened)
+    if report:
+        chat_signals.link_signal_to_case(cur, report[0], incident_id)
 
 
 @celery_app.task(name="services.detection.runner.run_check")
@@ -376,3 +419,96 @@ def run_fire_drills():
             logger.info("%s Fire drill demoted check %s", _LOG, sanitize(str(target["id"])))
         except Exception:
             logger.exception("%s Fire drill failed for check %s", _LOG, sanitize(str(target["id"])))
+
+
+_HISTORY_LIMIT = 15
+# Pages read per turn when a channel has more new messages than one page holds.
+_HISTORY_MAX_PAGES = 4
+
+
+def _new_messages(client, channel_id: str, last_ts: str):
+    """Messages after *last_ts*: (messages, whether that is all of them).
+
+    Slack returns the newest page first, so stopping at one page would move the
+    cursor past older messages that were never read. This follows the pages
+    back to the cursor, up to a bound.
+    """
+    messages, page_cursor = [], None
+    for _ in range(_HISTORY_MAX_PAGES):
+        params = {"channel": channel_id, "oldest": last_ts, "limit": _HISTORY_LIMIT}
+        if page_cursor:
+            params["cursor"] = page_cursor
+        result = client._make_request("GET", "conversations.history", params) or {}
+        messages.extend(m for m in result.get("messages", []) if m.get("ts"))
+        page_cursor = (result.get("response_metadata") or {}).get("next_cursor")
+        if not result.get("has_more") or not page_cursor:
+            return messages, True
+    return messages, False
+
+
+@celery_app.task(name="services.detection.runner.read_chat")
+def read_chat():
+    """Read one channel per org for problem reports. Opt-in; posts nothing."""
+    if not checks_enabled() or not chat_intake_enabled():
+        return
+    try:
+        representatives = _org_representatives()
+    except Exception:
+        logger.exception("%s Failed to list orgs for reading chat", _LOG)
+        return
+    for user_id, org_id in representatives:
+        try:
+            _read_one_channel(user_id, org_id)
+        except Exception:
+            logger.exception("%s Reading chat failed for org %s", _LOG, sanitize(org_id))
+
+
+def _read_one_channel(user_id: str, org_id: str) -> None:
+    """Three steps, so no database connection is held while Slack or the model is called."""
+    with _org_cursor(user_id, org_id) as (cur, conn):
+        if cur is None:
+            return
+        turn = chat_signals.next_channel(cur, org_id)
+        if turn is None:
+            return
+        channel_id, last_ts = turn
+        if last_ts is None:
+            # First sight of a channel: start from now. Its history is not read.
+            chat_signals.set_cursor(cur, org_id, channel_id, "%.6f" % time.time())
+            conn.commit()
+            return
+        assets = chat_signals.known_assets(cur, org_id)
+
+    from connectors.slack_connector.client import get_slack_client_for_user
+    client = get_slack_client_for_user(user_id)
+    if client is None:
+        return
+
+    readings, newest_ts = None, last_ts
+    try:
+        messages, complete = _new_messages(client, channel_id, last_ts)
+        if not complete:
+            # More arrived since the last turn than one turn reads. The oldest
+            # are skipped, and said so here: Slack returns newest first, so the
+            # only way to reach them is to page through everything newer.
+            logger.warning("%s Channel %s had more than %d new messages; the oldest were not read",
+                           _LOG, sanitize(channel_id), _HISTORY_LIMIT * _HISTORY_MAX_PAGES)
+        if messages:
+            newest_ts = max((m["ts"] for m in messages), key=float)
+        readings = chat_reader.read(
+            [m for m in messages if chat_reader.is_human_message(m)], assets, user_id,
+        )
+    except Exception:
+        logger.exception("%s Could not read channel %s", _LOG, sanitize(channel_id))
+
+    with _org_cursor(user_id, org_id) as (cur, conn):
+        if cur is None:
+            return
+        if readings is None:
+            chat_signals.touch_cursor(cur, org_id, channel_id)
+        else:
+            for reading in readings:
+                if chat_signals.keep_report(cur, org_id, channel_id, reading) and reading.asset:
+                    chat_signals.run_checks_now(cur, org_id, reading.asset)
+            chat_signals.set_cursor(cur, org_id, channel_id, newest_ts)
+        conn.commit()

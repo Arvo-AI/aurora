@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 from services.detection import STATE_PROVEN, STATE_RETIRED, STATE_SILENT
+from services.detection.chat_signals import report_near
 
 OUTCOME_HIT = "hit"
 OUTCOME_FALSE = "false"
@@ -38,9 +39,16 @@ MAX_ACTIVE_CHECKS_PER_ASSET = 8
 
 
 # How a pattern's hits are counted, as SQL over detection_check_fires with the
-# hit outcome as its one parameter. By incident, not by fire: a check that flaps
-# three times during one real incident has been right once.
-HITS_SQL = "COUNT(DISTINCT evidence_incident_id) FILTER (WHERE outcome = %s)"
+# hit outcome as its one parameter. Once per asset per UTC day: a check that
+# flaps three times during one outage has been right once.
+#
+# Not by evidence id. Evidence can be an incident or a chat report, and one
+# outage produces both: a fire graded before the incident was declared holds
+# the report, the next one holds the incident, and counting distinct ids would
+# make that two hits. It also undercounts two separate incidents on one asset
+# in one day, which is the safe direction for something that grants trust.
+HITS_SQL = ("COUNT(DISTINCT (lower(asset), (fired_at AT TIME ZONE 'UTC')::date)) "
+            "FILTER (WHERE outcome = %s)")
 
 
 @dataclass(frozen=True)
@@ -306,6 +314,9 @@ def grade_fires(cursor, org_id: str) -> Tuple[int, int]:
     for (fire_id, check_id, asset, pattern, fired_at, incident_id, opened, until,
          window_closed) in cursor.fetchall():
         evidence = _independent_incident(cursor, org_id, asset, fired_at, until)
+        if evidence is None:
+            # A person reporting the problem in chat is also something the world did.
+            evidence = report_near(cursor, org_id, asset, fired_at, until, GRADE_LOOKBACK_HOURS)
         if evidence is None and opened and _own_case_was_corroborated(
                 cursor, incident_id, asset, until):
             evidence = str(incident_id)

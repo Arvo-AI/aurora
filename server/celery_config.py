@@ -229,6 +229,11 @@ celery_app.conf.update(
             'task': 'services.detection.runner.run_fire_drills',
             'schedule': 604800.0,  # Weekly
         },
+        # Off unless DETECTION_CHAT_INTAKE_ENABLED=true. One channel per org per tick.
+        'read-detection-chat': {
+            'task': 'services.detection.runner.read_chat',
+            'schedule': 60.0,
+        },
         'consolidate-detection-checks': {
             'task': 'services.detection.runner.consolidate_checks',
             'schedule': 86400.0,
