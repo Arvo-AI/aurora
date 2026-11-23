@@ -12,6 +12,7 @@ API = "GITHUB_API_URL"
 def _clean_env(monkeypatch):
     monkeypatch.delenv(SLUG, raising=False)
     monkeypatch.delenv(API, raising=False)
+    hosts._warned.clear()
 
 
 def test_bare_slug_is_github_com(monkeypatch):
@@ -176,3 +177,33 @@ def test_is_on_current_host(monkeypatch):
     assert hosts.is_on_current_host("https://acme.ghe.com/o/r/pull/1")
     assert not hosts.is_on_current_host("https://github.com/o/r/pull/1")
     assert hosts.github_identity_host() == "https://acme.ghe.com"
+
+
+def test_proxy_in_front_of_github_com_keeps_stored_tokens(monkeypatch):
+    """GITHUB_API_URL only reroutes traffic; github.com still issued the token."""
+    monkeypatch.setenv(API, "https://proxy.internal/github-api")
+    legacy = {"access_token": "t"}
+    from_com = {"access_token": "t", "api_url": "https://api.github.com"}
+    via_proxy = {"access_token": "t", "api_url": "https://proxy.internal/github-api"}
+    assert hosts.github_oauth_token(legacy) == "t"
+    assert hosts.github_oauth_token(from_com) == "t"
+    assert hosts.github_oauth_token(via_proxy) == "t"
+    assert hosts.github_oauth_token({"access_token": "t", "api_url": "https://api.acme.ghe.com"}) is None
+
+
+@pytest.mark.parametrize("setting", ["acme.ghe.com/apps/acme/aurora", "aurora.app", "a/b"])
+def test_url_without_scheme_is_not_taken_as_a_slug(monkeypatch, setting):
+    monkeypatch.setenv(SLUG, setting)
+    assert hosts.github_app_page_url() is None
+    assert hosts.github_app_install_url("s") is None
+
+
+def test_bad_settings_warn_once(monkeypatch, caplog):
+    monkeypatch.setenv(SLUG, "acme.ghe.com/apps/acme/aurora")
+    monkeypatch.setenv(API, "http://insecure")
+    with caplog.at_level("WARNING", logger=hosts.__name__):
+        for _ in range(5):
+            hosts.github_app_page_url()
+            hosts.github_api_url()
+            hosts.github_oauth_token({"access_token": "t", "api_url": "https://api.other.ghe.com"})
+    assert len(caplog.records) == 3

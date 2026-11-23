@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from urllib.parse import urlsplit
 
 logger = logging.getLogger(__name__)
@@ -37,7 +38,24 @@ GITHUB_COM_API_URL = "https://api.github.com"
 
 _SLUG_ENV = "NEXT_PUBLIC_GITHUB_APP_SLUG"
 _API_OVERRIDE_ENV = "GITHUB_API_URL"
-_GITHUB_COM_AUTHORITIES = ("github.com", "www.github.com")
+_GITHUB_COM_HOST = "github.com"
+_GITHUB_COM_AUTHORITIES = (_GITHUB_COM_HOST, f"www.{_GITHUB_COM_HOST}")
+# A bare App slug is letters, digits and hyphens. Anything with "/" or "." is
+# a URL pasted without its scheme, which must not silently become a slug.
+_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*$")
+_warned: set[str] = set()
+
+
+def _warn_once(key: str, message: str, *args) -> None:
+    """Log a configuration warning once per process, not on every call.
+
+    These checks run on every GitHub API call and status poll, so a bad
+    setting would otherwise flood the logs.
+    """
+    if key in _warned:
+        return
+    _warned.add(key)
+    logger.warning(message, *args)
 # An App's page sits under one of these path segments: ``/apps/<slug>`` on
 # github.com, ``/apps/<owner>/<slug>`` on GHE.com, ``/github-apps/<slug>`` on
 # GitHub Enterprise Server.
@@ -82,14 +100,15 @@ def _app_url_parts() -> tuple[str, str] | None:
         return None
     parsed = _parse_https_url(raw)
     if parsed is None:
-        logger.warning(
+        _warn_once(
+            "bad-app-url",
             "[GITHUB-HOST] %s must be an https URL without credentials; using github.com",
             _SLUG_ENV,
         )
         return None
     authority, path = parsed
     if authority in _GITHUB_COM_AUTHORITIES:
-        authority = "github.com"
+        authority = _GITHUB_COM_HOST
     return authority, path
 
 
@@ -108,17 +127,26 @@ def github_api_url() -> str:
         parsed = _parse_https_url(override)
         if parsed is not None:
             return f"https://{parsed[0]}{parsed[1]}"
-        logger.warning(
+        _warn_once(
+            "bad-api-override",
             "[GITHUB-HOST] %s must be an https URL without credentials; ignoring it",
             _API_OVERRIDE_ENV,
         )
+    return _derived_api_url()
 
+
+def _derived_api_url() -> str:
+    """The API base of the configured host, ignoring ``GITHUB_API_URL``.
+
+    The override only reroutes traffic (a proxy, say); the host that issues
+    tokens is still the one this returns.
+    """
     parts = _app_url_parts()
     if parts is None:
         return GITHUB_COM_API_URL
     authority = parts[0]
     host = authority.split(":", 1)[0]
-    if host == "github.com":
+    if host == _GITHUB_COM_HOST:
         return GITHUB_COM_API_URL
     if host.endswith(".ghe.com"):
         return f"https://api.{authority}"
@@ -158,7 +186,8 @@ def github_app_page_url() -> str | None:
         authority, path = parts
         page_path = _app_page_path(path)
         if page_path is None:
-            logger.warning(
+            _warn_once(
+                "bad-app-path",
                 "[GITHUB-HOST] %s does not point at a GitHub App page "
                 "(expected .../apps/<name> or .../github-apps/<name>)",
                 _SLUG_ENV,
@@ -166,7 +195,15 @@ def github_app_page_url() -> str | None:
             return None
         return f"https://{authority}{page_path}"
     slug = raw.strip("/")
-    return f"{GITHUB_COM_WEB_URL}/apps/{slug}" if slug else None
+    if not _SLUG_RE.match(slug):
+        _warn_once(
+            "bad-slug",
+            "[GITHUB-HOST] %s is neither an App slug nor an https URL "
+            "(an App URL needs its https:// prefix)",
+            _SLUG_ENV,
+        )
+        return None
+    return f"{GITHUB_COM_WEB_URL}/apps/{slug}"
 
 
 def github_app_install_url(state: str) -> str | None:
@@ -218,9 +255,14 @@ def github_oauth_token(creds: dict | None) -> str | None:
     if not token:
         return None
     issued_by = ((creds or {}).get("api_url") or GITHUB_COM_API_URL).rstrip("/")
-    if issued_by != github_api_url():
-        logger.warning(
-            "[GITHUB-HOST] ignoring a stored GitHub OAuth token issued by another host"
+    # Saved with the API URL in use then, which may have been a GITHUB_API_URL
+    # proxy. Either the configured route or the host itself counts: a proxy in
+    # front of github.com does not change who issued the token.
+    if issued_by not in (github_api_url(), _derived_api_url()):
+        _warn_once(
+            "foreign-oauth-token",
+            "[GITHUB-HOST] ignoring stored GitHub OAuth tokens issued by another "
+            "host; affected users must reconnect GitHub",
         )
         return None
     return token
@@ -241,5 +283,5 @@ def is_on_current_host(url: str | None) -> bool:
     parsed = _parse_https_url((url or "").strip())
     if parsed is None:
         return False
-    authority = "github.com" if parsed[0] in _GITHUB_COM_AUTHORITIES else parsed[0]
+    authority = _GITHUB_COM_HOST if parsed[0] in _GITHUB_COM_AUTHORITIES else parsed[0]
     return f"https://{authority}" == github_web_url()

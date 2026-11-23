@@ -197,9 +197,12 @@ def _issued_on_current_host(payload: dict) -> bool:
 
     Tokens carry a numeric GitHub user ID, which is only unique per host; one
     minted before the host changed must not be redeemed against the new one.
-    The host is removed from the payload once checked.
+    The host is removed from the payload once checked; a token from before
+    the host was recorded counts as github.com, so a rollout does not expire
+    links that are mid-flight.
     """
-    return payload.pop("h", None) == github_identity_host()
+    # Tokens minted before the host was recorded came from github.com.
+    return payload.pop("h", GITHUB_COM_WEB_URL) == github_identity_host()
 
 
 def verify_claim_token(token: str) -> dict | None:
