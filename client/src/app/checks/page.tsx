@@ -297,7 +297,8 @@ export default function ChecksPage() {
   );
   const checks = data?.checks ?? [];
   const canEdit = data?.can_edit ?? false;
-  const active = checks.filter((c) => c.state !== 'retired');
+  // A paused check is not running: it waits for an editor to resume it.
+  const active = checks.filter((c) => c.state !== 'retired' && !c.paused_reason);
   const firing = active.filter((c) => c.last_status === 'fail').length;
   const erroring = active.filter((c) => c.last_status === 'error').length;
 
