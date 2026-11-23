@@ -1,4 +1,5 @@
 from celery import Celery
+from celery.schedules import crontab
 import importlib
 import os
 import sys
@@ -227,11 +228,17 @@ celery_app.conf.update(
         },
         'run-detection-fire-drills': {
             'task': 'services.detection.runner.run_fire_drills',
-            'schedule': 604800.0,  # Weekly
+            'schedule': crontab(day_of_week=0, hour=6, minute=10),
         },
+        # Fixed times of day, not intervals: beat counts an interval from when it
+        # started, so a deploy more often than the interval would mean never.
         'consolidate-detection-checks': {
             'task': 'services.detection.runner.consolidate_checks',
-            'schedule': 86400.0,
+            'schedule': crontab(hour=4, minute=10),
+        },
+        'review-detection-checks': {
+            'task': 'services.detection.runner.review_checks',
+            'schedule': crontab(hour=5, minute=10),
         },
         # Safety net for connector rows whose owner was removed outside the
         # member-deletion path. Not on the minute action tick.

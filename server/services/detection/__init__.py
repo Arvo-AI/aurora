@@ -5,6 +5,18 @@ schedule with no model in the loop. Every check starts ``silent``: its failures
 are recorded and reach no one.
 """
 
+import os
+
+
+def checks_enabled() -> bool:
+    """The switch for the whole feature (DETECTION_CHECKS_ENABLED=false turns it off).
+
+    Off means off everywhere: no check runs, the agent has no check tools and
+    is not told to save checks, nothing is replayed, and the page says so.
+    """
+    return (os.getenv("DETECTION_CHECKS_ENABLED") or "true").strip().lower() != "false"
+
+
 STATE_SILENT = "silent"
 STATE_PROVEN = "proven"
 STATE_RETIRED = "retired"

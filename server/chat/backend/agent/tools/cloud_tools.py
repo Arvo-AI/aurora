@@ -2109,7 +2109,8 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
 
     # Detection memory: checks Aurora saves and runs by itself, with no model.
     # Saving one touches nothing in the customer's systems and notifies no one.
-    if not is_pr_review:
+    from services.detection import checks_enabled as _detection_checks_enabled
+    if not is_pr_review and _detection_checks_enabled():
         try:
             from chat.backend.agent.tools.detection_check_tool import (
                 save_detection_check,
@@ -2126,7 +2127,9 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                     "Save a check: a read-only command plus the healthy condition for its output. "
                     "Aurora then runs it on a schedule by itself and records the results. Use it when "
                     "an investigation shows what would have caught the problem earlier, or when "
-                    "someone asks you to watch something. A new check is silent: it notifies no one.",
+                    "someone asks you to watch something (origin_kind \"person\"). A check Aurora came up "
+                    "with is silent, it notifies no one, until its record shows it is right. One a "
+                    "person in this conversation asked for opens a case when it fails.",
                 ),
                 (
                     list_detection_checks, "list_detection_checks", ListDetectionChecksArgs,

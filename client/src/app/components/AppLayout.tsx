@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useChatExpansion } from "./ClientShell";
 import Navigation from "@/components/navigation";
+import { useDetectionEnabled } from "@/hooks/useDetectionEnabled";
 
 // Dynamic imports for heavy components
 const SettingsModal = dynamic(() => import("@/components/SettingsModal").then(mod => ({ default: mod.SettingsModal })), {
@@ -59,6 +60,7 @@ const SidebarStrip = ({
   const { user } = useUser();
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
+  const detectionEnabled = useDetectionEnabled();
 
   // Handle clicks outside the user menu to close it
   useEffect(() => {
@@ -83,7 +85,9 @@ const SidebarStrip = ({
     { href: "/chat", label: "New Chat", icon: SquarePen, active: pathname?.startsWith("/chat") },
     { href: "/incidents", label: "Incidents", icon: Zap, active: pathname?.startsWith("/incidents"), showIndicator: true },
     { href: "/actions", label: "Actions", icon: Workflow, active: pathname?.startsWith("/actions") },
-    { href: "/checks", label: "Checks", icon: Radar, active: pathname?.startsWith("/checks") },
+    ...(detectionEnabled
+      ? [{ href: "/checks", label: "Checks", icon: Radar, active: pathname?.startsWith("/checks") }]
+      : []),
     { href: "/monitor", label: "Monitor", icon: Gauge, active: pathname?.startsWith("/monitor") },
     { href: "/connectors", label: "Connectors", icon: Plug, active: pathname === "/connectors" },
   ];

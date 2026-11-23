@@ -1643,6 +1643,10 @@ def initialize_tables():
                         last_run_at TIMESTAMPTZ,
                         claimed_at TIMESTAMPTZ,
                         retired_reason TEXT,
+                        error_streak INTEGER NOT NULL DEFAULT 0,
+                        review_due_at TIMESTAMPTZ,
+                        review_reason TEXT,
+                        vouched_by VARCHAR(255),
                         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                     );
@@ -1911,6 +1915,11 @@ def initialize_tables():
                     ADD COLUMN IF NOT EXISTS case_claimed_at TIMESTAMPTZ;
                     ALTER TABLE detection_access_alerts
                     ADD COLUMN IF NOT EXISTS delivered BOOLEAN NOT NULL DEFAULT FALSE;
+                    ALTER TABLE detection_checks
+                    ADD COLUMN IF NOT EXISTS error_streak INTEGER NOT NULL DEFAULT 0,
+                    ADD COLUMN IF NOT EXISTS review_due_at TIMESTAMPTZ,
+                    ADD COLUMN IF NOT EXISTS review_reason TEXT,
+                    ADD COLUMN IF NOT EXISTS vouched_by VARCHAR(255);
                 """)
                 conn.commit()
             except Exception as e:

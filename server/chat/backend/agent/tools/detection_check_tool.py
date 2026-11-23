@@ -14,7 +14,12 @@ from typing import Optional
 
 from pydantic import BaseModel, Field, StrictFloat, StrictInt, StrictStr, ValidationError
 
-from services.detection import DEFAULT_INTERVAL_SECONDS, MIN_INTERVAL_SECONDS, ORIGIN_KINDS
+from services.detection import (
+    DEFAULT_INTERVAL_SECONDS,
+    MIN_INTERVAL_SECONDS,
+    ORIGIN_KINDS,
+    checks_enabled,
+)
 from services.detection import replay, window
 from services.detection.execution import gated_form
 from services.detection.record import credit_replay
@@ -27,6 +32,7 @@ from services.detection.store import (
     record_replay,
     retire_check,
     save_check,
+    take_checks_for_review,
 )
 from utils.auth.command_gate import gate_command
 from utils.auth.stateless_auth import set_rls_context
@@ -38,6 +44,11 @@ _STATE_NOTES = {
     "silent": "It runs on its schedule and records results. A silent check notifies no one.",
     "proven": "It runs on its schedule. If it starts failing it opens a case.",
 }
+_VOUCHED_NOTE = (
+    "A person asked for this check, so it opens a case when it fails. Two fires in a row "
+    "on nothing send it back to silent."
+)
+_OFF = json.dumps({"error": "Detection checks are turned off on this install."})
 _NO_USER_CTX = json.dumps({"error": "No user context available."})
 _NO_ORG_CTX = json.dumps({"error": "No organization context available."})
 
@@ -114,6 +125,15 @@ class SaveDetectionCheckArgs(BaseModel):
 
 class ListDetectionChecksArgs(BaseModel):
     include_retired: bool = Field(default=False, description="Also list retired checks.")
+    needs_review: bool = Field(
+        default=False,
+        description=(
+            "Only the checks waiting for review (demoted, or erroring on every run), each with "
+            "why it is here, its recent runs and its recent fires. Asking for them takes them "
+            "off the waiting list, so act on each one you are given: revise it, retire it, or "
+            "leave it and say why."
+        ),
+    )
 
 
 class RetireDetectionCheckArgs(BaseModel):
@@ -148,6 +168,21 @@ def _may_write(user_id: str) -> bool:
 _NOT_ALLOWED = json.dumps({"error": "Saving or retiring checks needs the editor role."})
 
 
+def _asked_by_a_person(origin: dict) -> bool:
+    """Whether a person, present in this conversation, asked for the check.
+
+    Only then does the check start out trusted. A background run (an
+    investigation, a scheduled action) has nobody in it, whatever origin the
+    model wrote, and an unknown context counts as background.
+    """
+    if origin["kind"] != "person":
+        return False
+    from utils.cloud.cloud_utils import get_state_context
+
+    state = get_state_context()
+    return state is not None and not getattr(state, "is_background", True)
+
+
 def save_detection_check(user_id: str | None = None, **fields) -> str:
     """Create a check, or revise the one with the same name.
 
@@ -155,6 +190,8 @@ def save_detection_check(user_id: str | None = None, **fields) -> str:
     """
     if not user_id:
         return _NO_USER_CTX
+    if not checks_enabled():
+        return _OFF
     if not _may_write(user_id):
         return _NOT_ALLOWED
     try:
@@ -210,6 +247,7 @@ def save_detection_check(user_id: str | None = None, **fields) -> str:
                 check_id, revision, changed = save_check(
                     cursor, org_id, user_id, definition,
                     origin=origin, reason=args.reason, source="agent",
+                    vouched_by=user_id if _asked_by_a_person(origin) else None,
                 )
             except CheckRetired as retired:
                 conn.rollback()
@@ -237,8 +275,10 @@ def save_detection_check(user_id: str | None = None, **fields) -> str:
                         definition["asset"], replayed.incident_id, replayed.incident_at,
                     )
             # Read back: an unchanged save of a proven check is still proven.
-            cursor.execute("SELECT state FROM detection_checks WHERE id = %s", (check_id,))
-            state = cursor.fetchone()[0]
+            cursor.execute(
+                "SELECT state, vouched_by IS NOT NULL FROM detection_checks WHERE id = %s", (check_id,),
+            )
+            state, vouched = cursor.fetchone()
             conn.commit()
     except ValueError:
         return _NO_ORG_CTX
@@ -251,7 +291,7 @@ def save_detection_check(user_id: str | None = None, **fields) -> str:
         "check_id": check_id,
         "revision": revision,
         "state": state,
-        "note": _STATE_NOTES.get(state, ""),
+        "note": _VOUCHED_NOTE if vouched and state == "proven" else _STATE_NOTES.get(state, ""),
     }
     if replayed:
         response["replay"] = replayed.record
@@ -291,15 +331,25 @@ def _replay_before_saving(user_id: str, definition: dict, origin: dict) -> Optio
 
 def list_detection_checks(
     include_retired: bool = False,
+    needs_review: bool = False,
     user_id: str | None = None,
     **_kwargs,
 ) -> str:
     """List the org's checks with their records."""
     if not user_id:
         return _NO_USER_CTX
+    if not checks_enabled():
+        return _OFF
+    if needs_review and not _may_write(user_id):
+        # Taking checks for review removes them from the waiting list.
+        return _NOT_ALLOWED
     try:
-        with _connection(user_id, "list") as (cursor, _conn, org_id):
-            checks = list_checks(cursor, org_id, include_retired=include_retired)
+        with _connection(user_id, "list") as (cursor, conn, org_id):
+            if needs_review:
+                checks = take_checks_for_review(cursor, org_id)
+                conn.commit()
+            else:
+                checks = list_checks(cursor, org_id, include_retired=include_retired)
         if not _may_write(user_id):
             # What a command printed can be more than a viewer may see elsewhere.
             for check in checks:
@@ -321,6 +371,8 @@ def retire_detection_check(
     """Stop running a check. Its record and revisions are kept."""
     if not user_id:
         return _NO_USER_CTX
+    if not checks_enabled():
+        return _OFF
     if not _may_write(user_id):
         return _NOT_ALLOWED
     try:
