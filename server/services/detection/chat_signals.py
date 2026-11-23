@@ -1,19 +1,32 @@
-"""What Aurora keeps about the chat it reads, and what a report turns into.
+"""How much Aurora does in each chat channel, and what it keeps about what it read.
 
-A report is a person saying something is wrong. It is never acted on as it
-stands: it is handed to a read-only investigation, and only if that finds the
-problem does an incident open (services/detection/chat_intake.py). Every report
-ends in a state a person can read on the Checks page:
+Every channel has a level, and the level is the whole configuration:
 
-    new        kept, waiting for an investigation
-    verifying  an investigation is looking
-    confirmed  the investigation found it; an incident is open
-    dismissed  the investigation found nothing, or did not finish
+    off     Aurora does not read the channel.
+    listen  Aurora reads it and looks into problems, and never posts there.
+    sure    Aurora also replies in the thread, only once it has confirmed a problem.
+    free    Aurora also answers questions and says what it checked when it found nothing.
+
+A channel nobody has set uses the company's level. A private channel is off
+until someone sets it.
+
+What Aurora notices is a report: a person saying something is wrong, or asking
+something. It is never acted on as it stands. It is handed to a read-only look
+(services/detection/chat_intake.py), and ends in a state a person can read on
+the Checks page:
+
+    new        kept, waiting to be looked into
+    verifying  being looked into
+    confirmed  a problem, found to be real; an incident is open
+    answered   a question, answered in its thread
+    dismissed  nothing found, nothing to add, or the look did not finish
     merged     the same problem as a report already being looked at
-    skipped    the org's daily limit on investigations was reached
+    skipped    the org's daily limit was reached
 
-What is stored is the one-line claim the model read, never the message or who
-wrote it, and it is deleted after RETENTION_DAYS.
+What is stored is the one-line claim the model read and what Aurora replied,
+never the messages or who wrote them, and it is deleted after RETENTION_DAYS.
+The one thing kept about a person is the Slack id of whoever pressed Helpful
+or Not useful on a reply, so that a second press replaces the first.
 
 A report counts for nothing in a check's record. A check is credited by
 incidents; a report reaches the record only by becoming one.
@@ -22,15 +35,32 @@ incidents; a report reaches the record only by becoming one.
 from typing import Any, Dict, List, Optional, Tuple
 
 from services.detection import STATE_RETIRED
-from services.detection.chat_reader import MAX_KNOWN_ASSETS, Report
+from services.detection.chat_reader import KIND_PROBLEM, MAX_KNOWN_ASSETS, Report
 
 SOURCE_SLACK = "slack"
 STATUS_NEW = "new"
 STATUS_VERIFYING = "verifying"
 STATUS_CONFIRMED = "confirmed"
+STATUS_ANSWERED = "answered"
 STATUS_DISMISSED = "dismissed"
 STATUS_MERGED = "merged"
 STATUS_SKIPPED = "skipped"
+
+LEVEL_OFF = "off"
+LEVEL_LISTEN = "listen"
+LEVEL_SURE = "sure"
+LEVEL_FREE = "free"
+# Quietest first. Each level does what the one before it does, and more.
+LEVELS = (LEVEL_OFF, LEVEL_LISTEN, LEVEL_SURE, LEVEL_FREE)
+# The company's level, kept as an org preference. Off until an admin chooses.
+COMPANY_LEVEL_KEY = "slack_proactive_level"
+# Aurora's unasked replies in one channel in a day. Past this it stays quiet there.
+MAX_REPLIES_PER_CHANNEL_PER_DAY = 8
+# A reply to something said longer ago than this would land in a dead thread.
+REPLY_WITHIN_MINUTES = 90
+# What other channels were talking about, offered to a look as possibly the same thing.
+RELATED_WITHIN_HOURS = 48
+MAX_RELATED = 20
 
 KNOWN_ASSET_INCIDENT_DAYS = 90
 # Reports about the same asset this close together are one problem.
@@ -74,48 +104,136 @@ def known_assets(cursor, org_id: str) -> List[str]:
     return assets
 
 
-# ---- channels -------------------------------------------------------------
+# ---- levels ---------------------------------------------------------------
 
-_READABLE_CHANNELS = """
-    SELECT DISTINCT channel_id FROM slack_channels
-    WHERE org_id = %s AND provider = 'slack' AND is_member AND NOT is_archived
-      AND NOT COALESCE(is_private, FALSE)
-      AND (team_id IS NULL OR team_id = %s)
+def company_level(org_id: str) -> str:
+    """The level of channels nobody has set. Off when unset or unreadable."""
+    from utils.auth.stateless_auth import get_org_preference
+
+    value = get_org_preference(org_id, COMPANY_LEVEL_KEY, default=LEVEL_OFF)
+    return value if value in LEVELS else LEVEL_OFF
+
+
+def set_company_level(org_id: str, level: str) -> bool:
+    """Store the company's level. False when it did not take."""
+    from utils.auth.stateless_auth import store_org_preference
+
+    store_org_preference(org_id, COMPANY_LEVEL_KEY, level)
+    return company_level(org_id) == level
+
+
+def speaks(level: str, kind: str, real: bool) -> bool:
+    """Whether Aurora may reply in a channel at *level* about this outcome."""
+    if level == LEVEL_FREE:
+        return True
+    return level == LEVEL_SURE and kind == KIND_PROBLEM and real
+
+
+# The channels of this workspace Aurora is in, one row each, with the level
+# that applies. Parameters: org_id, team_id, org_id, company level.
+_CHANNELS = """
+    SELECT s.channel_id, s.name, s.is_private, c.level AS chosen,
+           COALESCE(c.level, CASE WHEN s.is_private THEN 'off' ELSE %s END) AS level,
+           c.last_ts, c.updated_at, c.introduced_at
+    FROM (
+        SELECT channel_id, MAX(channel_name) AS name, BOOL_OR(COALESCE(is_private, FALSE)) AS is_private
+        FROM slack_channels
+        WHERE org_id = %s AND provider = 'slack' AND is_member AND NOT is_archived
+          AND (team_id IS NULL OR team_id = %s)
+        GROUP BY channel_id
+    ) s
+    LEFT JOIN detection_chat_cursors c ON c.org_id = %s AND c.channel_id = s.channel_id
 """
 
 
-def claim_channels(cursor, org_id: str, team_id: str, limit: int) -> List[Tuple[str, Optional[str]]]:
-    """Take up to *limit* channels to read now: [(channel_id, last_ts or None if never read)].
+def _channel_params(org_id: str, team_id: Optional[str], company: str) -> tuple:
+    return (company, org_id, team_id, org_id)
 
-    Only public channels of the workspace the token belongs to, that Aurora is
-    in, and that nobody turned off. A private channel is never read: being
-    invited to one to post notifications is not consent to read it.
+
+def channel_level(cursor, org_id: str, team_id: Optional[str], channel_id: str, company: str) -> Optional[Dict[str, Any]]:
+    """One channel as {level, name, is_private, introduced}, or None if Aurora is not in it."""
+    cursor.execute(
+        "SELECT level, name, is_private, introduced_at IS NOT NULL FROM (" + _CHANNELS + ") ch "
+        "WHERE channel_id = %s",
+        _channel_params(org_id, team_id, company) + (channel_id,),
+    )
+    row = cursor.fetchone()
+    if row is None:
+        return None
+    return {"level": row[0], "name": row[1] or channel_id, "is_private": row[2], "introduced": row[3]}
+
+
+def set_channel_level(cursor, org_id: str, channel_id: str, level: Optional[str]) -> bool:
+    """Set one channel's level; None puts it back on the company's. False if Aurora is not in it."""
+    cursor.execute(
+        "SELECT 1 FROM slack_channels WHERE org_id = %s AND provider = 'slack' AND channel_id = %s "
+        "AND is_member LIMIT 1",
+        (org_id, channel_id),
+    )
+    if cursor.fetchone() is None:
+        return False
+    cursor.execute(
+        """INSERT INTO detection_chat_cursors (org_id, channel_id, level) VALUES (%s, %s, %s)
+           ON CONFLICT (org_id, channel_id) DO UPDATE SET level = EXCLUDED.level""",
+        (org_id, channel_id, level),
+    )
+    return True
+
+
+def list_channels(cursor, org_id: str, team_id: Optional[str], company: str) -> List[Dict[str, Any]]:
+    """Every channel Aurora is in and the level that applies, for the page."""
+    cursor.execute(
+        "SELECT channel_id, name, is_private, chosen, level, last_ts IS NOT NULL, updated_at "
+        "FROM (" + _CHANNELS + ") ch ORDER BY name NULLS LAST, channel_id",
+        _channel_params(org_id, team_id, company),
+    )
+    return [
+        {"channel_id": r[0], "name": r[1] or r[0], "is_private": r[2], "chosen": r[3], "level": r[4],
+         "last_read_at": r[6].isoformat() if r[5] and r[6] else None}
+        for r in cursor.fetchall()
+    ]
+
+
+# ---- reading turns --------------------------------------------------------
+
+def claim_channels(cursor, org_id: str, team_id: str, company: str,
+                   limit: int) -> List[Tuple[str, Optional[str], str]]:
+    """Take up to *limit* channels to read now: [(channel_id, last_ts or None, level)].
+
+    Only channels of the workspace the token belongs to, that Aurora is in, and
+    whose level is not off. A private channel is off until someone sets it:
+    being invited to one to post notifications is not consent to read it.
 
     A channel where a message just arrived (see note_activity) goes first, then
     the one read longest ago. The claim keeps two overlapping turns off the
     same channel and expires by itself.
     """
+    params = _channel_params(org_id, team_id, company)
     cursor.execute(
         "INSERT INTO detection_chat_cursors (org_id, channel_id) "
-        "SELECT %s, channel_id FROM (" + _READABLE_CHANNELS + ") readable "
+        "SELECT %s, channel_id FROM (" + _CHANNELS + ") ch WHERE level <> 'off' "
         "ON CONFLICT (org_id, channel_id) DO NOTHING",
-        (org_id, org_id, team_id),
+        (org_id,) + params,
     )
     cursor.execute(
-        """UPDATE detection_chat_cursors SET claimed_at = NOW()
-           WHERE org_id = %s AND channel_id IN (
+        """WITH readable AS (SELECT channel_id, level FROM (""" + _CHANNELS + """) ch WHERE level <> 'off'),
+           taken AS (
                SELECT c.channel_id FROM detection_chat_cursors c
-               WHERE c.org_id = %s AND c.enabled
-                 AND c.channel_id IN (""" + _READABLE_CHANNELS + """)
+               JOIN readable r ON r.channel_id = c.channel_id
+               WHERE c.org_id = %s
                  AND (c.claimed_at IS NULL OR c.claimed_at <= NOW() - %s * INTERVAL '1 second')
                ORDER BY c.pending_since NULLS LAST, c.updated_at NULLS FIRST, c.channel_id
                LIMIT %s
-               FOR UPDATE SKIP LOCKED
+               FOR UPDATE OF c SKIP LOCKED
            )
-           RETURNING channel_id, last_ts""",
-        (org_id, org_id, org_id, team_id, CHANNEL_CLAIM_SECONDS, limit),
+           UPDATE detection_chat_cursors c SET claimed_at = NOW()
+           FROM readable r
+           WHERE c.org_id = %s AND c.channel_id = r.channel_id
+             AND c.channel_id IN (SELECT channel_id FROM taken)
+           RETURNING c.channel_id, c.last_ts, r.level""",
+        params + (org_id, CHANNEL_CLAIM_SECONDS, limit, org_id),
     )
-    return [(row[0], row[1]) for row in cursor.fetchall()]
+    return [(row[0], row[1], row[2]) for row in cursor.fetchall()]
 
 
 def advance(cursor, org_id: str, channel_id: str, last_ts: str) -> None:
@@ -154,35 +272,9 @@ def note_activity(cursor, org_id: str, channel_id: str) -> None:
     """A message just arrived in *channel_id* (a Slack event): read it on the next turn."""
     cursor.execute(
         """UPDATE detection_chat_cursors SET pending_since = COALESCE(pending_since, NOW())
-           WHERE org_id = %s AND channel_id = %s AND enabled""",
+           WHERE org_id = %s AND channel_id = %s""",
         (org_id, channel_id),
     )
-
-
-def set_channel_enabled(cursor, org_id: str, channel_id: str, enabled: bool) -> bool:
-    cursor.execute(
-        "UPDATE detection_chat_cursors SET enabled = %s WHERE org_id = %s AND channel_id = %s",
-        (enabled, org_id, channel_id),
-    )
-    return cursor.rowcount > 0
-
-
-def list_channels(cursor, org_id: str) -> List[Dict[str, Any]]:
-    """The channels Aurora reads or could read, for the page."""
-    cursor.execute(
-        """SELECT c.channel_id, MAX(s.channel_name), c.enabled, c.updated_at, c.last_ts IS NOT NULL
-           FROM detection_chat_cursors c
-           LEFT JOIN slack_channels s ON s.org_id = c.org_id AND s.channel_id = c.channel_id
-           WHERE c.org_id = %s
-           GROUP BY c.channel_id, c.enabled, c.updated_at, c.last_ts
-           ORDER BY MAX(s.channel_name) NULLS LAST, c.channel_id""",
-        (org_id,),
-    )
-    return [
-        {"channel_id": r[0], "name": r[1] or r[0], "enabled": r[2],
-         "last_read_at": r[3].isoformat() if r[3] and r[4] else None}
-        for r in cursor.fetchall()
-    ]
 
 
 # ---- reads ----------------------------------------------------------------
@@ -216,25 +308,26 @@ def keep_report(cursor, org_id: str, channel_id: str, report: Report) -> Optiona
     investigation. The repeat is still kept, marked merged.
     """
     earlier = None
-    if report.asset:
+    if report.asset and report.kind == KIND_PROBLEM:
         cursor.execute(
             """SELECT id FROM detection_chat_signals
-               WHERE org_id = %s AND lower(asset) = lower(%s) AND status <> %s
+               WHERE org_id = %s AND lower(asset) = lower(%s) AND status <> %s AND kind = %s
                  AND said_at >= to_timestamp(%s) - %s * INTERVAL '1 minute'
                ORDER BY said_at LIMIT 1""",
-            (org_id, report.asset, STATUS_MERGED, float(report.ts), SAME_ISSUE_MINUTES),
+            (org_id, report.asset, STATUS_MERGED, KIND_PROBLEM, float(report.ts), SAME_ISSUE_MINUTES),
         )
         row = cursor.fetchone()
         earlier = str(row[0]) if row else None
     cursor.execute(
         """INSERT INTO detection_chat_signals
-           (org_id, source, channel_id, message_ts, message_count, said_at, asset, claim,
-            status, merged_into)
-           VALUES (%s, %s, %s, %s, %s, to_timestamp(%s), %s, %s, %s, %s)
+           (org_id, source, channel_id, message_ts, thread_ts, message_count, said_at, kind,
+            asset, claim, status, merged_into)
+           VALUES (%s, %s, %s, %s, %s, %s, to_timestamp(%s), %s, %s, %s, %s, %s)
            ON CONFLICT (org_id, channel_id, message_ts) DO NOTHING
            RETURNING id""",
-        (org_id, SOURCE_SLACK, channel_id, report.ts, len(report.message_ts), float(report.ts),
-         report.asset, report.claim, STATUS_MERGED if earlier else STATUS_NEW, earlier),
+        (org_id, SOURCE_SLACK, channel_id, report.ts, report.thread_ts or report.ts,
+         len(report.message_ts), float(report.ts), report.kind, report.asset, report.claim,
+         STATUS_MERGED if earlier else STATUS_NEW, earlier),
     )
     row = cursor.fetchone()
     return str(row[0]) if row and not earlier else None
@@ -283,11 +376,35 @@ def take_for_verification(cursor, org_id: str, limit: int) -> List[Dict[str, Any
                WHERE org_id = %s AND status = %s
                ORDER BY said_at LIMIT %s FOR UPDATE SKIP LOCKED
            )
-           RETURNING id, channel_id, asset, claim, said_at""",
+           RETURNING id, channel_id, asset, claim, said_at, kind""",
         (STATUS_VERIFYING, org_id, STATUS_NEW, min(limit, left)),
     )
     return [
-        {"id": str(r[0]), "channel_id": r[1], "asset": r[2], "claim": r[3], "said_at": r[4]}
+        {"id": str(r[0]), "channel_id": r[1], "asset": r[2], "claim": r[3], "said_at": r[4],
+         "kind": r[5]}
+        for r in cursor.fetchall()
+    ]
+
+
+def related_reports(cursor, org_id: str, team_id: Optional[str], report: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """What Aurora noticed lately in other public channels, newest first.
+
+    Offered to a look so it can say "this is the same thing". Nothing from a
+    private channel is ever offered: what is said there stays there.
+    """
+    cursor.execute(
+        """SELECT r.id, ch.name, r.said_at, r.kind, r.claim, r.status
+           FROM detection_chat_signals r
+           JOIN (""" + _CHANNELS + """) ch ON ch.channel_id = r.channel_id
+           WHERE r.org_id = %s AND r.id <> %s AND r.channel_id <> %s AND NOT ch.is_private
+             AND r.status <> %s AND r.said_at >= NOW() - %s * INTERVAL '1 hour'
+           ORDER BY r.said_at DESC LIMIT %s""",
+        _channel_params(org_id, team_id, LEVEL_OFF)
+        + (org_id, report["id"], report["channel_id"], STATUS_MERGED, RELATED_WITHIN_HOURS, MAX_RELATED),
+    )
+    return [
+        {"id": str(r[0]), "channel": r[1] or "", "said_at": r[2], "kind": r[3], "claim": r[4],
+         "status": r[5]}
         for r in cursor.fetchall()
     ]
 
@@ -311,24 +428,137 @@ def report_under_verification(cursor, org_id: str, report_id: str,
                               session_id: str) -> Optional[Dict[str, Any]]:
     """The report, if it is this org's, still being verified, and by this very session."""
     cursor.execute(
-        """SELECT id, asset, claim, channel_id FROM detection_chat_signals
+        """SELECT id, asset, claim, channel_id, kind FROM detection_chat_signals
            WHERE id = %s AND org_id = %s AND status = %s AND session_id = %s FOR UPDATE""",
         (report_id, org_id, STATUS_VERIFYING, session_id),
     )
     row = cursor.fetchone()
     if row is None:
         return None
-    return {"id": str(row[0]), "asset": row[1], "claim": row[2], "channel_id": row[3]}
+    return {"id": str(row[0]), "asset": row[1], "claim": row[2], "channel_id": row[3], "kind": row[4]}
 
 
-def conclude(cursor, report_id: str, status: str, detail: str,
-             incident_id: Optional[str] = None) -> None:
+def conclude(cursor, report_id: str, status: str, detail: str, reply: str = "",
+             related_to: Optional[str] = None) -> None:
+    """How the look ended, and what it wants said. Saying it is services/detection/chat_voice.py."""
     cursor.execute(
         """UPDATE detection_chat_signals
-           SET status = %s, status_detail = %s, incident_id = %s, updated_at = NOW()
+           SET status = %s, status_detail = %s, reply = NULLIF(%s, ''), related_to = %s,
+               updated_at = NOW()
            WHERE id = %s""",
-        (status, (detail or "")[:1000], incident_id, report_id),
+        (status, (detail or "")[:1000], reply, related_to, report_id),
     )
+
+
+def other_public_report(cursor, org_id: str, team_id: Optional[str], report_id: str,
+                        other_id: str) -> Optional[Dict[str, Any]]:
+    """*other_id* if it is a recent report of this org in a different, public channel."""
+    cursor.execute(
+        """SELECT o.id, o.channel_id, o.thread_ts, o.claim
+           FROM detection_chat_signals o
+           JOIN detection_chat_signals mine ON mine.id = %s AND mine.org_id = o.org_id
+           JOIN (""" + _CHANNELS + """) ch ON ch.channel_id = o.channel_id
+           WHERE o.id = %s AND o.org_id = %s AND o.channel_id <> mine.channel_id
+             AND NOT ch.is_private AND o.said_at >= NOW() - %s * INTERVAL '1 hour'""",
+        (report_id,) + _channel_params(org_id, team_id, LEVEL_OFF)
+        + (other_id, org_id, RELATED_WITHIN_HOURS),
+    )
+    row = cursor.fetchone()
+    if row is None:
+        return None
+    return {"id": str(row[0]), "channel_id": row[1], "thread_ts": row[2], "claim": row[3]}
+
+
+# ---- speaking -------------------------------------------------------------
+
+def to_say(cursor, org_id: str, report_id: str) -> Optional[Dict[str, Any]]:
+    """A concluded report and what is needed to reply to it, locked. None if there is none."""
+    cursor.execute(
+        """SELECT id, channel_id, thread_ts, message_ts, kind, status, reply, reply_ts, incident_id,
+                  related_to, claim, said_at >= NOW() - %s * INTERVAL '1 minute'
+           FROM detection_chat_signals WHERE id = %s AND org_id = %s FOR UPDATE""",
+        (REPLY_WITHIN_MINUTES, report_id, org_id),
+    )
+    r = cursor.fetchone()
+    if r is None:
+        return None
+    return {"id": str(r[0]), "channel_id": r[1], "thread_ts": r[2] or r[3], "kind": r[4],
+            "status": r[5], "reply": r[6] or "", "reply_ts": r[7],
+            "incident_id": str(r[8]) if r[8] else None,
+            "related_to": str(r[9]) if r[9] else None, "claim": r[10], "fresh": r[11]}
+
+
+def replies_left_today(cursor, org_id: str, channel_id: str) -> int:
+    cursor.execute(
+        "SELECT COUNT(*) FROM detection_chat_signals WHERE org_id = %s AND channel_id = %s "
+        "AND replied_at >= NOW() - INTERVAL '1 day'",
+        (org_id, channel_id),
+    )
+    return max(0, MAX_REPLIES_PER_CHANNEL_PER_DAY - cursor.fetchone()[0])
+
+
+def claim_reply(cursor, report_id: str) -> bool:
+    """Take the one right to reply to a report. False when it was already taken."""
+    cursor.execute(
+        "UPDATE detection_chat_signals SET replied_at = NOW() WHERE id = %s AND replied_at IS NULL",
+        (report_id,),
+    )
+    return cursor.rowcount > 0
+
+
+def record_reply(cursor, report_id: str, reply_ts: str) -> None:
+    cursor.execute(
+        "UPDATE detection_chat_signals SET reply_ts = %s, replied_at = NOW() WHERE id = %s",
+        (reply_ts, report_id),
+    )
+
+
+def release_reply(cursor, org_id: str, report_id: str, was_introduction: bool) -> None:
+    """The post did not go out: the reply was not made, and neither was the introduction."""
+    cursor.execute(
+        "UPDATE detection_chat_signals SET replied_at = NULL WHERE id = %s AND reply_ts IS NULL "
+        "RETURNING channel_id",
+        (report_id,),
+    )
+    row = cursor.fetchone()
+    if row and was_introduction:
+        cursor.execute(
+            "UPDATE detection_chat_cursors SET introduced_at = NULL WHERE org_id = %s AND channel_id = %s",
+            (org_id, row[0]),
+        )
+
+
+def claim_pointer(cursor, org_id: str, other_id: str, report_id: str, within_hours: int) -> bool:
+    """Link *other_id* to *report_id*, once, if its thread is still recent."""
+    cursor.execute(
+        """UPDATE detection_chat_signals SET related_to = %s
+           WHERE id = %s AND org_id = %s AND related_to IS NULL
+             AND said_at >= NOW() - %s * INTERVAL '1 hour'""",
+        (report_id, other_id, org_id, within_hours),
+    )
+    return cursor.rowcount > 0
+
+
+def introduce(cursor, org_id: str, channel_id: str) -> bool:
+    """True the first time Aurora speaks unasked in a channel, and only that time."""
+    cursor.execute(
+        "UPDATE detection_chat_cursors SET introduced_at = NOW() "
+        "WHERE org_id = %s AND channel_id = %s AND introduced_at IS NULL",
+        (org_id, channel_id),
+    )
+    return cursor.rowcount > 0
+
+
+def vote(cursor, org_id: str, report_id: str, voter: str, helpful: bool) -> bool:
+    """One person's verdict on a reply. A second click by the same person replaces the first."""
+    import json
+
+    cursor.execute(
+        """UPDATE detection_chat_signals SET votes = votes || %s::jsonb
+           WHERE id = %s AND org_id = %s AND reply_ts IS NOT NULL""",
+        (json.dumps({voter: "up" if helpful else "down"}), report_id, org_id),
+    )
+    return cursor.rowcount > 0
 
 
 def tidy(cursor, org_id: str) -> Tuple[int, int]:
@@ -364,7 +594,8 @@ def list_reports(cursor, org_id: str, limit: int = 50) -> List[Dict[str, Any]]:
     """Recent reports with how each ended, newest first, for the page."""
     cursor.execute(
         """SELECT r.id, r.channel_id, MAX(s.channel_name), r.said_at, r.asset, r.claim, r.status,
-                  r.status_detail, r.incident_id, r.message_count
+                  r.status_detail, r.incident_id, r.message_count, r.kind,
+                  CASE WHEN r.reply_ts IS NOT NULL THEN r.reply END, r.votes
            FROM detection_chat_signals r
            LEFT JOIN slack_channels s ON s.org_id = r.org_id AND s.channel_id = r.channel_id
            WHERE r.org_id = %s
@@ -375,7 +606,10 @@ def list_reports(cursor, org_id: str, limit: int = 50) -> List[Dict[str, Any]]:
     return [
         {"id": str(r[0]), "channel_id": r[1], "channel": r[2] or r[1], "said_at": r[3].isoformat(),
          "asset": r[4], "claim": r[5], "status": r[6], "status_detail": r[7],
-         "incident_id": str(r[8]) if r[8] else None, "messages": r[9]}
+         "incident_id": str(r[8]) if r[8] else None, "messages": r[9], "kind": r[10],
+         "reply": r[11],
+         "helpful": sum(1 for v in (r[12] or {}).values() if v == "up"),
+         "unhelpful": sum(1 for v in (r[12] or {}).values() if v == "down")}
         for r in cursor.fetchall()
     ]
 

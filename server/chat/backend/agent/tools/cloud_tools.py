@@ -2165,8 +2165,9 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
                 func=with_completion_notification(with_user_context(conclude_chat_report)),
                 name="conclude_chat_report",
                 description=(
-                    "Only for an investigation Aurora started from a problem report in chat: "
-                    "record whether the reported problem is real. Real opens an incident."
+                    "Only for a look Aurora started from something said in chat: record what you "
+                    "found, and what to say in the thread if a reply is allowed. A real problem "
+                    "opens an incident."
                 ),
                 args_schema=ConcludeChatReportArgs,
             ))

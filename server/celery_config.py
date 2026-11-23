@@ -234,7 +234,7 @@ celery_app.conf.update(
             'task': 'services.detection.runner.run_fire_drills',
             'schedule': crontab(day_of_week=0, hour=6, minute=10),
         },
-        # Off unless DETECTION_CHAT_INTAKE_ENABLED=true. Queues one task per org.
+        # Queues one task per org. An org whose channels are all off reads nothing.
         'read-detection-chat': {
             'task': 'services.detection.chat_intake.read_chat',
             'schedule': 60.0,

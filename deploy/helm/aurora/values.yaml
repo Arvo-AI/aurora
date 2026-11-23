@@ -455,7 +455,7 @@ config:
   # log verdicts without folding.
   RECURRENCE_DETECTION_MODE: "live"
   DETECTION_CHECKS_ENABLED: "true"
-  DETECTION_CHAT_INTAKE_ENABLED: "false"
+  DETECTION_CHAT_INTAKE_ENABLED: "true"
   # Wall-clock budget (seconds) for one recurrence check; keep well under the
   # summarization task's soft time limit (330s) minus summary work.
   RECURRENCE_AGENT_TIMEOUT_SECONDS: "120"

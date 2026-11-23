@@ -1726,8 +1726,10 @@ def initialize_tables():
                         source VARCHAR(20) NOT NULL DEFAULT 'slack',
                         channel_id VARCHAR(64) NOT NULL,
                         message_ts VARCHAR(64) NOT NULL,
+                        thread_ts VARCHAR(64),
                         message_count INTEGER NOT NULL DEFAULT 1,
                         said_at TIMESTAMPTZ NOT NULL,
+                        kind VARCHAR(16) NOT NULL DEFAULT 'problem',
                         asset VARCHAR(512),
                         claim TEXT NOT NULL,
                         status VARCHAR(16) NOT NULL DEFAULT 'new',
@@ -1738,6 +1740,11 @@ def initialize_tables():
                         confirmed_by VARCHAR(255),
                         verify_started_at TIMESTAMPTZ,
                         incident_id UUID,
+                        reply TEXT,
+                        reply_ts VARCHAR(64),
+                        replied_at TIMESTAMPTZ,
+                        related_to UUID,
+                        votes JSONB NOT NULL DEFAULT '{}'::jsonb,
                         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                     );
@@ -1748,15 +1755,17 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_detection_chat_signals_status
                         ON detection_chat_signals(org_id, status, said_at);
                 """,
-                # One row per channel Aurora may read: how far it has been read,
-                # whether someone turned it off, and whether a message just arrived.
-                # last_ts is NULL until the channel's first turn.
+                # One row per channel Aurora reads or has been given a level for:
+                # the level someone chose (NULL = the company's), how far it has
+                # been read, whether a message just arrived, and when Aurora first
+                # spoke there unasked. last_ts is NULL until the channel's first turn.
                 "detection_chat_cursors": """
                     CREATE TABLE IF NOT EXISTS detection_chat_cursors (
                         org_id VARCHAR(255) NOT NULL,
                         channel_id VARCHAR(64) NOT NULL,
                         last_ts VARCHAR(64),
-                        enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                        level VARCHAR(8),
+                        introduced_at TIMESTAMPTZ,
                         pending_since TIMESTAMPTZ,
                         failed_attempts INTEGER NOT NULL DEFAULT 0,
                         claimed_at TIMESTAMPTZ,
@@ -2061,12 +2070,20 @@ def initialize_tables():
                     ADD COLUMN IF NOT EXISTS session_id VARCHAR(64),
                     ADD COLUMN IF NOT EXISTS confirmed_by VARCHAR(255),
                     ADD COLUMN IF NOT EXISTS verify_started_at TIMESTAMPTZ,
-                    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+                    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    ADD COLUMN IF NOT EXISTS thread_ts VARCHAR(64),
+                    ADD COLUMN IF NOT EXISTS kind VARCHAR(16) NOT NULL DEFAULT 'problem',
+                    ADD COLUMN IF NOT EXISTS reply TEXT,
+                    ADD COLUMN IF NOT EXISTS reply_ts VARCHAR(64),
+                    ADD COLUMN IF NOT EXISTS replied_at TIMESTAMPTZ,
+                    ADD COLUMN IF NOT EXISTS related_to UUID,
+                    ADD COLUMN IF NOT EXISTS votes JSONB NOT NULL DEFAULT '{}'::jsonb;
                     ALTER TABLE detection_chat_cursors
                     ALTER COLUMN last_ts DROP NOT NULL,
                     ALTER COLUMN updated_at DROP NOT NULL,
                     ALTER COLUMN updated_at DROP DEFAULT,
-                    ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                    ADD COLUMN IF NOT EXISTS level VARCHAR(8),
+                    ADD COLUMN IF NOT EXISTS introduced_at TIMESTAMPTZ,
                     ADD COLUMN IF NOT EXISTS pending_since TIMESTAMPTZ,
                     ADD COLUMN IF NOT EXISTS failed_attempts INTEGER NOT NULL DEFAULT 0,
                     ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ;

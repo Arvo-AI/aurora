@@ -18,13 +18,15 @@ def checks_enabled() -> bool:
 
 
 def chat_intake_enabled() -> bool:
-    """Reading chat channels is opt-in (DETECTION_CHAT_INTAKE_ENABLED=true), and off with the feature.
+    """Whether Aurora may read chat channels at all on this install.
 
-    It sends the messages of the public channels Aurora is in through a model,
-    which is a decision for whoever runs the install, not a default.
+    DETECTION_CHAT_INTAKE_ENABLED=false is the install's kill switch, and it is
+    off with the feature. On does not mean anything is read: each org starts
+    with its company level off, and reads nothing until one of its admins
+    chooses a level (services/detection/chat_signals.py).
     """
     return checks_enabled() and (
-        (os.getenv("DETECTION_CHAT_INTAKE_ENABLED") or "false").strip().lower() == "true"
+        (os.getenv("DETECTION_CHAT_INTAKE_ENABLED") or "true").strip().lower() != "false"
     )
 
 

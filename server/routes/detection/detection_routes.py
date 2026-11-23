@@ -23,6 +23,7 @@ from . import detection_bp
 logger = logging.getLogger(__name__)
 
 _ERR_INTERNAL = "Internal server error"
+_ERR_LEVEL = "level must be one of: off, listen, sure, free"
 _ERR_NO_ORG = "No organization"
 _ERR_NOT_FOUND = "Check not found"
 
@@ -133,12 +134,32 @@ def resume(user_id, check_id):
     return jsonify({"status": "resumed"})
 
 
+def _slack_team_id(user_id: str):
+    """The workspace this org's Slack is connected to, or None."""
+    from utils.auth.stateless_auth import get_credentials_from_db
+
+    try:
+        return (get_credentials_from_db(user_id, "slack") or {}).get("team_id")
+    except Exception:
+        logger.exception("[Detection] Could not read the Slack workspace")
+        return None
+
+
+def _is_admin(user_id: str, org_id: str) -> bool:
+    from utils.auth import ROLE_ADMIN
+    from utils.auth.enforcer import get_user_roles_in_org
+
+    return ROLE_ADMIN in get_user_roles_in_org(user_id, org_id)
+
+
 @detection_bp.route("/reports", methods=["GET"])
 @require_permission("detection_checks", "read")
 def get_reports(user_id):
-    """Problem reports Aurora read in chat and how each ended, and the channels it reads."""
+    """How much Aurora does in each chat channel, and what it noticed and said there."""
+    off = {"enabled": False, "reports": [], "channels": [], "can_edit": False,
+           "can_set_company": False, "company_level": chat_signals.LEVEL_OFF}
     if not chat_intake_enabled():
-        return jsonify({"enabled": False, "reports": [], "channels": [], "can_edit": False})
+        return jsonify(off)
     try:
         with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
             org_id = set_rls_context(
@@ -146,22 +167,61 @@ def get_reports(user_id):
             )
             if not org_id:
                 return jsonify({"error": _ERR_NO_ORG}), 403
+            cur.execute(
+                "SELECT 1 FROM slack_channels WHERE org_id = %s AND provider = 'slack' LIMIT 1", (org_id,),
+            )
+            if cur.fetchone() is None:
+                # No Slack here: there is nothing to set and nothing to show.
+                return jsonify(off)
+            company = chat_signals.company_level(org_id)
             reports = chat_signals.list_reports(cur, org_id)
-            channels = chat_signals.list_channels(cur, org_id)
+            channels = chat_signals.list_channels(cur, org_id, _slack_team_id(user_id), company)
     except Exception:
         logger.exception("[Detection] Failed to list chat reports")
         return jsonify({"error": _ERR_INTERNAL}), 500
-    can_edit = enforce_with_reload(user_id, org_id, "detection_checks", "write")
-    return jsonify({"enabled": True, "reports": reports, "channels": channels, "can_edit": can_edit})
+    return jsonify({
+        "enabled": True, "reports": reports, "channels": channels, "company_level": company,
+        "can_edit": enforce_with_reload(user_id, org_id, "detection_checks", "write"),
+        "can_set_company": _is_admin(user_id, org_id),
+    })
+
+
+@detection_bp.route("/chat-level", methods=["POST"])
+@require_permission("detection_checks", "write")
+def set_chat_level(user_id):
+    """Set the company's level: what Aurora does in a channel nobody has set. Admins only."""
+    if not chat_intake_enabled():
+        return jsonify({"error": "Reading chat is turned off on this install"}), 404
+    level = (request.get_json(silent=True) or {}).get("level")
+    if level not in chat_signals.LEVELS:
+        return jsonify({"error": _ERR_LEVEL}), 400
+    try:
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+            org_id = set_rls_context(
+                cur, conn, user_id, org_id=get_org_id_from_request(), log_prefix="[Detection:level]",
+            )
+            if not org_id:
+                return jsonify({"error": _ERR_NO_ORG}), 403
+            if not _is_admin(user_id, org_id):
+                # Choosing that every channel is read is a decision for the org, not one editor.
+                return jsonify({"error": "Only an admin can set the company's level"}), 403
+        if not chat_signals.set_company_level(org_id, level):
+            return jsonify({"error": _ERR_INTERNAL}), 500
+    except Exception:
+        logger.exception("[Detection] Failed to set the company chat level")
+        return jsonify({"error": _ERR_INTERNAL}), 500
+    return jsonify({"status": "ok", "level": level})
 
 
 @detection_bp.route("/chat-channels/<channel_id>", methods=["POST"])
 @require_permission("detection_checks", "write")
 def set_chat_channel(user_id, channel_id):
-    """Turn reading of one channel on or off."""
-    enabled = (request.get_json(silent=True) or {}).get("enabled")
-    if not isinstance(enabled, bool):
-        return jsonify({"error": "enabled must be true or false"}), 400
+    """Set one channel's level. A null level puts it back on the company's."""
+    if not chat_intake_enabled():
+        return jsonify({"error": "Reading chat is turned off on this install"}), 404
+    level = (request.get_json(silent=True) or {}).get("level")
+    if level is not None and level not in chat_signals.LEVELS:
+        return jsonify({"error": _ERR_LEVEL}), 400
     try:
         with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
             org_id = set_rls_context(
@@ -169,11 +229,11 @@ def set_chat_channel(user_id, channel_id):
             )
             if not org_id:
                 return jsonify({"error": _ERR_NO_ORG}), 403
-            changed = chat_signals.set_channel_enabled(cur, org_id, channel_id[:64], enabled)
+            changed = chat_signals.set_channel_level(cur, org_id, channel_id[:64], level)
             conn.commit()
     except Exception:
         logger.exception("[Detection] Failed to change a chat channel")
         return jsonify({"error": _ERR_INTERNAL}), 500
     if not changed:
         return jsonify({"error": "Channel not found"}), 404
-    return jsonify({"status": "ok", "enabled": enabled})
+    return jsonify({"status": "ok", "level": level})

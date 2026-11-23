@@ -1,9 +1,10 @@
-"""Read a chat channel for problem reports.
+"""Read a chat channel for what Aurora could help with.
 
 People often notice a problem before any monitor does and say so in a channel.
 A small model reads what is new in a channel, together with the messages just
 before it and the replies in its threads, and answers one question: is anyone
-here saying that something is wrong right now, and with what.
+here saying that something is wrong right now, and with what. In a channel
+where Aurora speaks freely it also picks out questions left waiting.
 
 It reads the conversation, not single messages. "Anyone seeing issues with
 checkout?" followed by "yes, same here" is one report, and neither line is one
@@ -12,14 +13,15 @@ on its own. Several people talking about the same problem are one report.
 Messages are untrusted text, so what the model may return is kept narrow:
 
 - which of the new messages belong to each report, by their ids;
+- a kind, from a fixed list;
 - an asset: a name Aurora already knows, or a bare name of the same shape (no
   spaces, no punctuation a prompt could hide in), or none;
 - a one-line claim, length-capped, with the characters chat platforms use for
   mentions removed.
 
 Anything outside that is dropped, not repaired. Nothing the model returns here
-opens an incident: a report is handed to a read-only investigation that has to
-find the problem for itself (services/detection/chat_intake.py).
+opens an incident or is posted anywhere: a report is handed to a read-only look
+that has to find the answer for itself (services/detection/chat_intake.py).
 """
 
 import json
@@ -40,14 +42,25 @@ _ASSET = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]*$")
 # sent to the channel carry a subtype and are still someone talking.
 _HUMAN_SUBTYPES = (None, "", "file_share", "thread_broadcast")
 
+KIND_PROBLEM = "problem"
+KIND_QUESTION = "question"
+
+_QUESTIONS = """
+Also report, with "kind": "question", a question about this team's systems, infrastructure, \
+deploys or incidents that nobody in the conversation has answered yet, when a concrete answer \
+would help the person who asked. Not small talk, not a question addressed to one named person, \
+not a question about plans or opinions, and not one that already has its answer below it.
+"""
+
 PROMPT = """You are reading a team chat channel to find people reporting that something is wrong \
-with a system RIGHT NOW (broken, slow, wrong data, failing, down, missing).
+with a system RIGHT NOW (broken, slow, wrong data, failing, down, missing). Those are reports \
+with "kind": "problem".
 
 Read it as a conversation. A question like "anyone else seeing errors on checkout?" answered by \
-"yes, same here" is a report. Several people describing the same problem are ONE report. \
-Questions about how to do something, announcements, jokes, planned work, and a problem that the \
-conversation says is already fixed are not reports.
-
+"yes, same here" is a problem report. Several people describing the same problem are ONE report. \
+Announcements, jokes, planned work, and a problem that the conversation says is already fixed \
+are not reports.
+{questions}
 Lines marked "new": true are the ones to judge. Lines marked "new": false came before and are \
 only there so you can follow the conversation. "thread" is the id of the message a reply belongs to.
 
@@ -60,10 +73,11 @@ Conversation, oldest first:
 {messages}
 
 Answer with JSON only:
-{{"reports": [{{"ts": ["<id of each NEW line that is part of this report>"], "asset": "<the \
-service or resource it is about: a known name above, or its bare name as written, or null if \
-none is named>", "claim": "<one sentence stating what is said to be wrong>"}}]}}
-If nobody is reporting a problem, answer {{"reports": []}}."""
+{{"reports": [{{"kind": "{kinds}", "ts": ["<id of each NEW line that is part of this report>"], \
+"asset": "<the service or resource it is about: a known name above, or its bare name as written, \
+or null if none is named>", "claim": "<one sentence stating what is said to be wrong, or what is \
+being asked>"}}]}}
+If there is nothing to report, answer {{"reports": []}}. Most of the time there is nothing."""
 
 
 @dataclass(frozen=True)
@@ -73,6 +87,9 @@ class Report:
     message_ts: tuple
     asset: Optional[str]
     claim: str
+    kind: str = KIND_PROBLEM
+    # The thread a reply belongs in: the report's own first message when it started one.
+    thread_ts: Optional[str] = None
 
 
 def is_readable(message: Dict[str, Any], team_id: str) -> bool:
@@ -95,8 +112,11 @@ def is_readable(message: Dict[str, Any], team_id: str) -> bool:
 
 
 def build_prompt(new: List[Dict[str, Any]], context: List[Dict[str, Any]],
-                 known_assets: List[str]) -> str:
-    """*new* are the messages to judge; *context* came before and is only for following along."""
+                 known_assets: List[str], questions: bool = False) -> str:
+    """*new* are the messages to judge; *context* came before and is only for following along.
+
+    *questions* asks for unanswered questions too: only where Aurora would answer them.
+    """
     assets = "\n".join("- %s" % a for a in known_assets[:MAX_KNOWN_ASSETS]) or "(none known)"
     new_ids = {m["ts"] for m in new}
     lines = []
@@ -108,7 +128,11 @@ def build_prompt(new: List[Dict[str, Any]], context: List[Dict[str, Any]],
             "new": message["ts"] in new_ids,
             "text": (message.get("text") or "")[:MESSAGE_MAX_CHARS],
         }))
-    return PROMPT.format(assets=assets, messages="\n".join(lines))
+    return PROMPT.format(
+        assets=assets, messages="\n".join(lines),
+        questions=_QUESTIONS if questions else "",
+        kinds="problem or question" if questions else KIND_PROBLEM,
+    )
 
 
 def clean_claim(value: Any) -> str:
@@ -144,7 +168,8 @@ def _json_object(raw: str) -> Optional[dict]:
     return parsed if isinstance(parsed, dict) else None
 
 
-def parse(raw: str, new: List[Dict[str, Any]], known_assets: List[str]) -> Optional[List[Report]]:
+def parse(raw: str, new: List[Dict[str, Any]], known_assets: List[str],
+          questions: bool = False) -> Optional[List[Report]]:
     """Turn the model's answer into reports, keeping only what it was allowed to say.
 
     None when the answer cannot be read at all (cut off, not JSON, wrong
@@ -154,7 +179,7 @@ def parse(raw: str, new: List[Dict[str, Any]], known_assets: List[str]) -> Optio
     answer = _json_object(raw or "")
     if answer is None or not isinstance(answer.get("reports"), list):
         return None
-    asked = {m["ts"] for m in new}
+    asked = {m["ts"]: m for m in new}
 
     reports, used = [], set()
     for item in answer["reports"]:
@@ -170,14 +195,21 @@ def parse(raw: str, new: List[Dict[str, Any]], known_assets: List[str]) -> Optio
         if not mine or not claim:
             # A report tied to no new message, or with nothing stated, cannot be checked.
             continue
+        kind = KIND_QUESTION if item.get("kind") == KIND_QUESTION else KIND_PROBLEM
+        if kind == KIND_QUESTION and not questions:
+            # Not asked for here, so not kept: this channel only hears problems.
+            continue
         mine = sorted(set(mine), key=float)
         used.update(mine)
-        reports.append(Report(mine[0], tuple(mine), clean_asset(item.get("asset"), known_assets), claim))
+        reports.append(Report(
+            mine[0], tuple(mine), clean_asset(item.get("asset"), known_assets), claim, kind,
+            asked[mine[0]].get("thread_ts") or mine[0],
+        ))
     return reports
 
 
 def read(new: List[Dict[str, Any]], context: List[Dict[str, Any]], known_assets: List[str],
-         user_id: str) -> Optional[List[Report]]:
+         user_id: str, questions: bool = False) -> Optional[List[Report]]:
     """Ask the model about *new*. [] when there is nothing to ask or it may not be asked;
     None when it was asked and no usable answer came back."""
     if not new:
@@ -198,10 +230,10 @@ def read(new: List[Dict[str, Any]], context: List[Dict[str, Any]], known_assets:
     model = ModelConfig.INCIDENT_REPORT_SUMMARIZATION_MODEL
     llm = create_chat_model(model, temperature=0, streaming=False)
     response = tracked_invoke(
-        llm, [HumanMessage(content=build_prompt(new, context, known_assets))],
+        llm, [HumanMessage(content=build_prompt(new, context, known_assets, questions))],
         user_id=user_id, model_name=model, request_type="detection_chat_reader",
     )
-    reports = parse(extract_text_from_content(response.content), new, known_assets)
+    reports = parse(extract_text_from_content(response.content), new, known_assets, questions)
     if reports is None:
         logger.warning("[DetectionChat] The model's answer for %d message(s) could not be read", len(new))
     return reports

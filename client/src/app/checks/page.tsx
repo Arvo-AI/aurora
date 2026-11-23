@@ -7,7 +7,7 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { useQuery } from '@/lib/query';
 import { formatTimeAgo } from '@/lib/utils/time-format';
-import ChatReports from './ChatReports';
+import AuroraInSlack from './AuroraInSlack';
 
 type CheckState = 'silent' | 'proven' | 'retired';
 
@@ -352,7 +352,7 @@ export default function ChecksPage() {
       </div>
 
       {renderBody()}
-      {data?.enabled !== false && <ChatReports />}
+      {data?.enabled !== false && <AuroraInSlack />}
     </div>
   );
 }

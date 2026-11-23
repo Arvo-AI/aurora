@@ -6,6 +6,8 @@ Handles incoming messages with @Aurora mentions.
 import logging
 import json
 import os
+
+import requests
 from flask import Blueprint, request, jsonify
 from connectors.slack_connector.client import get_slack_client_for_user, SlackClient
 from utils.db.connection_pool import db_pool
@@ -29,6 +31,7 @@ from chat.background.task import run_background_chat
 from utils.notifications.slack_notification_service import CONTINUE_ACTION_PREFIX
 from utils.auth.stateless_auth import set_rls_context
 from utils.log_sanitizer import sanitize
+from utils.validation import is_valid_uuid
 from routes.slack.slack_onboarding import (
     DEMO_ACTION_ID,
     LINK_ACTION_PREFIX,
@@ -462,6 +465,16 @@ def process_interaction(payload: dict) -> dict:
             # Handle "More details" button
             if action_id.startswith('suggestion_details_'):
                 return _handle_suggestion_details(
+                    payload=payload,
+                    action=action,
+                    slack_user_id=slack_user_id,
+                    team_id=team_id,
+                    channel_id=channel_id
+                )
+
+            # The buttons on a reply Aurora posted without being asked
+            if action_id.startswith(_AURORA_SPEAK_PREFIX):
+                return _handle_aurora_speak(
                     payload=payload,
                     action=action,
                     slack_user_id=slack_user_id,
@@ -1125,6 +1138,125 @@ def _handle_detection_nudge(payload: dict, action: dict, slack_user_id: str, tea
         return {"text": ""}
     except Exception:
         logger.exception("Error handling a worth-a-look answer")
+        return {"text": ""}
+
+
+# Every button on a reply Aurora posted unasked (services/detection/chat_voice.py).
+_AURORA_SPEAK_PREFIX = "aurora_speak_"
+_SLACK_RESPONSE_URL_PREFIX = "https://hooks.slack.com/"
+
+
+def _post_ephemeral_blocks(client, channel_id: str, slack_user_id: str, text: str, blocks: list,
+                           thread_ts: str | None) -> None:
+    """An ephemeral message with blocks, in the thread when there is one. Never raises."""
+    data = {"channel": channel_id, "user": slack_user_id, "text": text, "blocks": blocks}
+    if thread_ts:
+        data["thread_ts"] = thread_ts
+    try:
+        client._make_request("POST", "chat.postEphemeral", data)
+    except Exception:
+        logger.exception("Failed to show Aurora's channel settings to Slack user %s", sanitize(slack_user_id))
+
+
+def _replace_ephemeral(payload: dict, text: str) -> None:
+    """Swap the ephemeral message a button was on for *text*. Never raises."""
+    response_url = payload.get("response_url") or ""
+    if not response_url.startswith(_SLACK_RESPONSE_URL_PREFIX):
+        return
+    try:
+        requests.post(response_url, json={"replace_original": True, "text": text}, timeout=5)
+    except Exception:
+        logger.exception("Failed to replace an ephemeral Slack message")
+
+
+def _announce_level(client, payload: dict, channel_id: str, note: str) -> None:
+    """Make a level change visible to the channel, where the button was pressed."""
+    message = payload.get("message") or {}
+    container = payload.get("container") or {}
+    from services.detection import chat_voice
+
+    if container.get("is_ephemeral"):
+        # Pressed in the settings only that person could see: the channel is told in the thread.
+        _replace_ephemeral(payload, note)
+        client.send_message(channel=channel_id, text=note, thread_ts=container.get("thread_ts"))
+        return
+    # Pressed on the introduction under a reply: the dial there becomes who chose.
+    client.update_message(
+        channel_id, message["ts"], text=(message.get("text") or "") + "\n" + note,
+        blocks=chat_voice.without_introduction(message.get("blocks") or [], note),
+    )
+
+
+def _speak_action(cursor, conn, org_id: str, team_id: str, channel_id: str, slack_user_id: str,
+                  action: dict):
+    """Apply one button press. Returns (what happened, the channel's level after it)."""
+    from services.detection import chat_signals, chat_voice
+
+    action_id = action.get("action_id", "")
+    value = (action.get("value") or "").strip()
+    company = chat_signals.company_level(org_id)
+    done = "settings"
+    if action_id.startswith(chat_voice.ACTION_LEVEL_PREFIX):
+        level = action_id[len(chat_voice.ACTION_LEVEL_PREFIX):]
+        if level not in chat_signals.LEVELS or not chat_signals.set_channel_level(cursor, org_id, channel_id, level):
+            return "missing", None
+        done = "level"
+    elif action_id in (chat_voice.ACTION_HELPFUL, chat_voice.ACTION_UNHELPFUL):
+        helpful = action_id == chat_voice.ACTION_HELPFUL
+        if not is_valid_uuid(value) or not chat_signals.vote(cursor, org_id, value, slack_user_id, helpful):
+            return "missing", None
+        done = "helpful" if helpful else "unhelpful"
+    conn.commit()
+    channel = chat_signals.channel_level(cursor, org_id, team_id, channel_id, company)
+    return done, (channel or {}).get("level")
+
+
+def _handle_aurora_speak(payload: dict, action: dict, slack_user_id: str, team_id: str, channel_id: str) -> dict:
+    """Handle Helpful / Not useful / the dial on a reply Aurora posted unasked.
+
+    Anyone who is a full member of the workspace may answer, with or without
+    an Aurora account: the channel is theirs, and turning Aurora down in it
+    should not need a login. Guests and people from other workspaces may not.
+    Returns an empty body always: a non-empty one would replace the reply.
+    """
+    from services.detection import chat_intake_enabled, chat_voice
+
+    try:
+        if not chat_intake_enabled() or not channel_id:
+            return {"text": ""}
+        sender = describe_slack_sender(slack_user_id, team_id)
+        workspace_user_id, org_id = sender["workspace_user_id"], sender["org_id"]
+        client = get_slack_client_for_user(workspace_user_id) if workspace_user_id else None
+        if not client or not org_id:
+            return {"text": ""}
+        if not (sender["member"] or sender["matched_user_id"] or sender["installer_user_id"]):
+            _send_ephemeral(client, channel_id, slack_user_id,
+                            "Only members of this workspace can change what Aurora does here.")
+            return {"text": ""}
+
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cursor:
+            if not set_rls_context(cursor, conn, workspace_user_id, org_id=org_id,
+                                   log_prefix="[SlackEvents:aurora_speak]"):
+                return {"text": ""}
+            done, level = _speak_action(cursor, conn, org_id, team_id, channel_id, slack_user_id, action)
+
+        message = payload.get("message") or {}
+        thread_ts = message.get("thread_ts") or message.get("ts")
+        if done == "missing" or level is None:
+            _send_ephemeral(client, channel_id, slack_user_id, "I could not find that in your organization.")
+        elif done == "level":
+            _announce_level(client, payload, channel_id, chat_voice.level_set_note(level, slack_user_id))
+        elif done == "helpful":
+            _send_ephemeral(client, channel_id, slack_user_id, "Thanks, noted.")
+        else:
+            lead = "Noted, thanks." if done == "unhelpful" else ""
+            _post_ephemeral_blocks(
+                client, channel_id, slack_user_id, "How much Aurora does in this channel",
+                chat_voice.settings_blocks(level, lead), thread_ts,
+            )
+        return {"text": ""}
+    except Exception:
+        logger.exception("Error handling a button on one of Aurora's unasked replies")
         return {"text": ""}
 
 
