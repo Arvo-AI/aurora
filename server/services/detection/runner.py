@@ -202,7 +202,9 @@ def run_check(check_id: str, org_id: str, user_id: str, claim: str | None = None
             # Credentials and command policy are resolved from the user's
             # current org. An owner who has moved would run this org's check
             # with another org's access and write the output back here.
-            verdict = Verdict(STATUS_ERROR, detail="the check's owner is no longer in this organization")
+            # ran=False: nothing was executed, so it counts as a run that could not happen.
+            verdict = Verdict(STATUS_ERROR, detail="the check's owner is no longer in this organization",
+                              ran=False)
         else:
             verdict = judge(check, user_id, check_id)
         duration_ms = int((time.monotonic() - started) * 1000)
@@ -415,9 +417,18 @@ def run_fire_drill(check_id: str, org_id: str, user_id: str):
             # Read again here: it may have been revised, demoted or retired
             # since it was queued.
             found = replay.drill_targets(cur, org_id, check_id) if cur is not None else []
+            owner_org = None
+            if found:
+                cur.execute("SELECT org_id FROM users WHERE id = %s", (found[0]["created_by"],))
+                owner = cur.fetchone()
+                owner_org = owner[0] if owner else None
         if not found:
             return
         target = found[0]
+        if owner_org != org_id:
+            # Same rule as a scheduled run: the replay executes with the
+            # owner's access, and an owner who has moved has another org's.
+            return
         if replay.still_catches(target) is not False:
             return
         with _org_cursor(user_id, org_id) as (cur, conn):
@@ -469,7 +480,20 @@ def review_checks():
 
     for action_id, owner, org_id in waiting:
         try:
-            dispatch_action(action_id=action_id, user_id=owner,
-                            trigger_context={"source": "detection_review", "batch": REVIEW_BATCH})
+            with _org_cursor(owner, org_id) as (cur, conn):
+                if cur is None:
+                    continue
+                # Two overlapping passes would both see no active run and both
+                # start one. The lock is held until this pass has created its
+                # run, and the second pass then finds it.
+                cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", ("detection-review:%s" % action_id,))
+                cur.execute(
+                    "SELECT 1 FROM action_runs WHERE action_id = %s AND status IN ('pending', 'running')",
+                    (action_id,),
+                )
+                if cur.fetchone() is None:
+                    dispatch_action(action_id=action_id, user_id=owner,
+                                    trigger_context={"source": "detection_review", "batch": REVIEW_BATCH})
+                conn.commit()
         except Exception:
             logger.exception("%s Could not start the check review for org %s", _LOG, sanitize(org_id))

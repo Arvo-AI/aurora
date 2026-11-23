@@ -117,11 +117,34 @@ def _execute(check: dict, user_id: str, check_id: str, at=None) -> Verdict | str
         return Verdict(STATUS_ERROR, detail="command returned an unreadable result", ran=False)
     if not isinstance(result, dict) or not result.get("success"):
         error = result.get("error") if isinstance(result, dict) else None
-        return Verdict(STATUS_ERROR, detail=str(error or "command failed"), ran=False)
+        return Verdict(STATUS_ERROR, detail=str(error or "command failed"),
+                       ran=isinstance(result, dict) and _ran_and_failed(result))
     output = result.get("output")
     if output is None:
         output = result.get("chat_output")
     return output if isinstance(output, str) else ""
+
+
+# What a CLI says when it was turned away, or never had credentials to begin with.
+_ACCESS_WORDS = (
+    "credential", "unauthorized", "unauthenticated", "forbidden", "access denied",
+    "accessdenied", "permission", "not authorized", "expired", "login",
+)
+
+
+def _ran_and_failed(result: dict) -> bool:
+    """Whether a failed command reached the target and failed there for a reason of its own.
+
+    A query for a resource that does not exist is an error, but it says nothing
+    about Aurora's access, and must not count toward the "I have lost access"
+    message. Only the executors' own result for a command they ran carries both
+    final_command and a return code; setup, gate and timeout failures do not.
+    A failure that reads like an access problem still counts as not having run.
+    """
+    if "final_command" not in result or not isinstance(result.get("return_code"), int):
+        return False
+    said = " ".join(str(result.get(k) or "") for k in ("error", "chat_output", "output")).lower()
+    return not any(word in said for word in _ACCESS_WORDS)
 
 
 def judge(check: dict, user_id: str, check_id: str, at=None) -> Verdict:

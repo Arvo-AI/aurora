@@ -191,3 +191,11 @@ def test_a_replay_with_no_readable_quiet_day_earns_nothing():
     every_quiet_day_unreadable = _runner({_END: STATUS_FAIL, **{q: STATUS_ERROR for q in _QUIET}})
     assert replay_origin(_CHECK, "u", _END, _QUIET, run=every_quiet_day_unreadable).caught is None
     assert replay_origin(_CHECK, "u", _END, [], run=_runner({_END: STATUS_FAIL})).caught is None
+
+
+def test_a_check_that_missed_its_incident_is_refused_even_when_quiet_days_are_unreadable():
+    # Healthy over the incident is a miss whatever the quiet days say, or fail to say.
+    missed = _runner({_QUIET[1]: STATUS_ERROR, _QUIET[2]: STATUS_ERROR})
+    result = replay_origin(_CHECK, "u", _END, _QUIET, run=missed)
+    assert result.caught is False
+    assert refusal(result)

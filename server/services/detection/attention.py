@@ -282,19 +282,19 @@ def working_hours_now(client, slack_user_id: Optional[str], now: Optional[dateti
     """Whether it is a weekday daytime where the workspace's installer is.
 
     Aurora stores no timezone for an org, so the installer's Slack timezone
-    stands in for the team's. When it cannot be read the answer is yes: a post
-    at an odd hour is better than a post that never goes out.
+    stands in for the team's. When it cannot be read, UTC is used: the weekend
+    is still kept clear, and the post still goes out. Holding it until a
+    timezone turns up would hold it for good on an install that has none.
     """
-    if not slack_user_id:
-        return True
-    try:
-        info = client._make_request("GET", "users.info", {"user": slack_user_id}) or {}
-        offset = (info.get("user") or {}).get("tz_offset")
-        if not isinstance(offset, int) or isinstance(offset, bool):
-            return True
-    except Exception:
-        logger.warning("[DetectionAttention] Could not read the installer's timezone", exc_info=True)
-        return True
+    offset = 0
+    if slack_user_id:
+        try:
+            info = client._make_request("GET", "users.info", {"user": slack_user_id}) or {}
+            read = (info.get("user") or {}).get("tz_offset")
+            if isinstance(read, int) and not isinstance(read, bool):
+                offset = read
+        except Exception:
+            logger.warning("[DetectionAttention] Could not read the installer's timezone", exc_info=True)
     local = (now or datetime.now(timezone.utc)) + timedelta(seconds=offset)
     return local.weekday() < 5 and POST_FROM_HOUR <= local.hour < POST_UNTIL_HOUR
 

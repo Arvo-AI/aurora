@@ -132,3 +132,19 @@ def test_a_command_that_never_finishes_is_refused(command):
     definition, problem = normalize_definition(_definition(command=command))
     assert definition is None
     assert "answer once" in problem
+
+
+def test_only_flags_that_keep_a_command_open_are_refused():
+    from services.detection.store import streaming_flag
+
+    never_finish = (
+        "kubectl get pods -w", "kubectl get pods --watch", "kubectl get pods --watch-only",
+        "kubectl logs -f deploy/checkout", "kubectl logs deploy/checkout --follow=true",
+    )
+    answer_once = (
+        "kubectl get deployments -f deployment.yaml",       # -f names a file here
+        "kubectl get pods --watch=false",
+        "kubectl get pods -n shop",
+    )
+    assert all(streaming_flag(c) for c in never_finish)
+    assert not any(streaming_flag(c) for c in answer_once)
