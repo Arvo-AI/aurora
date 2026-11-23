@@ -194,6 +194,126 @@ def _asked_by_a_person(origin: dict) -> bool:
     return state is not None and not getattr(state, "is_background", True)
 
 
+def _parse_check(fields: dict):
+    """(args, definition, origin, '') from the tool's keyword arguments, or an error as JSON last."""
+    try:
+        args = SaveDetectionCheckArgs(
+            **{name: fields[name] for name in SaveDetectionCheckArgs.model_fields if name in fields}
+        )
+    except ValidationError as invalid:
+        first = invalid.errors()[0]
+        field = ".".join(str(part) for part in first.get("loc", ()))
+        return None, None, None, json.dumps(
+            {"error": "Invalid check: %s: %s" % (field, first.get("msg", "bad input"))})
+
+    definition, problem = normalize_definition({
+        "name": args.name, "prediction": args.prediction, "asset": args.asset,
+        "pattern": args.pattern, "provider": args.provider, "target": args.target,
+        "command": args.command, "interval_seconds": args.interval_seconds,
+        "window_seconds": args.window_seconds, "lag_seconds": args.lag_seconds,
+        "assertion": {"expect": args.expect, "op": args.op, "value": args.value},
+    })
+    if problem:
+        return None, None, None, json.dumps({"error": problem})
+    origin, problem = normalize_origin({"kind": args.origin_kind, "ref": args.origin_ref})
+    if problem:
+        return None, None, None, json.dumps({"error": problem})
+    return args, definition, origin, ""
+
+
+def _try_replay(user_id: str, definition: dict, origin: dict):
+    """(what the replay found or None, a refusal as JSON or '')."""
+    try:
+        replayed = _replay_before_saving(user_id, definition, origin)
+    except Exception:
+        # A replay that cannot run is not a reason to refuse: the check is
+        # admitted silent and proves itself forward.
+        logger.exception("[DetectionTool] Replay failed to run")
+        return None, ""
+    if replayed is None or not replay.refusal(replayed.result):
+        return replayed, ""
+    return replayed, json.dumps({
+        "error": replay.refusal(replayed.result), "replay": replayed.record,
+        "note": "At most %d replays are run per incident per day, and a check saved after a "
+                "refusal is not credited with the incident. Do not adjust a threshold to fit "
+                "this one incident: change the check only if it measured the wrong thing."
+                % replay.MAX_ATTEMPTS_PER_INCIDENT,
+    })
+
+
+def _keep_replay(cursor, org_id: str, saved: tuple, definition: dict, replayed) -> None:
+    """Store what the replay found beside the revision, and credit the incident it caught."""
+    check_id, revision, changed = saved
+    # Kept on a changed revision, and on an unchanged one that has now caught
+    # an incident: the weekly fire drill finds its checks by this record, so a
+    # check proven by replay must carry it.
+    if changed or replayed.result.caught:
+        record_replay(cursor, check_id, revision, replayed.record)
+    # Not tied to the definition changing: the same check saved for a second
+    # incident has caught a second incident. credit_replay is a no-op when
+    # this check was already credited with this one.
+    # Not after a refusal: a check reshaped until it fails over an incident
+    # has been fitted to it, which is not catching it.
+    if replayed.result.caught and replayed.creditable:
+        credit_replay(
+            cursor, check_id, org_id, revision, definition["pattern"],
+            definition["asset"], replayed.incident_id, replayed.incident_at,
+        )
+
+
+def _saved_response(saved: tuple, state: str, vouched: bool, replayed) -> str:
+    check_id, revision, changed = saved
+    response = {
+        "status": "saved" if changed else "unchanged",
+        "check_id": check_id,
+        "revision": revision,
+        "state": state,
+        "note": _VOUCHED_NOTE if vouched and state == "proven" else _STATE_NOTES.get(state, ""),
+    }
+    if replayed:
+        response["replay"] = replayed.record
+    if replayed and replayed.result.caught and not replayed.creditable:
+        response["replay_note"] = (
+            "Replayed and admitted, but not credited with the incident: an earlier version "
+            "written for the same incident was refused, so this one was shaped with that "
+            "result in hand. It earns its record from what it catches next."
+        )
+    return json.dumps(response)
+
+
+def _store_check(user_id: str, args, definition: dict, origin: dict, replayed) -> str:
+    """Write the check and return the tool's answer."""
+    with _connection(user_id, "save") as (cursor, conn, org_id):
+        # Caught inside the block: an expected refusal must not reach the
+        # pool's handler, which logs any exception as a connection error.
+        try:
+            saved = save_check(
+                cursor, org_id, user_id, definition,
+                origin=origin, reason=args.reason, source="agent",
+                vouched_by=user_id if _asked_by_a_person(origin) else None,
+            )
+        except CheckRetired as retired:
+            conn.rollback()
+            return json.dumps({
+                "error": "A check with this name was retired and is not brought back.",
+                "retired_reason": str(retired),
+            })
+        except TooManyChecks:
+            conn.rollback()
+            return json.dumps({
+                "error": "This organization is at its limit of active checks. Retire one first.",
+            })
+        if replayed:
+            _keep_replay(cursor, org_id, saved, definition, replayed)
+        # Read back: an unchanged save of a proven check is still proven.
+        cursor.execute(
+            "SELECT state, vouched_by IS NOT NULL FROM detection_checks WHERE id = %s", (saved[0],),
+        )
+        state, vouched = cursor.fetchone()
+        conn.commit()
+    return _saved_response(saved, state, vouched, replayed)
+
+
 def save_detection_check(user_id: str | None = None, **fields) -> str:
     """Create a check, or revise the one with the same name.
 
@@ -205,27 +325,9 @@ def save_detection_check(user_id: str | None = None, **fields) -> str:
         return _OFF
     if not _may_write(user_id):
         return _NOT_ALLOWED
-    try:
-        args = SaveDetectionCheckArgs(
-            **{name: fields[name] for name in SaveDetectionCheckArgs.model_fields if name in fields}
-        )
-    except ValidationError as invalid:
-        first = invalid.errors()[0]
-        field = ".".join(str(part) for part in first.get("loc", ()))
-        return json.dumps({"error": "Invalid check: %s: %s" % (field, first.get("msg", "bad input"))})
-
-    definition, problem = normalize_definition({
-        "name": args.name, "prediction": args.prediction, "asset": args.asset,
-        "pattern": args.pattern, "provider": args.provider, "target": args.target,
-        "command": args.command, "interval_seconds": args.interval_seconds,
-        "window_seconds": args.window_seconds, "lag_seconds": args.lag_seconds,
-        "assertion": {"expect": args.expect, "op": args.op, "value": args.value},
-    })
-    if problem:
-        return json.dumps({"error": problem})
-    origin, problem = normalize_origin({"kind": args.origin_kind, "ref": args.origin_ref})
-    if problem:
-        return json.dumps({"error": problem})
+    args, definition, origin, refused = _parse_check(fields)
+    if refused:
+        return refused
 
     # The full gate, LLM judge included, runs here: this is the one moment a
     # conversation exists to judge the command against. Scheduled runs then skip
@@ -240,87 +342,16 @@ def save_detection_check(user_id: str | None = None, **fields) -> str:
     if not gate.allowed:
         return json.dumps({"error": gate.block_reason, "code": gate.code})
 
+    replayed, refused = _try_replay(user_id, definition, origin)
+    if refused:
+        return refused
     try:
-        replayed = _replay_before_saving(user_id, definition, origin)
-    except Exception:
-        # A replay that cannot run is not a reason to refuse: the check is
-        # admitted silent and proves itself forward.
-        logger.exception("[DetectionTool] Replay failed to run")
-        replayed = None
-    if replayed and replay.refusal(replayed.result):
-        return json.dumps({
-            "error": replay.refusal(replayed.result), "replay": replayed.record,
-            "note": "At most %d replays are run per incident per day, and a check saved after a "
-                    "refusal is not credited with the incident. Do not adjust a threshold to fit "
-                    "this one incident: change the check only if it measured the wrong thing."
-                    % replay.MAX_ATTEMPTS_PER_INCIDENT,
-        })
-
-    try:
-        with _connection(user_id, "save") as (cursor, conn, org_id):
-            # Caught inside the block: an expected refusal must not reach the
-            # pool's handler, which logs any exception as a connection error.
-            try:
-                check_id, revision, changed = save_check(
-                    cursor, org_id, user_id, definition,
-                    origin=origin, reason=args.reason, source="agent",
-                    vouched_by=user_id if _asked_by_a_person(origin) else None,
-                )
-            except CheckRetired as retired:
-                conn.rollback()
-                return json.dumps({
-                    "error": "A check with this name was retired and is not brought back.",
-                    "retired_reason": str(retired),
-                })
-            except TooManyChecks:
-                conn.rollback()
-                return json.dumps({
-                    "error": "This organization is at its limit of active checks. Retire one first.",
-                })
-            if replayed:
-                # Kept on a changed revision, and on an unchanged one that has now
-                # caught an incident: the weekly fire drill finds its checks by
-                # this record, so a check proven by replay must carry it.
-                if changed or replayed.result.caught:
-                    record_replay(cursor, check_id, revision, replayed.record)
-                # Not tied to the definition changing: the same check saved for a
-                # second incident has caught a second incident. credit_replay is a
-                # no-op when this check was already credited with this one.
-                # Not after a refusal: a check reshaped until it fails over an
-                # incident has been fitted to it, which is not catching it.
-                if replayed.result.caught and replayed.creditable:
-                    credit_replay(
-                        cursor, check_id, org_id, revision, definition["pattern"],
-                        definition["asset"], replayed.incident_id, replayed.incident_at,
-                    )
-            # Read back: an unchanged save of a proven check is still proven.
-            cursor.execute(
-                "SELECT state, vouched_by IS NOT NULL FROM detection_checks WHERE id = %s", (check_id,),
-            )
-            state, vouched = cursor.fetchone()
-            conn.commit()
+        return _store_check(user_id, args, definition, origin, replayed)
     except ValueError:
         return _NO_ORG_CTX
     except Exception:
         logger.exception("[DetectionTool] Failed to save check")
         return json.dumps({"error": "Failed to save the check."})
-
-    response = {
-        "status": "saved" if changed else "unchanged",
-        "check_id": check_id,
-        "revision": revision,
-        "state": state,
-        "note": _VOUCHED_NOTE if vouched and state == "proven" else _STATE_NOTES.get(state, ""),
-    }
-    if replayed:
-        response["replay"] = replayed.record
-        if replayed.result.caught and not replayed.creditable:
-            response["replay_note"] = (
-                "Replayed and admitted, but not credited with the incident: an earlier version "
-                "written for the same incident was refused, so this one was shaped with that "
-                "result in hand. It earns its record from what it catches next."
-            )
-    return json.dumps(response)
 
 
 @dataclass(frozen=True)
