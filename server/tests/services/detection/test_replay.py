@@ -35,7 +35,8 @@ def _runner(by_end):
 
     def run(check, user_id, check_id, at=None):
         seen.append(at)
-        return Verdict(by_end.get(at, STATUS_PASS))
+        status = by_end.get(at, STATUS_PASS)
+        return Verdict(status, "" if status == STATUS_ERROR else "7")
 
     run.seen = seen
     return run
@@ -106,6 +107,55 @@ def test_a_fire_drill_tells_a_check_that_now_misses_from_one_that_cannot_be_read
     assert still_catches(target, run=_runner({_END: STATUS_ERROR})) is None
 
 
+def test_a_drill_over_a_span_with_no_data_left_does_not_demote():
+    # Past the source's retention the span comes back empty. A line count reads
+    # that as zero lines and healthy, which is not the check having stopped working.
+    target = dict(_CHECK, id="c1", created_by="u", replay={"replayed_to": _END.isoformat()},
+                  assertion={"expect": "lines", "op": "lt", "value": 50})
+
+    def aged_out(check, user_id, check_id, at=None):
+        return Verdict(STATUS_PASS, "")
+
+    assert still_catches(target, run=aged_out) is None
+
+
+def test_one_quiet_day_is_not_enough_to_be_credited_with_the_incident():
+    one_readable = _runner({_END: STATUS_FAIL, _QUIET[1]: STATUS_ERROR, _QUIET[2]: STATUS_ERROR})
+    result = replay_origin(_CHECK, "u", _END, _QUIET, run=one_readable)
+    assert result.caught is None
+    assert refusal(result) == ""
+
+
+def test_one_quiet_day_that_fails_still_refuses_the_check():
+    noisy = _runner({_END: STATUS_FAIL, _QUIET[0]: STATUS_FAIL,
+                     _QUIET[1]: STATUS_ERROR, _QUIET[2]: STATUS_ERROR})
+    assert "quiet history" in refusal(replay_origin(_CHECK, "u", _END, _QUIET, run=noisy))
+
+
+def test_a_replay_stops_running_commands_once_its_time_is_used_up():
+    run = _runner({_END: STATUS_FAIL})
+    ticks = iter([0, 40, 80, 120, 160])   # each command took 40 seconds
+    result = replay_origin(_CHECK, "u", _END, _QUIET, run=run, clock=lambda: next(ticks))
+    assert len(run.seen) == 3              # the incident and two quiet days, not the third
+    assert result.caught is True
+
+
+def test_the_span_can_be_written_as_epoch_seconds_or_milliseconds():
+    seconds = window.render("logs --start {from_epoch} --end {to_epoch}", 900, _END)
+    millis = window.render("aws logs filter-log-events --start-time {from_epoch_ms} --end-time {to_epoch_ms}", 900, _END)
+    start, end = int((_END - timedelta(minutes=15)).timestamp()), int(_END.timestamp())
+    assert seconds == "logs --start %d --end %d" % (start, end)
+    assert millis == "aws logs filter-log-events --start-time %d000 --end-time %d000" % (start, end)
+    assert window.is_replayable("x {from_epoch_ms} {to_epoch_ms}", 900)
+    assert not window.is_replayable("x {from_epoch_ms}", 900)
+
+
+def test_a_lagging_source_is_read_up_to_the_lag_not_up_to_now():
+    now = datetime(2026, 11, 10, 14, 15, tzinfo=timezone.utc)
+    end = window.span_end(120, now=now)
+    assert window.render("logs {from} {to}", 600, end) == "logs 2026-11-10T14:03:00Z 2026-11-10T14:13:00Z"
+
+
 def test_the_span_is_filled_in_with_plain_utc_timestamps():
     rendered = window.render("logs --from {from} --to {to}", 900, _END)
     assert rendered == "logs --from 2026-11-10T14:00:00Z --to 2026-11-10T14:15:00Z"
@@ -127,6 +177,10 @@ def test_a_windowed_check_is_validated_as_the_command_that_will_actually_run():
     assert "window_seconds is required" in _saved(window_seconds=0)[1]
     assert "{from}" in _saved(command="logging read 'severity>=ERROR' | jq length")[1]
     assert "between" in _saved(window_seconds=5)[1]
+    # One minute read every fifteen leaves fourteen that no run ever looks at.
+    assert "shorter than interval_seconds" in _saved(window_seconds=60, interval_seconds=900)[1]
+    assert "lag_seconds" in _saved(lag_seconds=7200)[1]
+    assert _saved(lag_seconds=120)[0]["lag_seconds"] == 120
     # A write hidden behind the placeholders is still a write once they are filled in.
     assert "not read-only" in _saved(command="logging sinks delete audit --since {from}")[1]
 

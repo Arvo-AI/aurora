@@ -125,6 +125,11 @@ def blind_message(provider: str, checks: int, detail: str) -> str:
 
 
 def tell_installer(user_id: str, provider: str, checks: int, detail: str) -> Optional[str]:
+    """Tell whoever connected Slack that Aurora lost access. Returns the Slack id, or None."""
+    return message_installer(user_id, blind_message(provider, checks, detail))
+
+
+def message_installer(user_id: str, text: str) -> Optional[str]:
     """Message whoever connected Slack. Returns the Slack id messaged, or None.
 
     *user_id* is any user of the org: the Slack bot token and the installer's
@@ -139,9 +144,8 @@ def tell_installer(user_id: str, provider: str, checks: int, detail: str) -> Opt
         installer = credentials.get("user_id")
         if not client or not installer:
             return None
-        client.send_message(channel=installer, text=blind_message(provider, checks, detail))
+        client.send_message(channel=installer, text=text)
         return installer
     except Exception:
-        logger.exception("[DetectionAccess] Could not send the lost-access message for %s",
-                         sanitize(provider))
+        logger.exception("[DetectionAccess] Could not message the Slack installer")
         return None

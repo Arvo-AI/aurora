@@ -35,6 +35,7 @@ interface Check {
   last_run_at: string | null;
   retired_reason: string | null;
   vouched_by?: string | null;
+  paused_reason?: string | null;
 }
 
 const ORIGIN_WORDS: Record<string, string> = {
@@ -48,10 +49,10 @@ const ORIGIN_WORDS: Record<string, string> = {
 
 // What the badge shows is the check's health, in the words any monitor uses.
 // Whether a firing check may open a case is said separately, in a sentence.
-type Health = 'ok' | 'firing' | 'error' | 'pending' | 'retired';
+type Health = 'ok' | 'firing' | 'error' | 'pending' | 'paused' | 'retired';
 
 const HEALTH_LABEL: Record<Health, string> = {
-  ok: 'OK', firing: 'Firing', error: 'Error', pending: 'Pending', retired: 'Retired',
+  ok: 'OK', firing: 'Firing', error: 'Error', pending: 'Pending', paused: 'Paused', retired: 'Retired',
 };
 
 const HEALTH_STYLES: Record<Health, string> = {
@@ -59,6 +60,7 @@ const HEALTH_STYLES: Record<Health, string> = {
   firing: 'bg-red-500/10 text-red-400 border-red-500/20',
   error: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
   pending: 'bg-zinc-800 text-zinc-400 border-zinc-700/60',
+  paused: 'bg-sky-500/10 text-sky-400 border-sky-500/20',
   retired: 'bg-zinc-900 text-zinc-600 border-zinc-800',
 };
 
@@ -67,11 +69,13 @@ const HEALTH_HINTS: Record<Health, string> = {
   firing: 'The last run found the problem this check looks for',
   error: 'The check itself could not run or could not read its output',
   pending: 'Not run yet',
+  paused: 'Not running until an editor resumes it',
   retired: 'No longer runs',
 };
 
 function healthOf(check: Check): Health {
   if (check.state === 'retired') return 'retired';
+  if (check.paused_reason) return 'paused';
   if (check.last_status === 'fail') return 'firing';
   if (check.last_status === 'error') return 'error';
   return check.last_status === 'pass' ? 'ok' : 'pending';
@@ -144,11 +148,11 @@ function CheckRow({ check, canEdit, onChanged }: {
   const [trusting, setTrusting] = useState(false);
   const health = healthOf(check);
 
-  const trust = async () => {
+  const act = async (what: 'vouch' | 'resume') => {
     setTrusting(true);
     setStopError('');
     try {
-      const res = await fetch(`/api/detection/checks/${check.id}/vouch`, { method: 'POST', credentials: 'include' });
+      const res = await fetch(`/api/detection/checks/${check.id}/${what}`, { method: 'POST', credentials: 'include' });
       if (!res.ok) throw new Error(String(res.status));
       onChanged();
     } catch {
@@ -245,9 +249,17 @@ function CheckRow({ check, canEdit, onChanged }: {
                 </>
               ) : (
                 <>
-                  {check.state === 'silent' && (
+                  {check.paused_reason && (
                     <Button
-                      variant="outline" size="sm" disabled={trusting} onClick={trust}
+                      variant="outline" size="sm" disabled={trusting} onClick={() => act('resume')}
+                      title="It runs again on its schedule, with your access."
+                    >
+                      {trusting ? 'Saving...' : 'Resume this check'}
+                    </Button>
+                  )}
+                  {check.state === 'silent' && !check.paused_reason && (
+                    <Button
+                      variant="outline" size="sm" disabled={trusting} onClick={() => act('vouch')}
                       title="You vouch for this check: it opens an incident the next time it fires, without waiting to earn that from its record. Two fires in a row on nothing turn this back off."
                     >
                       {trusting ? 'Saving...' : 'Open incidents when it fires'}
@@ -258,6 +270,9 @@ function CheckRow({ check, canEdit, onChanged }: {
               )}
               {stopError && <span className="text-xs text-red-400">{stopError}</span>}
             </div>
+          )}
+          {check.paused_reason && check.state !== 'retired' && (
+            <p className="text-xs text-sky-400">Paused. {check.paused_reason}</p>
           )}
           {check.consecutive_errors >= 3 && (
             <p className="text-xs text-amber-400">

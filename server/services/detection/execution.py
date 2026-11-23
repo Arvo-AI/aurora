@@ -91,7 +91,7 @@ def _execute(check: dict, user_id: str, check_id: str, at=None) -> Verdict | str
     from utils.auth.command_gate import judged_at_save
 
     provider, target = check["provider"], check.get("target") or ""
-    # A windowed check reads the span ending now, or ending at *at* for a replay.
+    # judge() fixed the end of a windowed check's span, so this is the command it classified.
     command = window.render(check["command"], check.get("window_seconds"), at)
     session_id = "detection-check-%s" % check_id
     # The judge needs a conversation to compare the command with, and a scheduled
@@ -131,6 +131,10 @@ def judge(check: dict, user_id: str, check_id: str, at=None) -> Verdict:
     """
     # Checked on every run, not only when the check was saved: a row changed
     # some other way must still be unable to run a write.
+    if at is None and window.is_windowed(check.get("window_seconds")):
+        # Fixed once: the command classified here and the one executed below
+        # must be the same string, and "now" moves between the two.
+        at = window.span_end(check.get("lag_seconds"))
     rejection = describe_rejection(window.render(check["command"], check.get("window_seconds"), at))
     if rejection:
         return Verdict(STATUS_ERROR, detail="command is not read-only: " + rejection)

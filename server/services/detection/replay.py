@@ -14,6 +14,7 @@ source no longer holds the data, is admitted silent and proves itself forward.
 """
 
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional
@@ -32,6 +33,20 @@ from services.detection.execution import judge
 
 QUIET_DAYS_WANTED = 3
 QUIET_DAYS_SEARCHED = 7
+# Fewer quiet days than this and the replay proves nothing: one healthy day
+# could be the one day the check happened to pass.
+MIN_QUIET_RUNS = 2
+# A replay runs inside the agent's turn, up to four commands. Past this it
+# stops and goes with what it has.
+REPLAY_BUDGET_SECONDS = 90
+# Replays allowed for one incident in a day. Each refusal tells the model why,
+# so without a limit it could adjust a threshold until the check fits that one
+# incident, and be credited with the incident it was fitted to.
+MAX_ATTEMPTS_PER_INCIDENT = 3
+# Drills stop this long after the incident. Sources drop old data (30 days of
+# logs by default on GCP, 15 days of 1-minute metrics on CloudWatch), and a
+# span with no data left looks exactly like a span with no problem.
+DRILL_HORIZON_DAYS = 14
 _UUID = re.compile(r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}")
 
 Runner = Callable[..., Verdict]
@@ -108,28 +123,57 @@ def quiet_ends(cursor, org_id: str, end: datetime, window_seconds: int) -> List[
 
 
 def replay_origin(check: Dict[str, Any], user_id: str, end: datetime,
-                  quiet: List[datetime], run: Runner = judge) -> ReplayResult:
+                  quiet: List[datetime], run: Runner = judge,
+                  clock: Callable[[], float] = time.monotonic) -> ReplayResult:
     """Replay *check* over its incident (ending at *end*) and over *quiet* spans."""
     if not window.is_replayable(check["command"], check.get("window_seconds")):
         return ReplayResult(None, detail="the command does not name both ends of a time span")
 
+    started = clock()
     over_incident = run(check, user_id, "replay", at=end)
     if over_incident.status == STATUS_ERROR:
         return ReplayResult(None, detail="could not read that span: " + over_incident.detail)
 
     quiet_runs = quiet_fails = 0
     for quiet_end in quiet:
+        if clock() - started >= REPLAY_BUDGET_SECONDS:
+            break
         verdict = run(check, user_id, "replay", at=quiet_end)
         if verdict.status == STATUS_ERROR:
             continue
         quiet_runs += 1
         quiet_fails += verdict.status == STATUS_FAIL
-    if quiet_runs == 0:
-        # Failing over the incident is only half of a replay. With no quiet day
-        # read, nothing shows the check is ever healthy, and a check that always
-        # fails would look exactly like this. Not replayed, so not credited.
-        return ReplayResult(None, detail="no quiet day could be read to compare against")
+    if quiet_runs < MIN_QUIET_RUNS:
+        # Failing over the incident is only half of a replay. Without quiet
+        # days read, nothing shows the check is ever healthy, and a check that
+        # always fails would look exactly like this. Not replayed, so not
+        # credited. A failure on the quiet days that were read still refuses it.
+        return ReplayResult(
+            None, quiet_runs, quiet_fails,
+            detail="only %d quiet day(s) could be read; %d are needed to compare against"
+                   % (quiet_runs, MIN_QUIET_RUNS),
+        )
     return ReplayResult(over_incident.status == STATUS_FAIL, quiet_runs, quiet_fails)
+
+
+def attempts(cursor, org_id: str, incident_id: str) -> tuple:
+    """(replays tried for this incident in the last day, whether any was ever refused)."""
+    cursor.execute(
+        """SELECT COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '1 day'),
+                  COALESCE(BOOL_OR(refused), FALSE)
+           FROM detection_replay_attempts WHERE org_id = %s AND incident_id = %s""",
+        (org_id, incident_id),
+    )
+    tried, refused = cursor.fetchone()
+    return tried or 0, bool(refused)
+
+
+def record_attempt(cursor, org_id: str, incident_id: str, check_name: str, refused: bool) -> None:
+    cursor.execute(
+        """INSERT INTO detection_replay_attempts (org_id, incident_id, check_name, refused)
+           VALUES (%s, %s, %s, %s)""",
+        (org_id, incident_id, check_name, refused),
+    )
 
 
 def refusal(result: ReplayResult) -> str:
@@ -143,26 +187,41 @@ def refusal(result: ReplayResult) -> str:
     return ""
 
 
-def drill_targets(cursor, org_id: str) -> List[Dict[str, Any]]:
-    """Proven checks whose current revision once caught its incident in replay."""
+_DRILL_COLUMNS = ("id", "created_by", "name", "provider", "target", "command", "assertion",
+                  "window_seconds", "revision", "replay")
+
+
+def drill_targets(cursor, org_id: str, check_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Proven checks whose current revision caught its incident in replay, recently enough.
+
+    Past DRILL_HORIZON_DAYS the check is no longer drilled: it stands on what
+    it has done since. *check_id* narrows this to one check, re-read at the
+    moment its drill runs.
+    """
     cursor.execute(
-        """SELECT c.id, c.created_by, c.name, c.provider, c.target, c.command, c.assertion,
-                  c.window_seconds, c.revision, r.replay
+        "SELECT " + ", ".join("c." + c for c in _DRILL_COLUMNS[:-1]) + """, r.replay
            FROM detection_checks c
            JOIN detection_check_revisions r ON r.check_id = c.id AND r.revision = c.revision
-           WHERE c.org_id = %s AND c.state = %s AND (r.replay->>'caught') = 'true'""",
-        (org_id, STATE_PROVEN),
+           WHERE c.org_id = %s AND c.state = %s AND (r.replay->>'caught') = 'true'
+             AND (r.replay->>'replayed_to')::timestamptz >= NOW() - %s * INTERVAL '1 day'
+             AND (%s::uuid IS NULL OR c.id = %s::uuid)
+           ORDER BY c.id""",
+        (org_id, STATE_PROVEN, DRILL_HORIZON_DAYS, check_id, check_id),
     )
-    columns = ("id", "created_by", "name", "provider", "target", "command", "assertion",
-               "window_seconds", "revision", "replay")
-    return [dict(zip(columns, row)) for row in cursor.fetchall()]
+    return [dict(zip(_DRILL_COLUMNS, row)) for row in cursor.fetchall()]
 
 
 def still_catches(target: Dict[str, Any], run: Runner = judge) -> Optional[bool]:
-    """Re-run the replay that admitted the check. None when the source no longer has the span."""
+    """Re-run the replay that admitted the check. None when that says nothing.
+
+    An error says nothing, and so does an empty answer: a source that has
+    dropped the incident's data returns nothing for that span, which a
+    line-count check would read as zero lines and healthy. Demoting on that
+    would demote every replayed check as its incident aged out.
+    """
     end = datetime.fromisoformat(target["replay"]["replayed_to"])
     verdict = run(target, target["created_by"], str(target["id"]), at=end)
-    if verdict.status == STATUS_ERROR:
+    if verdict.status == STATUS_ERROR or not (verdict.observed or "").strip():
         return None
     return verdict.status != STATUS_PASS
 
@@ -190,3 +249,6 @@ def fail_drill(cursor, check_id: str, org_id: str, revision: int, revision_note:
            VALUES (%s, %s, %s, %s, %s, %s)""",
         (check_id, org_id, revision, STATUS_DRILL_FAILED, "", revision_note),
     )
+    # Someone has to look at why: the agent gets it at the next check review.
+    from services.detection.store import request_review
+    request_review(cursor, check_id, revision_note)

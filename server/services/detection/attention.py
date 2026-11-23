@@ -11,9 +11,17 @@ strongest record go out and the rest stay in the log. The budget moves with
 what the posts turned out to be: one that pointed at a real incident raises
 it, one that pointed at nothing lowers it, down to zero. Old outcomes age out,
 so a channel that reached zero gets another chance later.
+
+One noisy kind of check must not use up the channel for every other kind, so a
+kind counts against the budget once however often it was wrong, and after two
+posts that were nothing it is not posted again until those age out.
+
+People can answer a post. It carries two buttons: "Not a problem" grades the
+failure as false on the spot, and "Stop this check" retires the check.
 """
 
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from services.detection import STATE_SILENT
@@ -30,6 +38,21 @@ BUDGET_WINDOW_DAYS = 7
 # How long a post's outcome keeps moving the budget.
 OUTCOME_MEMORY_DAYS = 90
 _CANDIDATE_POOL = 50
+# Posts about one kind of check that turned out to be nothing before that kind
+# stops being posted.
+MUTE_PATTERN_AFTER_FALSE = 2
+# A claim with no post recorded after this long belongs to a run that died
+# between claiming and sending. It is given back.
+STALE_CLAIM_MINUTES = 30
+# Recorded as the post's ts when the send failed in transit and may have gone out.
+TS_UNKNOWN = "unknown"
+# Tries at the "this cleared" thread reply before giving up (archived channel, bot removed).
+MAX_CLEAR_ATTEMPTS = 3
+# Local hours, on weekdays, in which a post is made. Outside them it waits:
+# nobody is paged by these, but a post made at 3am is read by nobody either.
+POST_FROM_HOUR, POST_UNTIL_HOUR = 8, 20
+ACTION_NOT_A_PROBLEM = "detection_nudge_false"
+ACTION_STOP_CHECK = "detection_nudge_stop"
 
 
 def weekly_budget(real: int, nothing: int) -> int:
@@ -40,8 +63,10 @@ def weekly_budget(real: int, nothing: int) -> int:
 def channel_budget(cursor, org_id: str, channel: str) -> Tuple[int, int]:
     """(weekly budget, posts already made this week) for *channel*."""
     cursor.execute(
+        # Wrong posts are counted by kind of check, not by post: one noisy kind
+        # takes one post a week off the channel, not all of them.
         """SELECT COUNT(*) FILTER (WHERE outcome = %s),
-                  COUNT(*) FILTER (WHERE outcome = %s),
+                  COUNT(DISTINCT pattern) FILTER (WHERE outcome = %s),
                   COUNT(*) FILTER (WHERE nudged_at >= NOW() - %s * INTERVAL '1 day')
            FROM detection_check_fires
            WHERE org_id = %s AND nudge_channel = %s
@@ -86,6 +111,12 @@ def candidates(cursor, org_id: str) -> List[Dict[str, Any]]:
                       """ + HITS_SQL + """ AS hits,
                       COUNT(*) FILTER (WHERE outcome = %s) AS false_fires
                FROM detection_check_fires WHERE org_id = %s GROUP BY pattern
+           ), muted AS (
+               SELECT pattern FROM detection_check_fires
+               WHERE org_id = %s AND nudged_at >= NOW() - %s * INTERVAL '1 day'
+               GROUP BY pattern
+               HAVING COUNT(*) FILTER (WHERE outcome = %s) >= %s
+                  AND COUNT(*) FILTER (WHERE outcome = %s) = 0
            )
            SELECT f.id, f.check_id, f.fired_at, COALESCE(f.observed, ''), c.name, c.asset,
                   c.pattern, c.prediction, c.assertion, c.origin,
@@ -97,10 +128,13 @@ def candidates(cursor, org_id: str) -> List[Dict[str, Any]]:
              AND f.cleared_at IS NULL AND f.outcome IS NULL
              AND f.incident_id IS NULL AND f.nudged_at IS NULL
              AND f.fired_at <= NOW() - %s * INTERVAL '1 hour'
+             AND c.pattern NOT IN (SELECT pattern FROM muted)
            ORDER BY COALESCE(p.hits::float / NULLIF(p.hits + p.false_fires, 0), 0) DESC,
                     COALESCE(p.hits, 0) DESC, f.fired_at
            LIMIT %s""",
-        (OUTCOME_HIT, OUTCOME_FALSE, org_id, org_id, STATE_SILENT, PERSIST_HOURS, _CANDIDATE_POOL),
+        (OUTCOME_HIT, OUTCOME_FALSE, org_id,
+         org_id, OUTCOME_MEMORY_DAYS, OUTCOME_FALSE, MUTE_PATTERN_AFTER_FALSE, OUTCOME_HIT,
+         org_id, STATE_SILENT, PERSIST_HOURS, _CANDIDATE_POOL),
     )
     return [dict(zip(_CANDIDATE_COLUMNS, row)) for row in cursor.fetchall()]
 
@@ -135,6 +169,21 @@ def release(cursor, fire_id: str) -> None:
         "UPDATE detection_check_fires SET nudged_at = NULL, nudge_channel = NULL WHERE id = %s",
         (str(fire_id),),
     )
+
+
+def release_stale_claims(cursor, org_id: str) -> int:
+    """Give back claims whose post was never recorded: the run died before sending.
+
+    A send that failed in transit is not one of these. It is recorded with
+    TS_UNKNOWN and kept, because the post may be in the channel.
+    """
+    cursor.execute(
+        """UPDATE detection_check_fires SET nudged_at = NULL, nudge_channel = NULL
+           WHERE org_id = %s AND nudge_ts IS NULL
+             AND nudged_at <= NOW() - %s * INTERVAL '1 minute'""",
+        (org_id, STALE_CLAIM_MINUTES),
+    )
+    return cursor.rowcount
 
 
 def record_post(cursor, fire_id: str, message_ts: Optional[str]) -> None:
@@ -176,15 +225,90 @@ def worth_a_look_message(candidate: Dict[str, Any], budget: int) -> str:
     ))
 
 
+def worth_a_look_blocks(candidate: Dict[str, Any], budget: int) -> List[Dict[str, Any]]:
+    """The post with its two answers. The text is the same one a client without blocks shows."""
+    fire_id = str(candidate["fire_id"])
+    return [
+        {"type": "section", "text": {"type": "mrkdwn", "text": worth_a_look_message(candidate, budget)}},
+        {"type": "actions", "elements": [
+            {"type": "button", "action_id": ACTION_NOT_A_PROBLEM, "value": fire_id,
+             "text": {"type": "plain_text", "text": "Not a problem"}},
+            {"type": "button", "action_id": ACTION_STOP_CHECK, "value": fire_id, "style": "danger",
+             "text": {"type": "plain_text", "text": "Stop this check"},
+             "confirm": {
+                 "title": {"type": "plain_text", "text": "Stop this check?"},
+                 "text": {"type": "plain_text",
+                          "text": "Aurora stops running it and does not recreate it. Its record is kept."},
+                 "confirm": {"type": "plain_text", "text": "Stop it"},
+                 "deny": {"type": "plain_text", "text": "Cancel"},
+             }},
+        ]},
+    ]
+
+
+def answer(cursor, org_id: str, fire_id: str, action_id: str, may_stop: bool) -> Tuple[str, str]:
+    """Apply a person's answer to a post. Returns (what was done, the check's name).
+
+    What was done is one of: "false" (graded as nothing), "stopped", "already"
+    (someone or something answered first), "not_allowed", "missing".
+    """
+    from services.detection import record
+    from services.detection.store import retire_check_by_id
+
+    cursor.execute(
+        """SELECT f.check_id, f.outcome, c.name, c.state
+           FROM detection_check_fires f JOIN detection_checks c ON c.id = f.check_id
+           WHERE f.id = %s AND f.org_id = %s AND f.nudged_at IS NOT NULL FOR UPDATE OF f""",
+        (fire_id, org_id),
+    )
+    row = cursor.fetchone()
+    if row is None:
+        return "missing", ""
+    check_id, outcome, name, state = str(row[0]), row[1], row[2], row[3]
+    if action_id == ACTION_STOP_CHECK:
+        if not may_stop:
+            return "not_allowed", name
+        stopped = retire_check_by_id(cursor, org_id, check_id, "Stopped from a worth-a-look post in Slack.")
+        return ("stopped" if stopped else "already"), name
+    if outcome is not None:
+        return "already", name
+    # A person saying so is the strongest grade there is: it does not wait for
+    # the window to close, and it counts against this version of the check.
+    record.apply_outcome(cursor, fire_id, check_id, org_id, OUTCOME_FALSE)
+    return "false", name
+
+
+def working_hours_now(client, slack_user_id: Optional[str], now: Optional[datetime] = None) -> bool:
+    """Whether it is a weekday daytime where the workspace's installer is.
+
+    Aurora stores no timezone for an org, so the installer's Slack timezone
+    stands in for the team's. When it cannot be read the answer is yes: a post
+    at an odd hour is better than a post that never goes out.
+    """
+    if not slack_user_id:
+        return True
+    try:
+        info = client._make_request("GET", "users.info", {"user": slack_user_id}) or {}
+        offset = (info.get("user") or {}).get("tz_offset")
+        if not isinstance(offset, int) or isinstance(offset, bool):
+            return True
+    except Exception:
+        logger.warning("[DetectionAttention] Could not read the installer's timezone", exc_info=True)
+        return True
+    local = (now or datetime.now(timezone.utc)) + timedelta(seconds=offset)
+    return local.weekday() < 5 and POST_FROM_HOUR <= local.hour < POST_UNTIL_HOUR
+
+
 def cleared_to_note(cursor, org_id: str) -> List[Tuple[str, str, str, float]]:
     """Posted fires that have since cleared: [(fire_id, channel, ts, hours failing)]."""
     cursor.execute(
         """SELECT id, nudge_channel, nudge_ts,
                   EXTRACT(EPOCH FROM (cleared_at - fired_at)) / 3600.0
            FROM detection_check_fires
-           WHERE org_id = %s AND nudge_ts IS NOT NULL
-             AND cleared_at IS NOT NULL AND NOT nudge_clear_noted""",
-        (org_id,),
+           WHERE org_id = %s AND nudge_ts IS NOT NULL AND nudge_ts <> %s
+             AND cleared_at IS NOT NULL AND NOT nudge_clear_noted
+             AND nudge_clear_attempts < %s""",
+        (org_id, TS_UNKNOWN, MAX_CLEAR_ATTEMPTS),
     )
     return [(str(r[0]), r[1], r[2], float(r[3])) for r in cursor.fetchall()]
 
@@ -199,9 +323,15 @@ def mark_clear_noted(cursor, fire_id: str) -> bool:
 
 
 def unmark_clear_noted(cursor, fire_id: str) -> None:
-    """The thread reply did not go out: leave it to be sent on a later pass."""
+    """The thread reply did not go out: leave it for a later pass, a few times.
+
+    An archived channel or a removed bot refuses every time, so the tries are
+    counted and cleared_to_note stops offering it after MAX_CLEAR_ATTEMPTS.
+    """
     cursor.execute(
-        "UPDATE detection_check_fires SET nudge_clear_noted = FALSE WHERE id = %s", (fire_id,),
+        "UPDATE detection_check_fires SET nudge_clear_noted = FALSE, "
+        "nudge_clear_attempts = nudge_clear_attempts + 1 WHERE id = %s",
+        (fire_id,),
     )
 
 
@@ -210,16 +340,23 @@ def cleared_message(hours: float) -> str:
 
 
 def slack_target(user_id: str):
-    """(client, incidents channel id) for the org, or (None, None) without Slack."""
+    """(client, incidents channel id, installer's Slack id) for the org.
+
+    (None, None, None) without Slack. The installer id may be None on its own.
+    """
     try:
         from connectors.slack_connector.client import get_slack_client_for_user
+        from utils.auth.stateless_auth import get_credentials_from_db
         from utils.notifications.slack_notification_service import _get_incidents_channel_id
 
         client = get_slack_client_for_user(user_id)
         if not client:
-            return None, None
+            return None, None, None
         channel = _get_incidents_channel_id(user_id, client)
-        return (client, channel) if channel else (None, None)
+        if not channel:
+            return None, None, None
+        installer = (get_credentials_from_db(user_id, "slack") or {}).get("user_id")
+        return client, channel, installer
     except Exception:
         logger.exception("[DetectionAttention] Could not resolve the Slack channel")
-        return None, None
+        return None, None, None

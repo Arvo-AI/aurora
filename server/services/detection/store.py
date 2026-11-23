@@ -36,10 +36,10 @@ from utils.security.read_only_classifier import describe_rejection, split_segmen
 # new revision; nothing else is.
 DEFINITION_FIELDS = (
     "prediction", "asset", "pattern", "provider", "target", "command", "assertion",
-    "interval_seconds", "window_seconds",
+    "interval_seconds", "window_seconds", "lag_seconds",
 )
 # Revisions written before a field existed do not carry it.
-_FIELD_DEFAULTS = {"target": "", "window_seconds": 0}
+_FIELD_DEFAULTS = {"target": "", "window_seconds": 0, "lag_seconds": 0}
 
 _MAX_NAME = 255
 _MAX_ASSET = 512
@@ -133,12 +133,19 @@ def streaming_flag(command: str) -> str:
     return ""
 
 
-def _command_problem(definition: Dict[str, Any], window_seconds: Any) -> str:
-    """Why the command cannot be saved, or ''. Sets definition['window_seconds']."""
-    problem = window.problem(definition["command"], window_seconds)
+def _command_problem(definition: Dict[str, Any], window_seconds: Any, lag_seconds: Any) -> str:
+    """Why the command cannot be saved, or ''. Sets the definition's window and lag.
+
+    Expects definition['interval_seconds'] to be set already: a window is
+    checked against how often the check runs.
+    """
+    problem = window.problem(
+        definition["command"], window_seconds, definition["interval_seconds"], lag_seconds,
+    )
     if problem:
         return problem
     definition["window_seconds"] = window_seconds
+    definition["lag_seconds"] = lag_seconds
 
     # Classified with its span filled in: that is the command that will run.
     rejection = describe_rejection(window.render(definition["command"], window_seconds))
@@ -170,7 +177,16 @@ def normalize_definition(raw: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]],
         return None, "target must be at most %d characters" % _MAX_TARGET
     definition["target"] = target
 
-    problem = _command_problem(definition, raw.get("window_seconds") or 0)
+    interval = raw.get("interval_seconds", DEFAULT_INTERVAL_SECONDS)
+    if (isinstance(interval, bool) or not isinstance(interval, int)
+            or not MIN_INTERVAL_SECONDS <= interval <= MAX_INTERVAL_SECONDS):
+        return None, "interval_seconds must be an integer between %d and %d" % (
+            MIN_INTERVAL_SECONDS, MAX_INTERVAL_SECONDS)
+    definition["interval_seconds"] = interval
+
+    problem = _command_problem(
+        definition, raw.get("window_seconds") or 0, raw.get("lag_seconds") or 0,
+    )
     if problem:
         return None, problem
 
@@ -182,12 +198,6 @@ def normalize_definition(raw: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]],
         "expect": assertion["expect"], "op": assertion["op"], "value": assertion.get("value"),
     }
 
-    interval = raw.get("interval_seconds", DEFAULT_INTERVAL_SECONDS)
-    if (isinstance(interval, bool) or not isinstance(interval, int)
-            or not MIN_INTERVAL_SECONDS <= interval <= MAX_INTERVAL_SECONDS):
-        return None, "interval_seconds must be an integer between %d and %d" % (
-            MIN_INTERVAL_SECONDS, MAX_INTERVAL_SECONDS)
-    definition["interval_seconds"] = interval
     return definition, ""
 
 
@@ -396,9 +406,9 @@ def retire_check(cursor, org_id: str, name: str, reason: str) -> bool:
 
 _LIST_COLUMNS = (
     "id", "name", "state", "revision", "origin", "prediction", "asset", "pattern", "provider",
-    "target", "command", "window_seconds", "assertion", "interval_seconds", "run_count", "fail_count", "error_count",
+    "target", "command", "window_seconds", "lag_seconds", "assertion", "interval_seconds", "run_count", "fail_count", "error_count",
     "consecutive_errors", "hit_count", "false_fire_count", "last_status", "last_observed", "last_run_at", "retired_reason",
-    "vouched_by", "review_reason",
+    "vouched_by", "review_reason", "paused_reason",
 )
 
 
@@ -505,7 +515,7 @@ def claim_due_checks(cursor, org_id: str, limit: int) -> List[Tuple[str, str, st
         """UPDATE detection_checks SET claimed_at = NOW()
            WHERE id IN (
                SELECT id FROM detection_checks
-               WHERE org_id = %s AND state <> %s
+               WHERE org_id = %s AND state <> %s AND paused_at IS NULL
                  AND (last_run_at IS NULL
                       OR last_run_at <= NOW() - interval_seconds * INTERVAL '1 second')
                  AND (claimed_at IS NULL
@@ -523,9 +533,10 @@ def claim_due_checks(cursor, org_id: str, limit: int) -> List[Tuple[str, str, st
 def get_runnable_check(cursor, check_id: str) -> Optional[Dict[str, Any]]:
     """The fields a run needs, or None when the check is gone or retired."""
     cursor.execute(
-        """SELECT provider, command, assertion, target, revision, created_by, window_seconds
+        """SELECT provider, command, assertion, target, revision, created_by, window_seconds,
+                  lag_seconds
            FROM detection_checks
-           WHERE id = %s AND state <> %s""",
+           WHERE id = %s AND state <> %s AND paused_at IS NULL""",
         (check_id, STATE_RETIRED),
     )
     row = cursor.fetchone()
@@ -534,6 +545,7 @@ def get_runnable_check(cursor, check_id: str) -> Optional[Dict[str, Any]]:
     return {
         "provider": row[0], "command": row[1], "assertion": row[2], "target": row[3],
         "revision": row[4], "created_by": row[5], "window_seconds": row[6],
+        "lag_seconds": row[7],
     }
 
 
@@ -664,7 +676,7 @@ def _release_claim(cursor, check_id: str, claim: Optional[str]) -> None:
 
 _CASE_COLUMNS = (
     "name", "state", "revision", "origin", "prediction", "asset", "provider", "target", "command",
-    "assertion", "window_seconds", "created_by",
+    "assertion", "window_seconds", "lag_seconds", "created_by",
 )
 
 

@@ -84,7 +84,7 @@ class _Slack:
     def __init__(self, outcome):
         self.outcome = outcome
 
-    def send_message(self, channel, text, thread_ts=None):
+    def send_message(self, channel, text, thread_ts=None, blocks=None):
         if isinstance(self.outcome, Exception):
             raise self.outcome
         return self.outcome
@@ -99,3 +99,34 @@ def test_only_a_post_slack_refused_may_be_tried_again():
     assert runner._send(_Slack({"ok": True, "ts": "1.2"}), "C1", "x") == ("1.2", False)
     assert runner._send(_Slack(SlackAPIError("channel_not_found")), "C1", "x") == (None, True)
     assert runner._send(_Slack(ConnectionError("reset by peer")), "C1", "x") == (None, False)
+
+
+class _SlackUser:
+    def __init__(self, tz_offset):
+        self.tz_offset = tz_offset
+
+    def _make_request(self, method, endpoint, params):
+        if isinstance(self.tz_offset, Exception):
+            raise self.tz_offset
+        return {"ok": True, "user": {"tz_offset": self.tz_offset}}
+
+
+def test_a_post_waits_for_a_weekday_daytime_where_the_team_is():
+    from datetime import datetime, timezone
+
+    from services.detection.attention import working_hours_now
+
+    tuesday_0700_utc = datetime(2026, 11, 24, 7, 0, tzinfo=timezone.utc)
+    assert not working_hours_now(_SlackUser(0), "U1", now=tuesday_0700_utc)          # 07:00 in London
+    assert working_hours_now(_SlackUser(3600), "U1", now=tuesday_0700_utc)           # 08:00 in Paris
+    assert not working_hours_now(_SlackUser(-5 * 3600), "U1", now=tuesday_0700_utc)  # 02:00 in Toronto
+    saturday_noon_utc = datetime(2026, 11, 28, 12, 0, tzinfo=timezone.utc)
+    assert not working_hours_now(_SlackUser(0), "U1", now=saturday_noon_utc)
+
+
+def test_an_unknown_timezone_does_not_hold_a_post_back():
+    from services.detection.attention import working_hours_now
+
+    assert working_hours_now(_SlackUser(ConnectionError("slack down")), "U1")
+    assert working_hours_now(_SlackUser(None), "U1")
+    assert working_hours_now(_SlackUser(0), None)

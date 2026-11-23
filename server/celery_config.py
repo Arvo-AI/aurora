@@ -135,6 +135,7 @@ celery_app.conf.update(
         # Check runs get their own queue, listed last on the workers. A backlog of
         # checks must never sit in front of an investigation in the default queue.
         "services.detection.runner.run_check": {"queue": "detection"},
+        "services.detection.runner.run_fire_drill": {"queue": "detection"},
     },
     # Explicitly include task modules from their new locations
     include=[
