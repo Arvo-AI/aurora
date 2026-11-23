@@ -29,7 +29,6 @@ from chat.background.task import run_background_chat
 from utils.notifications.slack_notification_service import CONTINUE_ACTION_PREFIX
 from utils.auth.stateless_auth import set_rls_context
 from utils.log_sanitizer import sanitize
-from utils.validation import is_valid_uuid
 from routes.slack.slack_onboarding import (
     DEMO_ACTION_ID,
     LINK_ACTION_PREFIX,
@@ -1143,57 +1142,24 @@ def _handle_detection_nudge(payload: dict, action: dict, slack_user_id: str, tea
 _AURORA_SPEAK_PREFIX = "aurora_speak_"
 
 
-def _post_ephemeral_blocks(client, channel_id: str, slack_user_id: str, text: str, blocks: list,
-                           thread_ts: str | None) -> None:
-    """An ephemeral message with blocks, in the thread when there is one. Never raises."""
-    data = {"channel": channel_id, "user": slack_user_id, "text": text, "blocks": blocks}
-    if thread_ts:
-        data["thread_ts"] = thread_ts
-    try:
-        client._make_request("POST", "chat.postEphemeral", data)
-    except Exception:
-        logger.exception("Failed to show Aurora's channel settings to Slack user %s", sanitize(slack_user_id))
+def _speak_action(cursor, conn, workspace: tuple, channel_id: str, action_id: str):
+    """Move the channel one step, in Aurora's Slack memory. Returns (level now, louder) or
+    (None, louder) when there is no further step or the channel is not one Aurora is in."""
+    from services.detection import chat_memory, chat_signals, chat_voice
 
-
-def _announce_level(client, payload: dict, channel_id: str, note: str) -> None:
-    """Make a level change visible to the channel, where the button was pressed."""
-    message = payload.get("message") or {}
-    container = payload.get("container") or {}
-    from services.detection import chat_voice
-
-    if container.get("is_ephemeral"):
-        # Pressed in the settings only that person could see: the channel is told in the thread.
-        client.send_message(channel=channel_id, text=note, thread_ts=container.get("thread_ts"))
-        return
-    # Pressed on the introduction under a reply: the dial there becomes who chose.
-    client.update_message(
-        channel_id, message["ts"], text=(message.get("text") or "") + "\n" + note,
-        blocks=chat_voice.without_introduction(message.get("blocks") or [], note),
-    )
-
-
-def _speak_action(cursor, conn, org_id: str, team_id: str, channel_id: str, slack_user_id: str,
-                  action: dict):
-    """Apply one button press. Returns (what happened, the channel's level after it)."""
-    from services.detection import chat_signals, chat_voice
-
-    action_id = action.get("action_id", "")
-    value = (action.get("value") or "").strip()
-    company = chat_signals.company_level(org_id)
-    done = "settings"
-    if action_id.startswith(chat_voice.ACTION_LEVEL_PREFIX):
-        level = action_id[len(chat_voice.ACTION_LEVEL_PREFIX):]
-        if level not in chat_signals.LEVELS or not chat_signals.set_channel_level(cursor, org_id, channel_id, level):
-            return "missing", None
-        done = "level"
-    elif action_id in (chat_voice.ACTION_HELPFUL, chat_voice.ACTION_UNHELPFUL):
-        helpful = action_id == chat_voice.ACTION_HELPFUL
-        if not is_valid_uuid(value) or not chat_signals.vote(cursor, org_id, value, slack_user_id, helpful):
-            return "missing", None
-        done = "helpful" if helpful else "unhelpful"
+    workspace_user_id, org_id, team_id = workspace
+    louder = action_id == chat_voice.ACTION_LOUDER
+    slider = chat_signals.company_level(org_id)
+    chat_memory.sync(cursor, org_id)
+    channel = chat_signals.channel_level(cursor, org_id, team_id, channel_id, slider)
+    level = chat_voice.stepped(channel["level"], louder) if channel else None
+    # With the slider at off nothing is read, whatever a channel's line says.
+    if level is None or slider == chat_signals.LEVEL_OFF:
+        return None, louder
+    if not chat_memory.set_channel(cursor, org_id, workspace_user_id, channel_id, level):
+        return None, louder
     conn.commit()
-    channel = chat_signals.channel_level(cursor, org_id, team_id, channel_id, company)
-    return done, (channel or {}).get("level")
+    return level, louder
 
 
 def _speak_clicker(slack_user_id: str, team_id: str, channel_id: str):
@@ -1215,27 +1181,23 @@ def _speak_clicker(slack_user_id: str, team_id: str, channel_id: str):
     return client, workspace_user_id, org_id
 
 
-def _speak_answer(client, payload: dict, channel_id: str, slack_user_id: str, done: str, level) -> None:
-    """Tell the person, or the channel, what their button press did."""
+def _speak_answer(client, payload: dict, channel_id: str, slack_user_id: str, level, louder: bool) -> None:
+    """Tell the channel what changed, in the thread, or the person that nothing did."""
     from services.detection import chat_voice
 
+    if level is None:
+        _send_ephemeral(client, channel_id, slack_user_id,
+                        "This is as much as I do here." if louder else "I could not change that here.")
+        return
     message = payload.get("message") or {}
-    if done == "missing" or level is None:
-        _send_ephemeral(client, channel_id, slack_user_id, "I could not find that in your organization.")
-    elif done == "level":
-        _announce_level(client, payload, channel_id, chat_voice.level_set_note(level, slack_user_id))
-    elif done == "helpful":
-        _send_ephemeral(client, channel_id, slack_user_id, "Thanks, noted.")
-    else:
-        _post_ephemeral_blocks(
-            client, channel_id, slack_user_id, "How much Aurora does in this channel",
-            chat_voice.settings_blocks(level, "Noted, thanks." if done == "unhelpful" else ""),
-            message.get("thread_ts") or message.get("ts"),
-        )
+    client.send_message(
+        channel=channel_id, text=chat_voice.level_set_note(level, slack_user_id, louder),
+        thread_ts=message.get("thread_ts") or message.get("ts"),
+    )
 
 
 def _handle_aurora_speak(payload: dict, action: dict, slack_user_id: str, team_id: str, channel_id: str) -> dict:
-    """Handle Helpful / Not useful / the dial on a reply Aurora posted unasked.
+    """Handle "Be quieter here" / "Speak up more here" on a reply Aurora posted unasked.
 
     Returns an empty body always: a non-empty one would replace the reply.
     """
@@ -1247,12 +1209,17 @@ def _handle_aurora_speak(payload: dict, action: dict, slack_user_id: str, team_i
         client, workspace_user_id, org_id = _speak_clicker(slack_user_id, team_id, channel_id)
         if client is None:
             return {"text": ""}
+        from services.detection import chat_memory
+
+        chat_memory.ensure_section(workspace_user_id, org_id)
         with db_pool.get_admin_connection() as conn, conn.cursor() as cursor:
             if not set_rls_context(cursor, conn, workspace_user_id, org_id=org_id,
                                    log_prefix="[SlackEvents:aurora_speak]"):
                 return {"text": ""}
-            done, level = _speak_action(cursor, conn, org_id, team_id, channel_id, slack_user_id, action)
-        _speak_answer(client, payload, channel_id, slack_user_id, done, level)
+            level, louder = _speak_action(
+                cursor, conn, (workspace_user_id, org_id, team_id), channel_id, action.get("action_id", ""),
+            )
+        _speak_answer(client, payload, channel_id, slack_user_id, level, louder)
     except Exception:
         logger.exception("Error handling a button on one of Aurora's unasked replies")
     return {"text": ""}

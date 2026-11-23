@@ -6,8 +6,11 @@ what it would say to the people in the thread. The tool only works from inside
 the session that was started for that report, so no other conversation can
 close a report, open an incident or get something posted through it.
 
-It does not post. Whether the reply reaches the channel is decided from the
-channel's level (services/detection/chat_voice.py).
+It does not post, and it does not take the look's word. A problem is confirmed
+only by a look that ran something, and a reply is kept only if every statement
+in it is shown by what the look's commands returned
+(services/detection/chat_proof.py). Whether a kept reply reaches the channel is
+then decided from the channel's level (services/detection/chat_voice.py).
 """
 
 import json
@@ -15,7 +18,7 @@ import logging
 
 from pydantic import BaseModel, Field
 
-from services.detection import chat_intake_enabled, chat_signals, chat_voice
+from services.detection import chat_intake_enabled, chat_proof, chat_signals, chat_voice
 from services.detection.chat_reader import KIND_QUESTION, clean_asset, clean_claim
 from utils.validation import is_valid_uuid
 from utils.auth.stateless_auth import set_rls_context
@@ -23,7 +26,11 @@ from utils.db.connection_pool import db_pool
 
 logger = logging.getLogger(__name__)
 
+_LOG = "[DetectionReportTool]"
 _SUMMARY_MAX_CHARS = 1500
+# How many times a look may be sent back to say less. After that its reply is dropped.
+_REPLY_CHECKS = 2
+_WITHHELD = "\n(Aurora wrote a reply and did not post it: not everything in it was shown by what it looked at.)"
 
 
 class ConcludeChatReportArgs(BaseModel):
@@ -88,6 +95,43 @@ def _record(cursor, org_id: str, user_id: str, session_id: str, finding: dict):
     return report, chat_signals.STATUS_CONFIRMED, named
 
 
+_NOT_THIS_SESSION = "This session is not investigating a report with that id."
+
+
+def _hold_to_evidence(user_id: str, org_id: str, session_id: str, finding: dict) -> str | None:
+    """Hold the finding against what this session's commands returned.
+
+    Returns an error for the look to act on, or None when the finding may be
+    recorded. A reply that is not fully shown is sent back to be cut down, and
+    dropped from *finding* once the look has had its chances.
+    """
+    seen = chat_proof.evidence(user_id, org_id, session_id)
+    if finding["real"] and not seen:
+        return _error(
+            "You have not run anything that returned a result, so nothing confirms this. Look at "
+            "the system with your read-only tools, then call conclude_chat_report again."
+        )
+    if not finding["reply"]:
+        return None
+    missing = chat_proof.unsupported(finding["reply"], seen, user_id)
+    if not missing:
+        return None
+    with db_pool.get_admin_connection() as conn, conn.cursor() as cursor:
+        set_rls_context(cursor, conn, user_id, org_id=org_id, log_prefix=_LOG)
+        checks = chat_signals.count_reply_check(cursor, finding["report_id"])
+        conn.commit()
+    if checks < _REPLY_CHECKS:
+        return json.dumps({
+            "error": "The reply was not posted. These statements in it are not shown by the output "
+                     "of the commands you ran. Call conclude_chat_report again with a reply that "
+                     "states only what that output shows, or with an empty reply.",
+            "not_shown": missing,
+        })
+    finding["reply"] = ""
+    finding["summary"] = (finding["summary"] + _WITHHELD)[:_SUMMARY_MAX_CHARS + len(_WITHHELD)]
+    return None
+
+
 def conclude_chat_report(report_id: str, real: bool, summary: str, reply: str = "", same_as: str = "",
                          asset: str = "", title: str = "", severity: str = "medium",
                          user_id: str | None = None, session_id: str | None = None, **_kwargs) -> str:
@@ -104,13 +148,20 @@ def conclude_chat_report(report_id: str, real: bool, summary: str, reply: str = 
 
     try:
         with db_pool.get_admin_connection() as conn, conn.cursor() as cursor:
-            org_id = set_rls_context(cursor, conn, user_id, log_prefix="[DetectionReportTool]")
+            org_id = set_rls_context(cursor, conn, user_id, log_prefix=_LOG)
             if not org_id:
                 return _error("No organization context available.")
+            if chat_signals.report_under_verification(cursor, org_id, report_id, session_id) is None:
+                return _error(_NOT_THIS_SESSION)
+        sent_back = _hold_to_evidence(user_id, org_id, session_id, finding)
+        if sent_back:
+            return sent_back
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cursor:
+            set_rls_context(cursor, conn, user_id, org_id=org_id, log_prefix=_LOG)
             report, status, named = _record(cursor, org_id, user_id, session_id, finding)
             if report is None:
                 conn.rollback()
-                return _error("This session is not investigating a report with that id.")
+                return _error(_NOT_THIS_SESSION)
             conn.commit()
         if status != chat_signals.STATUS_CONFIRMED:
             return _said(user_id, org_id, report_id, {"status": status})
@@ -124,7 +175,7 @@ def conclude_chat_report(report_id: str, real: bool, summary: str, reply: str = 
                 "note": "The incident could not be opened right now. Aurora will try again shortly.",
             })
         with db_pool.get_admin_connection() as conn, conn.cursor() as cursor:
-            set_rls_context(cursor, conn, user_id, org_id=org_id, log_prefix="[DetectionReportTool]")
+            set_rls_context(cursor, conn, user_id, org_id=org_id, log_prefix=_LOG)
             cursor.execute(
                 "UPDATE detection_chat_signals SET incident_id = %s WHERE id = %s",
                 (incident_id, report_id),

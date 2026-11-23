@@ -1745,7 +1745,7 @@ def initialize_tables():
                         reply_ts VARCHAR(64),
                         replied_at TIMESTAMPTZ,
                         related_to UUID,
-                        votes JSONB NOT NULL DEFAULT '{}'::jsonb,
+                        reply_checks INTEGER NOT NULL DEFAULT 0,
                         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                     );
@@ -1757,16 +1757,15 @@ def initialize_tables():
                         ON detection_chat_signals(org_id, status, said_at);
                 """,
                 # One row per channel Aurora reads or has been given a level for:
-                # the level someone chose (NULL = the company's), how far it has
-                # been read, whether a message just arrived, and when Aurora first
-                # spoke there unasked. last_ts is NULL until the channel's first turn.
+                # the level its line in the Slack memory gives it (NULL = the
+                # slider's), how far it has been read, and whether a message just
+                # arrived. last_ts is NULL until the channel's first turn.
                 "detection_chat_cursors": """
                     CREATE TABLE IF NOT EXISTS detection_chat_cursors (
                         org_id VARCHAR(255) NOT NULL,
                         channel_id VARCHAR(64) NOT NULL,
                         last_ts VARCHAR(64),
                         level VARCHAR(8),
-                        introduced_at TIMESTAMPTZ,
                         pending_since TIMESTAMPTZ,
                         failed_attempts INTEGER NOT NULL DEFAULT 0,
                         claimed_at TIMESTAMPTZ,
@@ -2079,13 +2078,12 @@ def initialize_tables():
                     ADD COLUMN IF NOT EXISTS reply_ts VARCHAR(64),
                     ADD COLUMN IF NOT EXISTS replied_at TIMESTAMPTZ,
                     ADD COLUMN IF NOT EXISTS related_to UUID,
-                    ADD COLUMN IF NOT EXISTS votes JSONB NOT NULL DEFAULT '{}'::jsonb;
+                    ADD COLUMN IF NOT EXISTS reply_checks INTEGER NOT NULL DEFAULT 0;
                     ALTER TABLE detection_chat_cursors
                     ALTER COLUMN last_ts DROP NOT NULL,
                     ALTER COLUMN updated_at DROP NOT NULL,
                     ALTER COLUMN updated_at DROP DEFAULT,
                     ADD COLUMN IF NOT EXISTS level VARCHAR(8),
-                    ADD COLUMN IF NOT EXISTS introduced_at TIMESTAMPTZ,
                     ADD COLUMN IF NOT EXISTS pending_since TIMESTAMPTZ,
                     ADD COLUMN IF NOT EXISTS failed_attempts INTEGER NOT NULL DEFAULT 0,
                     ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ;

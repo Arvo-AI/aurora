@@ -1,14 +1,17 @@
 """How much Aurora does in each chat channel, and what it keeps about what it read.
 
-Every channel has a level, and the level is the whole configuration:
+Every channel has a level:
 
     off     Aurora does not read the channel.
     listen  Aurora reads it and looks into problems, and never posts there.
     sure    Aurora also replies in the thread, only once it has confirmed a problem.
     free    Aurora also answers questions and says what it checked when it found nothing.
 
-A channel nobody has set uses the company's level. A private channel is off
-until someone sets it.
+The level comes from two places and nowhere else. The slider in Settings is the
+org's level: off until an admin moves it, and it applies to every public
+channel. A channel is set apart by telling Aurora, which keeps a line for it in
+its Slack memory (services/detection/chat_memory.py). A private channel is off
+until such a line names it. With the slider at off, nothing is read at all.
 
 What Aurora notices is a report: a person saying something is wrong, or asking
 something. It is never acted on as it stands. It is handed to a read-only look
@@ -25,8 +28,6 @@ the Checks page:
 
 What is stored is the one-line claim the model read and what Aurora replied,
 never the messages or who wrote them, and it is deleted after RETENTION_DAYS.
-The one thing kept about a person is the Slack id of whoever pressed Helpful
-or Not useful on a reply, so that a second press replaces the first.
 
 A report counts for nothing in a check's record. A check is credited by
 incidents; a report reaches the record only by becoming one.
@@ -52,7 +53,7 @@ LEVEL_SURE = "sure"
 LEVEL_FREE = "free"
 # Quietest first. Each level does what the one before it does, and more.
 LEVELS = (LEVEL_OFF, LEVEL_LISTEN, LEVEL_SURE, LEVEL_FREE)
-# The company's level, kept as an org preference. Off until an admin chooses.
+# The slider: the org's level, kept as an org preference. Off until an admin moves it.
 COMPANY_LEVEL_KEY = "slack_proactive_level"
 # Aurora's unasked replies in one channel in a day. Past this it stays quiet there.
 MAX_REPLIES_PER_CHANNEL_PER_DAY = 8
@@ -107,7 +108,8 @@ def known_assets(cursor, org_id: str) -> List[str]:
 # ---- levels ---------------------------------------------------------------
 
 def company_level(org_id: str) -> str:
-    """The level of channels nobody has set. Off when unset or unreadable."""
+    """Where the org's slider is: the level of every public channel that has no line of its
+    own in the Slack memory. Off when unset or unreadable."""
     from utils.auth.stateless_auth import get_org_preference
 
     value = get_org_preference(org_id, COMPANY_LEVEL_KEY, default=LEVEL_OFF)
@@ -115,7 +117,7 @@ def company_level(org_id: str) -> str:
 
 
 def set_company_level(org_id: str, level: str) -> bool:
-    """Store the company's level. False when it did not take."""
+    """Store where the slider is. False when it did not take."""
     from utils.auth.stateless_auth import store_org_preference
 
     store_org_preference(org_id, COMPANY_LEVEL_KEY, level)
@@ -130,11 +132,12 @@ def speaks(level: str, kind: str, real: bool) -> bool:
 
 
 # The channels of this workspace Aurora is in, one row each, with the level
-# that applies. Parameters: org_id, team_id, org_id, company level.
+# that applies. Parameters: slider, slider, org_id, team_id, org_id.
 _CHANNELS = """
     SELECT s.channel_id, s.name, s.is_private, c.level AS chosen,
-           COALESCE(c.level, CASE WHEN s.is_private THEN 'off' ELSE %s END) AS level,
-           c.last_ts, c.updated_at, c.introduced_at
+           CASE WHEN %s = 'off' THEN 'off'
+                ELSE COALESCE(c.level, CASE WHEN s.is_private THEN 'off' ELSE %s END) END AS level,
+           c.last_ts, c.updated_at
     FROM (
         SELECT channel_id, MAX(channel_name) AS name, BOOL_OR(COALESCE(is_private, FALSE)) AS is_private
         FROM slack_channels
@@ -147,37 +150,20 @@ _CHANNELS = """
 
 
 def _channel_params(org_id: str, team_id: Optional[str], company: str) -> tuple:
-    return (company, org_id, team_id, org_id)
+    return (company, company, org_id, team_id, org_id)
 
 
 def channel_level(cursor, org_id: str, team_id: Optional[str], channel_id: str, company: str) -> Optional[Dict[str, Any]]:
-    """One channel as {level, name, is_private, introduced}, or None if Aurora is not in it."""
+    """One channel as {level, name, is_private}, or None if Aurora is not in it."""
     cursor.execute(
-        "SELECT level, name, is_private, introduced_at IS NOT NULL FROM (" + _CHANNELS + ") ch "
+        "SELECT level, name, is_private FROM (" + _CHANNELS + ") ch "
         "WHERE channel_id = %s",
         _channel_params(org_id, team_id, company) + (channel_id,),
     )
     row = cursor.fetchone()
     if row is None:
         return None
-    return {"level": row[0], "name": row[1] or channel_id, "is_private": row[2], "introduced": row[3]}
-
-
-def set_channel_level(cursor, org_id: str, channel_id: str, level: Optional[str]) -> bool:
-    """Set one channel's level; None puts it back on the company's. False if Aurora is not in it."""
-    cursor.execute(
-        "SELECT 1 FROM slack_channels WHERE org_id = %s AND provider = 'slack' AND channel_id = %s "
-        "AND is_member LIMIT 1",
-        (org_id, channel_id),
-    )
-    if cursor.fetchone() is None:
-        return False
-    cursor.execute(
-        """INSERT INTO detection_chat_cursors (org_id, channel_id, level) VALUES (%s, %s, %s)
-           ON CONFLICT (org_id, channel_id) DO UPDATE SET level = EXCLUDED.level""",
-        (org_id, channel_id, level),
-    )
-    return True
+    return {"level": row[0], "name": row[1] or channel_id, "is_private": row[2]}
 
 
 def list_channels(cursor, org_id: str, team_id: Optional[str], company: str) -> List[Dict[str, Any]]:
@@ -513,19 +499,23 @@ def record_reply(cursor, report_id: str, reply_ts: str) -> None:
     )
 
 
-def release_reply(cursor, org_id: str, report_id: str, was_introduction: bool) -> None:
-    """The post did not go out: the reply was not made, and neither was the introduction."""
+def release_reply(cursor, report_id: str) -> None:
+    """The post did not go out: the reply was not made."""
     cursor.execute(
-        "UPDATE detection_chat_signals SET replied_at = NULL WHERE id = %s AND reply_ts IS NULL "
-        "RETURNING channel_id",
+        "UPDATE detection_chat_signals SET replied_at = NULL WHERE id = %s AND reply_ts IS NULL",
+        (report_id,),
+    )
+
+
+def count_reply_check(cursor, report_id: str) -> int:
+    """One more reply for this report failed its evidence check. Returns how many have."""
+    cursor.execute(
+        "UPDATE detection_chat_signals SET reply_checks = reply_checks + 1 WHERE id = %s "
+        "RETURNING reply_checks",
         (report_id,),
     )
     row = cursor.fetchone()
-    if row and was_introduction:
-        cursor.execute(
-            "UPDATE detection_chat_cursors SET introduced_at = NULL WHERE org_id = %s AND channel_id = %s",
-            (org_id, row[0]),
-        )
+    return row[0] if row else 0
 
 
 def claim_pointer(cursor, org_id: str, other_id: str, report_id: str, within_hours: int) -> bool:
@@ -535,28 +525,6 @@ def claim_pointer(cursor, org_id: str, other_id: str, report_id: str, within_hou
            WHERE id = %s AND org_id = %s AND related_to IS NULL
              AND said_at >= NOW() - %s * INTERVAL '1 hour'""",
         (report_id, other_id, org_id, within_hours),
-    )
-    return cursor.rowcount > 0
-
-
-def introduce(cursor, org_id: str, channel_id: str) -> bool:
-    """True the first time Aurora speaks unasked in a channel, and only that time."""
-    cursor.execute(
-        "UPDATE detection_chat_cursors SET introduced_at = NOW() "
-        "WHERE org_id = %s AND channel_id = %s AND introduced_at IS NULL",
-        (org_id, channel_id),
-    )
-    return cursor.rowcount > 0
-
-
-def vote(cursor, org_id: str, report_id: str, voter: str, helpful: bool) -> bool:
-    """One person's verdict on a reply. A second click by the same person replaces the first."""
-    import json
-
-    cursor.execute(
-        """UPDATE detection_chat_signals SET votes = votes || %s::jsonb
-           WHERE id = %s AND org_id = %s AND reply_ts IS NOT NULL""",
-        (json.dumps({voter: "up" if helpful else "down"}), report_id, org_id),
     )
     return cursor.rowcount > 0
 
@@ -595,7 +563,7 @@ def list_reports(cursor, org_id: str, limit: int = 50) -> List[Dict[str, Any]]:
     cursor.execute(
         """SELECT r.id, r.channel_id, MAX(s.channel_name), r.said_at, r.asset, r.claim, r.status,
                   r.status_detail, r.incident_id, r.message_count, r.kind,
-                  CASE WHEN r.reply_ts IS NOT NULL THEN r.reply END, r.votes
+                  CASE WHEN r.reply_ts IS NOT NULL THEN r.reply END
            FROM detection_chat_signals r
            LEFT JOIN slack_channels s ON s.org_id = r.org_id AND s.channel_id = r.channel_id
            WHERE r.org_id = %s
@@ -607,9 +575,7 @@ def list_reports(cursor, org_id: str, limit: int = 50) -> List[Dict[str, Any]]:
         {"id": str(r[0]), "channel_id": r[1], "channel": r[2] or r[1], "said_at": r[3].isoformat(),
          "asset": r[4], "claim": r[5], "status": r[6], "status_detail": r[7],
          "incident_id": str(r[8]) if r[8] else None, "messages": r[9], "kind": r[10],
-         "reply": r[11],
-         "helpful": sum(1 for v in (r[12] or {}).values() if v == "up"),
-         "unhelpful": sum(1 for v in (r[12] or {}).values() if v == "down")}
+         "reply": r[11]}
         for r in cursor.fetchall()
     ]
 

@@ -1,16 +1,19 @@
 """What Aurora says in a channel without being asked.
 
-A look that ends (services/detection/chat_intake.py) may leave a reply. Whether
-it is posted is decided here, from the channel's level and nothing else:
+A look that ends (services/detection/chat_intake.py) may leave a reply, and one
+that reaches here has already been held against what the look ran
+(services/detection/chat_proof.py). Whether it is posted is decided here, from
+the channel's level and nothing else:
 
     listen  never
     sure    only for a problem Aurora confirmed
     free    whenever the look left something to say
 
 Every reply goes in the thread of the message it is about, says that nobody
-asked for it, and carries the dial: anyone in the channel can turn Aurora down,
-or off, from the message itself. The first reply in a channel also explains
-what Aurora is doing there.
+asked for it, and asks whether it was too much or not enough. The answer is
+given the way everything else is told to Aurora: by saying so, or with one of
+the two buttons under the reply, which move that channel one step and write it
+to Aurora's Slack memory (services/detection/chat_memory.py).
 
 When a look finds that two public channels are on the same thing, each thread
 gets a pointer to the other. A private channel is never pointed at or from.
@@ -24,7 +27,7 @@ import os
 import re
 from typing import Any, Dict, List, Optional
 
-from services.detection import chat_signals
+from services.detection import chat_memory, chat_signals
 from services.detection.chat_signals import (
     LEVEL_FREE, LEVEL_LISTEN, LEVEL_OFF, LEVEL_SURE, STATUS_CONFIRMED,
 )
@@ -37,10 +40,8 @@ REPLY_MAX_CHARS = 1200
 # A pointer in a thread that has been quiet longer than this helps nobody.
 POINTER_WITHIN_HOURS = 6
 
-ACTION_HELPFUL = "aurora_speak_helpful"
-ACTION_UNHELPFUL = "aurora_speak_unhelpful"
-ACTION_SETTINGS = "aurora_speak_settings"
-ACTION_LEVEL_PREFIX = "aurora_speak_level_"
+ACTION_QUIETER = "aurora_speak_quieter"
+ACTION_LOUDER = "aurora_speak_louder"
 
 LEVEL_NAMES = {
     LEVEL_OFF: "Off",
@@ -54,14 +55,6 @@ LEVEL_MEANS = {
     LEVEL_LISTEN: "I read this channel and look into problems, and I never post here.",
     LEVEL_SURE: "I reply here only once I have confirmed that something is broken.",
     LEVEL_FREE: "I reply here when I can help: problems, questions, and what I checked.",
-}
-# Loudest first: the order of the buttons.
-_BUTTON_ORDER = (LEVEL_FREE, LEVEL_SURE, LEVEL_LISTEN, LEVEL_OFF)
-_BUTTON_LABELS = {
-    LEVEL_FREE: "Speak freely",
-    LEVEL_SURE: "Only when sure",
-    LEVEL_LISTEN: "Just listen",
-    LEVEL_OFF: "Stay out",
 }
 
 _MENTION = re.compile(r"<[!@][^>]*>")
@@ -90,45 +83,13 @@ def _context(text: str) -> Dict[str, Any]:
     return {"type": "context", "elements": [{"type": "mrkdwn", "text": text}]}
 
 
-def level_buttons(current: str) -> Dict[str, Any]:
-    """The dial, as buttons. The level in force is the highlighted one."""
-    elements = []
-    for level in _BUTTON_ORDER:
-        button = {
-            "type": "button",
-            "action_id": ACTION_LEVEL_PREFIX + level,
-            "value": level,
-            "text": {"type": "plain_text", "text": _BUTTON_LABELS[level]},
-        }
-        if level == current:
-            button["style"] = "primary"
-        elements.append(button)
-    return {"type": "actions", "block_id": "aurora_speak_dial", "elements": elements}
+def stepped(level: str, louder: bool) -> Optional[str]:
+    """The level one step from *level*, or None when there is no further step that way."""
+    position = chat_signals.LEVELS.index(level) + (1 if louder else -1)
+    return chat_signals.LEVELS[position] if 0 <= position < len(chat_signals.LEVELS) else None
 
 
-def settings_blocks(current: str, lead: str = "") -> List[Dict[str, Any]]:
-    """The dial with what each stop means. Shown only to the person who asked for it."""
-    lines = "\n".join(
-        "*%s*: %s" % (_BUTTON_LABELS[level], LEVEL_MEANS[level]) for level in _BUTTON_ORDER
-    )
-    head = (lead + "\n\n" if lead else "") + "How much I do in this channel. It applies to everyone here."
-    return [_mrkdwn(head), _mrkdwn(lines), level_buttons(current)]
-
-
-def introduction_blocks(level: str) -> List[Dict[str, Any]]:
-    return [
-        {"type": "divider"},
-        _mrkdwn(
-            "*This is the first time I've spoken up here without being asked.* "
-            "I read this channel and reply in a thread when I can help. "
-            "If that is too much, or not wanted here, anyone in the channel can change it:"
-        ),
-        level_buttons(level),
-    ]
-
-
-def reply_blocks(report_id: str, text: str, level: str, incident_url: Optional[str] = None,
-                 pointer: str = "", first_time: bool = False) -> List[Dict[str, Any]]:
+def reply_blocks(text: str, incident_url: Optional[str] = None, pointer: str = "") -> List[Dict[str, Any]]:
     blocks = []
     if text:
         blocks.append(_mrkdwn(text))
@@ -137,43 +98,30 @@ def reply_blocks(report_id: str, text: str, level: str, incident_url: Optional[s
     if incident_url:
         blocks.append(_mrkdwn("I opened an incident and I am investigating: <%s|follow it in Aurora>." % incident_url))
     blocks.append(_context(
-        "Nobody asked me. I am set to *%s* in this channel." % LEVEL_NAMES.get(level, level)
+        "Nobody asked me: I noticed this while reading the channel. Too much, or not enough? "
+        "Use a button, or tell me how you want it, like `@Aurora only speak up here for outages`."
     ))
     blocks.append({
         "type": "actions",
         "block_id": "aurora_speak_feedback",
         "elements": [
-            {"type": "button", "action_id": ACTION_HELPFUL, "value": report_id,
-             "text": {"type": "plain_text", "text": "Helpful"}},
-            {"type": "button", "action_id": ACTION_UNHELPFUL, "value": report_id,
-             "text": {"type": "plain_text", "text": "Not useful"}},
-            {"type": "button", "action_id": ACTION_SETTINGS, "value": report_id,
-             "text": {"type": "plain_text", "text": "Change how much I speak"}},
+            {"type": "button", "action_id": ACTION_QUIETER, "value": "quieter",
+             "text": {"type": "plain_text", "text": "Be quieter here"}},
+            {"type": "button", "action_id": ACTION_LOUDER, "value": "louder",
+             "text": {"type": "plain_text", "text": "Speak up more here"}},
         ],
     })
-    if first_time:
-        blocks.extend(introduction_blocks(level))
     return blocks
 
 
-def level_set_note(level: str, slack_user_id: str) -> str:
-    note = "<@%s> set me to *%s* in this channel. %s" % (
-        slack_user_id, LEVEL_NAMES[level], LEVEL_MEANS[level],
+def level_set_note(level: str, slack_user_id: str, louder: bool) -> str:
+    note = "<@%s> asked me to %s here. I am now set to *%s* in this channel. %s" % (
+        slack_user_id, "speak up more" if louder else "be quieter", LEVEL_NAMES[level], LEVEL_MEANS[level],
     )
     if level in (LEVEL_OFF, LEVEL_LISTEN):
-        # No message of mine will carry the dial here again.
-        note += " To change it later, open Checks in Aurora."
+        # No message of mine will carry the buttons here again.
+        note += " To change it later, mention me and say so."
     return note
-
-
-def without_introduction(blocks: List[Dict[str, Any]], note: str) -> List[Dict[str, Any]]:
-    """A reply's blocks once someone has answered its introduction: the dial is replaced by who chose."""
-    kept = []
-    for block in blocks or []:
-        if block.get("type") == "divider":
-            break
-        kept.append(block)
-    return kept + [_context(note)]
 
 
 # ---- posting --------------------------------------------------------------
@@ -202,6 +150,8 @@ def _plan(cur, org_id: str, team_id: str, company: str, report_id: str) -> Optio
     report = chat_signals.to_say(cur, org_id, report_id)
     if report is None:
         return None
+    # What the team last told Aurora about its channels applies to this reply too.
+    chat_memory.sync(cur, org_id)
     channel = chat_signals.channel_level(cur, org_id, team_id, report["channel_id"], company)
     if channel is None:
         return None
@@ -223,19 +173,13 @@ def _plan(cur, org_id: str, team_id: str, company: str, report_id: str) -> Optio
         and chat_signals.replies_left_today(cur, org_id, report["channel_id"]) > 0
     )
     if may_speak and chat_signals.claim_reply(cur, report_id):
-        plan["here"] = {
-            "text": text, "pointer": pointer,
-            "first_time": chat_signals.introduce(cur, org_id, report["channel_id"]),
-        }
+        plan["here"] = {"text": text, "pointer": pointer}
     return plan
 
 
 def _post_here(client, plan: Dict[str, Any]) -> Optional[str]:
-    report, here, level = plan["report"], plan["here"], plan["channel"]["level"]
-    blocks = reply_blocks(
-        report["id"], here["text"], level, _incident_url(report["incident_id"]),
-        here["pointer"], here["first_time"],
-    )
+    report, here = plan["report"], plan["here"]
+    blocks = reply_blocks(here["text"], _incident_url(report["incident_id"]), here["pointer"])
     sent = client.send_message(
         channel=report["channel_id"], text=here["text"] or here["pointer"],
         thread_ts=report["thread_ts"], blocks=blocks,
@@ -255,14 +199,13 @@ def _post_other_side(client, cur, org_id: str, team_id: str, company: str, plan:
         return
     if not chat_signals.claim_pointer(cur, org_id, other["id"], report["id"], POINTER_WITHIN_HOURS):
         return
-    first_time = chat_signals.introduce(cur, org_id, other["channel_id"])
     cur.connection.commit()
     pointer = "<#%s> is on what looks like the same thing: <%s|open that thread>." % (
         report["channel_id"], thread_link(report["channel_id"], report["thread_ts"]),
     )
     client.send_message(
         channel=other["channel_id"], text=pointer, thread_ts=other["thread_ts"],
-        blocks=reply_blocks(other["id"], "", there["level"], None, pointer, first_time),
+        blocks=reply_blocks("", None, pointer),
     )
 
 
@@ -281,7 +224,7 @@ def _reply_here(client, user_id: str, org_id: str, report_id: str, plan: Dict[st
         if posted_ts:
             chat_signals.record_reply(cur, report_id, posted_ts)
         else:
-            chat_signals.release_reply(cur, org_id, report_id, plan["here"]["first_time"])
+            chat_signals.release_reply(cur, report_id)
         conn.commit()
     return bool(posted_ts)
 

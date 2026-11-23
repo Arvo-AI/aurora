@@ -22,8 +22,8 @@ def chat_intake_enabled() -> bool:
 
     DETECTION_CHAT_INTAKE_ENABLED=false is the install's kill switch, and it is
     off with the feature. On does not mean anything is read: each org starts
-    with its company level off, and reads nothing until one of its admins
-    chooses a level (services/detection/chat_signals.py).
+    with its Dynamic alerting slider at off, and reads nothing until one of its
+    admins moves it (services/detection/chat_signals.py).
     """
     return checks_enabled() and (
         (os.getenv("DETECTION_CHAT_INTAKE_ENABLED") or "true").strip().lower() != "false"

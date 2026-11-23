@@ -26,7 +26,7 @@ import time
 from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from celery_config import celery_app
-from services.detection import chat_intake_enabled, chat_reader, chat_signals
+from services.detection import chat_intake_enabled, chat_memory, chat_reader, chat_signals
 from services.detection.runner import _for_each_org, _org_cursor
 from utils.log_sanitizer import sanitize
 
@@ -105,6 +105,7 @@ def read_chat_for_org(user_id: str, org_id: str):
                 return
             if chat_signals.reads_left_today(cur, org_id) <= 0:
                 return
+            chat_memory.sync(cur, org_id)
             turns = chat_signals.claim_channels(cur, org_id, team_id, company, CHANNELS_PER_TURN)
             assets = chat_signals.known_assets(cur, org_id) if turns else []
             conn.commit()
@@ -265,8 +266,11 @@ is real, right now, using only your read-only tools.
 {checks}
 How to go about it:
 - Work out which system this is about. It may be one Aurora has never looked at.
-- Look at it directly: its current state, recent errors, recent changes. Do not take the claim's \
-word for what is wrong or why.
+- See whether Aurora already has it: an alert or an incident on that system, open or from the \
+last days. If one has a root cause analysis, read it. What it found is the most useful thing you \
+can bring to the thread, and you still check that the problem is there now.
+- Look at the system directly: its current state, recent errors, recent changes. Do not take the \
+claim's word for what is wrong or why.
 - Decide from what you saw, not from how the claim is worded.
 {related}
 When you are done, call conclude_chat_report exactly once, with report_id "{report_id}":
@@ -293,7 +297,14 @@ channel."""
 
 _REPLY_STYLE = """Write reply as a short message to the people in that thread: the finding first, \
 then what you looked at, in plain sentences. At most five lines. No greeting, no headings, no \
-mentions, no offer of more help. State only what you saw."""
+mentions, no offer of more help.
+The reply has to be right. Before it is posted, every statement in it is checked against the \
+output of the commands you ran in this session, by a reviewer who sees only that output. A reply \
+that says more than the output shows is not posted. So: only names, numbers and states you saw \
+returned; no cause unless the output shows the cause; no "probably", no "likely"; nothing taken \
+from the chat message itself. What comes from an earlier incident, say that it does.
+This team's own preferences for Slack are in your memory, under context/Slack. If they say not \
+to speak up about this kind of thing, or in that channel, leave reply empty."""
 
 # What the look is told about replying, by the channel's level.
 _REPLY_BY_LEVEL = {

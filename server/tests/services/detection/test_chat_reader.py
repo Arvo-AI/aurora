@@ -199,16 +199,69 @@ def test_a_reply_cannot_notify_anyone():
     assert clean_reply(None) == ""
 
 
-def test_answering_the_introduction_removes_its_dial_and_keeps_the_reply():
-    from services.detection.chat_voice import reply_blocks, without_introduction
+def test_a_channel_is_set_apart_by_a_line_in_the_slack_memory():
+    from services.detection.chat_memory import parse, with_level
 
-    blocks = reply_blocks("r1", "checkout is down", "free", first_time=True)
-    after = without_introduction(blocks, "set by someone")
-    dials = [b for b in after if b.get("block_id") == "aurora_speak_dial"]
-    assert dials == []
-    assert after[0]["text"]["text"] == "checkout is down"
-    assert any(b.get("block_id") == "aurora_speak_feedback" for b in after)
-    assert after[-1]["elements"][0]["text"] == "set by someone"
+    memory = "## Tone\n- Short.\n\n## Per-channel notes\n- #payments: listen\n"
+    # A line outside the section is a note, not a level.
+    assert parse(memory) == {}
+
+    memory = with_level(memory, "#Payments", "listen")
+    memory = with_level(memory, "sec-incident", "off")
+    assert parse(memory) == {"payments": "listen", "sec-incident": "off"}
+    assert memory.startswith("## Tone\n- Short.\n\n## Per-channel notes\n- #payments: listen\n")
+
+
+def test_changing_a_channel_replaces_its_line_and_leaves_the_rest_of_the_memory():
+    from services.detection.chat_memory import parse, with_level
+
+    memory = with_level("## Tone\n- Short.\n", "payments", "free")
+    memory += "\n## Message format\n- One line.\n"
+    memory = with_level(with_level(memory, "payments", "sure"), "network", "listen")
+
+    assert parse(memory) == {"payments": "sure", "network": "listen"}
+    assert memory.count("#payments:") == 1
+    assert memory.rstrip().endswith("## Message format\n- One line.")
+    assert parse(with_level(memory, "payments", None)) == {"network": "listen"}
+
+
+def test_a_line_a_person_wrote_by_hand_is_read_and_a_level_that_does_not_exist_is_not():
+    from services.detection.chat_memory import parse
+
+    memory = (
+        "## Dynamic alerting\nSome words about it.\n* `#Deploys`: `OFF`\n- #payments: loud\n"
+        "- payments-eu : free\n## Tone\n- #tone: free\n"
+    )
+    assert parse(memory) == {"deploys": "off", "payments-eu": "free"}
+
+
+def test_a_step_past_either_end_of_the_levels_is_no_step():
+    from services.detection.chat_voice import stepped
+
+    assert stepped("free", louder=False) == "sure"
+    assert stepped("listen", louder=False) == "off"
+    assert stepped("listen", louder=True) == "sure"
+    assert stepped("free", louder=True) is None
+    assert stepped("off", louder=False) is None
+
+
+def test_only_a_readable_answer_with_nothing_unsupported_lets_a_reply_through():
+    from services.detection.chat_proof import read_verdict
+
+    assert read_verdict('{"unsupported": [], "supported": true}') == []
+    assert read_verdict('Here: {"unsupported": ["the deploy caused it"], "supported": false}') == [
+        "the deploy caused it"]
+    # Says supported while naming a statement: the statement wins.
+    assert read_verdict('{"unsupported": ["0 of 3 pods"], "supported": true}') == ["0 of 3 pods"]
+    for unusable in ("", "looks fine to me", '{"supported": true}', '{"unsupported": [], "supported": "yes"}',
+                     '{"unsupported": []}', "[]", '{"unsupported": "none", "supported": true}'):
+        assert read_verdict(unusable), unusable
+
+
+def test_a_reply_from_a_look_that_ran_nothing_is_not_backed():
+    from services.detection.chat_proof import unsupported
+
+    assert unsupported("checkout is down", [], "user-1")
 
 
 def test_what_is_said_to_aurora_is_not_read_as_a_report():

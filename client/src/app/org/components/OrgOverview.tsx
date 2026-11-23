@@ -6,6 +6,7 @@ import { getEnv } from "@/lib/env";
 import { Button } from "@/components/ui/button";
 import type { OrgMember } from "@/components/OrgSettings";
 import UpgradeModal from "./UpgradeModal";
+import DynamicAlerting from "@/components/DynamicAlerting";
 
 interface OrgOverviewProps {
   org: {
@@ -96,6 +97,8 @@ export default function OrgOverview({ org, planTier }: Readonly<OrgOverviewProps
           })}
         </div>
       </section>
+
+      <DynamicAlerting />
 
       {/* Plan — only shown when a paywall is active for this deployment */}
       {showPaywall && (
