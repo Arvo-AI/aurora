@@ -256,7 +256,7 @@ def answer(cursor, org_id: str, fire_id: str, action_id: str, may_stop: bool) ->
     from services.detection.store import retire_check_by_id
 
     cursor.execute(
-        """SELECT f.check_id, f.outcome, c.name, c.state
+        """SELECT f.check_id, f.outcome, c.name
            FROM detection_check_fires f JOIN detection_checks c ON c.id = f.check_id
            WHERE f.id = %s AND f.org_id = %s AND f.nudged_at IS NOT NULL FOR UPDATE OF f""",
         (fire_id, org_id),
@@ -264,7 +264,7 @@ def answer(cursor, org_id: str, fire_id: str, action_id: str, may_stop: bool) ->
     row = cursor.fetchone()
     if row is None:
         return "missing", ""
-    check_id, outcome, name, state = str(row[0]), row[1], row[2], row[3]
+    check_id, outcome, name = str(row[0]), row[1], row[2]
     if action_id == ACTION_STOP_CHECK:
         if not may_stop:
             return "not_allowed", name

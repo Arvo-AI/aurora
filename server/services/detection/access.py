@@ -11,7 +11,6 @@ import logging
 from typing import List, Optional, Tuple
 
 from services.detection import STATE_RETIRED, STATUS_ERROR
-from utils.log_sanitizer import sanitize
 
 logger = logging.getLogger(__name__)
 
