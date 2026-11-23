@@ -22,9 +22,13 @@ export function useDetectionEnabled(): boolean {
   const [enabled, setEnabled] = useState(false);
   useEffect(() => {
     let cancelled = false;
-    load().then((value) => {
-      if (!cancelled) setEnabled(value);
-    });
+    load()
+      .then((value) => {
+        if (!cancelled) setEnabled(value);
+      })
+      .catch(() => {
+        // load() resolves false on failure; nothing to do if it ever rejects.
+      });
     return () => {
       cancelled = true;
     };

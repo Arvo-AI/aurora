@@ -255,50 +255,58 @@ def save_check(
     """
     row = _lock_by_name(cursor, org_id, definition["name"])
     if row is None:
-        cursor.execute(
-            "SELECT COUNT(*) FROM detection_checks WHERE org_id = %s AND state <> %s",
-            (org_id, STATE_RETIRED),
-        )
-        if cursor.fetchone()[0] >= MAX_ACTIVE_CHECKS_PER_ORG:
-            raise TooManyChecks()
-        values = [definition[f] for f in DEFINITION_FIELDS]
-        values[DEFINITION_FIELDS.index("assertion")] = json.dumps(definition["assertion"])
-        cursor.execute(
-            """INSERT INTO detection_checks
-               (org_id, created_by, name, origin, """ + ", ".join(DEFINITION_FIELDS) + """)
-               VALUES (""" + ", ".join(["%s"] * (4 + len(DEFINITION_FIELDS))) + """)
-               ON CONFLICT (org_id, name) DO NOTHING
-               RETURNING id""",
-            (org_id, user_id, definition["name"], json.dumps(origin), *values),
-        )
-        inserted = cursor.fetchone()
-        if inserted:
-            check_id = str(inserted[0])
+        check_id = _insert_new(cursor, org_id, user_id, definition, origin)
+        if check_id:
             insert_revision(cursor, check_id, org_id, user_id, 1, definition, reason, source)
-            if vouched_by:
-                vouch_check(cursor, org_id, check_id, vouched_by)
-            return check_id, 1, True
-        # Another session created this name between the lookup and the insert.
-        # Its row is committed now; apply the usual rules to it.
-        row = _lock_by_name(cursor, org_id, definition["name"])
-        if row is None:
-            raise RuntimeError("detection check vanished during save")
+            revision, changed = 1, True
+        else:
+            # Another session created this name between the lookup and the
+            # insert. Its row is committed now; apply the usual rules to it.
+            row = _lock_by_name(cursor, org_id, definition["name"])
+            if row is None:
+                raise RuntimeError("detection check vanished during save")
+    if row is not None:
+        check_id, revision, changed = _revise(cursor, org_id, user_id, row, definition, reason, source)
+    if vouched_by:
+        vouch_check(cursor, org_id, check_id, vouched_by)
+    return check_id, revision, changed
 
+
+def _insert_new(cursor, org_id: str, user_id: str, definition: Dict[str, Any],
+                origin: Dict[str, str]) -> Optional[str]:
+    """Insert a check under a new name. None when another session took the name first."""
+    cursor.execute(
+        "SELECT COUNT(*) FROM detection_checks WHERE org_id = %s AND state <> %s",
+        (org_id, STATE_RETIRED),
+    )
+    if cursor.fetchone()[0] >= MAX_ACTIVE_CHECKS_PER_ORG:
+        raise TooManyChecks()
+    values = [definition[f] for f in DEFINITION_FIELDS]
+    values[DEFINITION_FIELDS.index("assertion")] = json.dumps(definition["assertion"])
+    cursor.execute(
+        """INSERT INTO detection_checks
+           (org_id, created_by, name, origin, """ + ", ".join(DEFINITION_FIELDS) + """)
+           VALUES (""" + ", ".join(["%s"] * (4 + len(DEFINITION_FIELDS))) + """)
+           ON CONFLICT (org_id, name) DO NOTHING
+           RETURNING id""",
+        (org_id, user_id, definition["name"], json.dumps(origin), *values),
+    )
+    inserted = cursor.fetchone()
+    return str(inserted[0]) if inserted else None
+
+
+def _revise(cursor, org_id: str, user_id: str, row: Tuple, definition: Dict[str, Any],
+            reason: str, source: str) -> Tuple[str, int, bool]:
+    """Apply *definition* to the existing check in *row*: (check_id, revision, changed)."""
     check_id, revision, state = str(row[0]), row[1], row[2]
     if state == STATE_RETIRED:
         raise CheckRetired(row[3] or "")
-
     current = _definition_of(row[4:])
     if all(current[f] == definition[f] for f in DEFINITION_FIELDS):
-        if vouched_by:
-            vouch_check(cursor, org_id, check_id, vouched_by)
         return check_id, revision, False
-
     revision += 1
     set_definition(cursor, check_id, definition, revision, owner=user_id)
     insert_revision(cursor, check_id, org_id, user_id, revision, definition, reason, source)
-    if vouched_by:
-        vouch_check(cursor, org_id, check_id, vouched_by)
     return check_id, revision, True
 
 
@@ -412,10 +420,13 @@ _LIST_COLUMNS = (
 )
 
 
+_SELECT_LISTED = "SELECT " + ", ".join(_LIST_COLUMNS)
+
+
 def list_checks(cursor, org_id: str, include_retired: bool = False) -> List[Dict[str, Any]]:
     """Every check with its record, newest first."""
     cursor.execute(
-        "SELECT " + ", ".join(_LIST_COLUMNS) + """
+        _SELECT_LISTED + """
            FROM detection_checks
            WHERE org_id = %s AND (%s OR state <> %s)
            ORDER BY created_at DESC""",
@@ -463,7 +474,7 @@ def take_checks_for_review(cursor, org_id: str, limit: int = REVIEW_BATCH) -> Li
     reviewed every day.
     """
     cursor.execute(
-        "SELECT " + ", ".join(_LIST_COLUMNS) + """
+        _SELECT_LISTED + """
            FROM detection_checks
            WHERE org_id = %s AND review_due_at IS NOT NULL AND state <> %s
            ORDER BY review_due_at LIMIT %s FOR UPDATE SKIP LOCKED""",
@@ -625,27 +636,7 @@ def record_result(cursor, check_id: str, org_id: str, verdict: Verdict, duration
                        % (error_streak, verdict.detail[:200] or "no detail"))
     _release_claim(cursor, check_id, claim)
 
-    fire_id = None
-    if verdict.status == STATUS_PASS:
-        cursor.execute(
-            "UPDATE detection_check_fires SET cleared_at = NOW() "
-            "WHERE check_id = %s AND cleared_at IS NULL",
-            (check_id,),
-        )
-    elif verdict.status == STATUS_FAIL:
-        cursor.execute(
-            "SELECT 1 FROM detection_check_fires "
-            "WHERE check_id = %s AND revision = %s AND cleared_at IS NULL",
-            (check_id, revision),
-        )
-        if cursor.fetchone() is None:
-            cursor.execute(
-                """INSERT INTO detection_check_fires
-                   (check_id, org_id, revision, pattern, asset, observed)
-                   VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""",
-                (check_id, org_id, revision, pattern, asset, verdict.observed),
-            )
-            fire_id = str(cursor.fetchone()[0])
+    fire_id = _track_fire(cursor, check_id, org_id, revision, (pattern, asset), verdict)
 
     if not (verdict.status == STATUS_PASS and previous == STATUS_PASS):
         cursor.execute(
@@ -656,6 +647,38 @@ def record_result(cursor, check_id: str, org_id: str, verdict: Verdict, duration
              verdict.detail[:_DETAIL_MAX_CHARS], duration_ms),
         )
     return Recorded(state=state, fire_id=fire_id, consecutive_errors=consecutive_errors)
+
+
+def _track_fire(cursor, check_id: str, org_id: str, revision: int, labels: Tuple[str, str],
+                verdict: Verdict) -> Optional[str]:
+    """Clear the open fire on a pass, start one on a failure. Returns a new fire's id.
+
+    An error does neither: a check that cannot see has not recovered.
+    *labels* is the check's (pattern, asset), copied onto the fire.
+    """
+    if verdict.status == STATUS_PASS:
+        cursor.execute(
+            "UPDATE detection_check_fires SET cleared_at = NOW() "
+            "WHERE check_id = %s AND cleared_at IS NULL",
+            (check_id,),
+        )
+        return None
+    if verdict.status != STATUS_FAIL:
+        return None
+    cursor.execute(
+        "SELECT 1 FROM detection_check_fires "
+        "WHERE check_id = %s AND revision = %s AND cleared_at IS NULL",
+        (check_id, revision),
+    )
+    if cursor.fetchone() is not None:
+        return None
+    cursor.execute(
+        """INSERT INTO detection_check_fires
+           (check_id, org_id, revision, pattern, asset, observed)
+           VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""",
+        (check_id, org_id, revision, *labels, verdict.observed),
+    )
+    return str(cursor.fetchone()[0])
 
 
 def _release_claim(cursor, check_id: str, claim: Optional[str]) -> None:

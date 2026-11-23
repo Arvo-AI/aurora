@@ -297,45 +297,53 @@ def spend_attention():
         client, channel, installer = attention.slack_target(user_id)
         if client is None:
             return
-
-        for fire_id, posted_channel, ts, hours in cleared:
-            # Marked first, so a crash after sending cannot say it twice.
-            noted = attention.mark_clear_noted(cur, fire_id)
-            conn.commit()
-            if noted:
-                _sent, refused = _send(client, posted_channel, attention.cleared_message(hours), thread_ts=ts)
-                if refused:
-                    attention.unmark_clear_noted(cur, fire_id)
-                    conn.commit()
-
-        if not waiting or not attention.working_hours_now(client, installer):
-            # A thread reply notifies nobody and went out above. A new post waits
-            # for a weekday daytime; the failure is still a candidate then.
-            return
-        budget, spent = attention.channel_budget(cur, org_id, channel)
-        for candidate in waiting[:max(0, budget - spent)]:
-            # Claimed and committed before sending: two workers must not both post.
-            # The claim re-reads the budget under a lock; the slice above only
-            # avoids asking for more than could possibly be granted.
-            claimed = attention.claim(cur, org_id, candidate["fire_id"], channel)
-            conn.commit()
-            if not claimed:
-                continue
-            ts, refused = _send(
-                client, channel, attention.worth_a_look_message(candidate, budget),
-                blocks=attention.worth_a_look_blocks(candidate, budget),
-            )
-            if ts:
-                attention.record_post(cur, candidate["fire_id"], ts)
-            elif refused:
-                attention.release(cur, candidate["fire_id"])
-            else:
-                # Unknown: it may be in the channel. Kept, and marked so the
-                # stale-claim sweep does not hand it out a second time.
-                attention.record_post(cur, candidate["fire_id"], attention.TS_UNKNOWN)
-            conn.commit()
+        _note_cleared(cur, conn, client, cleared)
+        # A thread reply notifies nobody and went out above. A new post waits
+        # for a weekday daytime; the failure is still a candidate then.
+        if waiting and attention.working_hours_now(client, installer):
+            _post_worth_a_look(cur, conn, client, org_id, channel, waiting)
 
     _for_each_org(_spend, "spending attention")
+
+
+def _note_cleared(cur, conn, client, cleared) -> None:
+    """Reply in the thread of each post whose failure has since cleared."""
+    for fire_id, posted_channel, ts, hours in cleared:
+        # Marked first, so a crash after sending cannot say it twice.
+        noted = attention.mark_clear_noted(cur, fire_id)
+        conn.commit()
+        if not noted:
+            continue
+        _sent, refused = _send(client, posted_channel, attention.cleared_message(hours), thread_ts=ts)
+        if refused:
+            attention.unmark_clear_noted(cur, fire_id)
+            conn.commit()
+
+
+def _post_worth_a_look(cur, conn, client, org_id: str, channel: str, waiting) -> None:
+    """Post the strongest waiting failures, as far as the channel's budget goes."""
+    budget, spent = attention.channel_budget(cur, org_id, channel)
+    for candidate in waiting[:max(0, budget - spent)]:
+        # Claimed and committed before sending: two workers must not both post.
+        # The claim re-reads the budget under a lock; the slice above only
+        # avoids asking for more than could possibly be granted.
+        claimed = attention.claim(cur, org_id, candidate["fire_id"], channel)
+        conn.commit()
+        if not claimed:
+            continue
+        ts, refused = _send(
+            client, channel, attention.worth_a_look_message(candidate, budget),
+            blocks=attention.worth_a_look_blocks(candidate, budget),
+        )
+        if ts:
+            attention.record_post(cur, candidate["fire_id"], ts)
+        elif refused:
+            attention.release(cur, candidate["fire_id"])
+        else:
+            # Unknown: it may be in the channel. Kept, and marked so the
+            # stale-claim sweep does not hand it out a second time.
+            attention.record_post(cur, candidate["fire_id"], attention.TS_UNKNOWN)
+        conn.commit()
 
 
 def _send(client, channel: str, text: str, thread_ts: str | None = None,
