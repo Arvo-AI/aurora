@@ -67,6 +67,9 @@ const PULL = 0.07;
 const INSET = 18;
 const place = (at: number) => `calc(${INSET}px + (100% - ${INSET * 2}px) * ${at})`;
 
+// The end labels sit flush with the track; the ones between are centred on their stop.
+const EDGES: Record<number, string> = { 0: "left-0", [LAST]: "right-0" };
+
 const nearest = (at: number) => Math.min(LAST, Math.max(0, Math.round(at * LAST)));
 
 /** Where the thumb sits for a pointer at *raw* (0..1 across the track): held back
@@ -221,7 +224,7 @@ export default function DynamicAlerting() {
     const next = nearest(drag);
     setDrag(null);
     ticked.current = null;
-    save(next);
+    void save(next);
   };
 
   const onKey = (e: React.KeyboardEvent) => {
@@ -230,9 +233,10 @@ export default function DynamicAlerting() {
     };
     if (!(e.key in moves)) return;
     e.preventDefault();
-    save(Math.min(LAST, Math.max(0, moves[e.key])));
+    void save(Math.min(LAST, Math.max(0, moves[e.key])));
   };
 
+  const grip = drag === null ? "cursor-grab" : "cursor-grabbing";
   const reading = data.channels.filter((c) => c.level !== "off").length;
 
   return (
@@ -266,7 +270,7 @@ export default function DynamicAlerting() {
         onPointerUp={release}
         onPointerCancel={release}
         className={`group relative mt-5 h-20 touch-none select-none rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-foreground/40 focus-visible:ring-offset-4 focus-visible:ring-offset-background ${
-          locked ? "cursor-not-allowed opacity-60" : drag === null ? "cursor-grab" : "cursor-grabbing"
+          locked ? "cursor-not-allowed opacity-60" : grip
         }`}
       >
         <Track at={at} moving={drag !== null} />
@@ -284,15 +288,15 @@ export default function DynamicAlerting() {
 
       <div className="relative mt-3 h-4">
         {STOPS.map((s, i) => {
-          const edge = i === 0 ? "left-0" : i === LAST ? "right-0" : "-translate-x-1/2";
+          const edge = EDGES[i] ?? "-translate-x-1/2";
           return (
             <button
               key={s.key}
               type="button"
               tabIndex={-1}
               disabled={locked}
-              onClick={() => save(i)}
-              style={i === 0 || i === LAST ? undefined : { left: place(i / LAST) }}
+              onClick={() => void save(i)}
+              style={i in EDGES ? undefined : { left: place(i / LAST) }}
               className={`absolute top-0 whitespace-nowrap text-xs transition-colors ${edge} ${
                 i === index ? "text-foreground" : "text-muted-foreground/60 hover:text-muted-foreground"
               }`}
