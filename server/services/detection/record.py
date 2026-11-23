@@ -124,36 +124,19 @@ def apply_outcome(cursor, fire_id: str, check_id: str, org_id: str, outcome: str
     state, pattern, revision = row
 
     if fire_revision != revision:
-        # A fire from an earlier version, graded after the check was revised. It
-        # goes into the lifetime totals and the pattern's record, but it says
-        # nothing about the current version: two old false fires must not demote
-        # a revision that has never failed.
-        column = "hit_count" if outcome == OUTCOME_HIT else "false_fire_count"
-        cursor.execute(
-            "UPDATE detection_checks SET " + column + " = " + column + " + 1 WHERE id = %s",
-            (check_id,),
-        )
+        _count_on_old_revision(cursor, check_id, outcome)
         return state, state
 
     revision_false, consecutive_false = _count_on_current_revision(cursor, check_id, outcome)
     if state == STATE_RETIRED:
         return state, state
 
-    new_state = state
     if outcome == OUTCOME_HIT:
-        if state == STATE_SILENT and earns_promotion(
-                pattern_record(cursor, org_id, pattern), revision_false):
-            new_state = STATE_PROVEN
+        promoted = state == STATE_SILENT and earns_promotion(
+            pattern_record(cursor, org_id, pattern), revision_false)
+        new_state = STATE_PROVEN if promoted else state
     else:
-        if consecutive_false == DEMOTE_AFTER_CONSECUTIVE_FALSE:
-            # Proven or not: a check that keeps firing on nothing is handed to
-            # the agent to revise or retire. Once per streak.
-            from services.detection.store import request_review
-            request_review(cursor, check_id,
-                           "It fired on nothing %d times in a row." % consecutive_false)
-        if state == STATE_PROVEN and loses_proven(consecutive_false):
-            new_state = STATE_SILENT
-            _restore_previous_revision(cursor, check_id, org_id, revision)
+        new_state = _after_false_fire(cursor, check_id, org_id, state, revision, consecutive_false)
 
     if new_state != state:
         cursor.execute(
@@ -161,6 +144,35 @@ def apply_outcome(cursor, fire_id: str, check_id: str, org_id: str, outcome: str
             (new_state, check_id),
         )
     return state, new_state
+
+
+def _count_on_old_revision(cursor, check_id: str, outcome: str) -> None:
+    """Count a fire from an earlier version, graded after the check was revised.
+
+    It goes into the lifetime totals and the pattern's record, but it says
+    nothing about the current version: two old false fires must not demote a
+    revision that has never failed.
+    """
+    column = "hit_count" if outcome == OUTCOME_HIT else "false_fire_count"
+    cursor.execute(
+        "UPDATE detection_checks SET " + column + " = " + column + " + 1 WHERE id = %s",
+        (check_id,),
+    )
+
+
+def _after_false_fire(cursor, check_id: str, org_id: str, state: str, revision: int,
+                      consecutive_false: int) -> str:
+    """What a false fire on the current revision does. Returns the check's state after it."""
+    if consecutive_false == DEMOTE_AFTER_CONSECUTIVE_FALSE:
+        # Proven or not: a check that keeps firing on nothing is handed to the
+        # agent to revise or retire. Once per streak.
+        from services.detection.store import request_review
+        request_review(cursor, check_id,
+                       "It fired on nothing %d times in a row." % consecutive_false)
+    if state != STATE_PROVEN or not loses_proven(consecutive_false):
+        return state
+    _restore_previous_revision(cursor, check_id, org_id, revision)
+    return STATE_SILENT
 
 
 def _count_on_current_revision(cursor, check_id: str, outcome: str) -> Tuple[int, int]:
