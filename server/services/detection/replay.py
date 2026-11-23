@@ -148,8 +148,9 @@ def replay_origin(check: Dict[str, Any], user_id: str, end: datetime,
         # days read, nothing shows the check is ever healthy, and a check that
         # always fails would look exactly like this. Not replayed, so not
         # credited. A failure on the quiet days that were read still refuses it.
+        # Staying healthy over the incident needs no quiet days to be a miss.
         return ReplayResult(
-            None, quiet_runs, quiet_fails,
+            False if over_incident.status == STATUS_PASS else None, quiet_runs, quiet_fails,
             detail="only %d quiet day(s) could be read; %d are needed to compare against"
                    % (quiet_runs, MIN_QUIET_RUNS),
         )

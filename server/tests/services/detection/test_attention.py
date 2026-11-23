@@ -124,9 +124,16 @@ def test_a_post_waits_for_a_weekday_daytime_where_the_team_is():
     assert not working_hours_now(_SlackUser(0), "U1", now=saturday_noon_utc)
 
 
-def test_an_unknown_timezone_does_not_hold_a_post_back():
+def test_an_unknown_timezone_falls_back_to_utc_and_still_keeps_the_weekend_clear():
+    from datetime import datetime, timezone
+
     from services.detection.attention import working_hours_now
 
-    assert working_hours_now(_SlackUser(ConnectionError("slack down")), "U1")
-    assert working_hours_now(_SlackUser(None), "U1")
-    assert working_hours_now(_SlackUser(0), None)
+    tuesday_noon_utc = datetime(2026, 11, 24, 12, 0, tzinfo=timezone.utc)
+    saturday_noon_utc = datetime(2026, 11, 28, 12, 0, tzinfo=timezone.utc)
+    unknown = ((_SlackUser(ConnectionError("slack down")), "U1"), (_SlackUser(None), "U1"), (_SlackUser(0), None))
+    for client, installer in unknown:
+        # It still goes out, so an install with no timezone is not silent for good...
+        assert working_hours_now(client, installer, now=tuesday_noon_utc)
+        # ...and not on a Saturday.
+        assert not working_hours_now(client, installer, now=saturday_noon_utc)

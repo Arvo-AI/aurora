@@ -417,9 +417,18 @@ def run_fire_drill(check_id: str, org_id: str, user_id: str):
             # Read again here: it may have been revised, demoted or retired
             # since it was queued.
             found = replay.drill_targets(cur, org_id, check_id) if cur is not None else []
+            owner_org = None
+            if found:
+                cur.execute("SELECT org_id FROM users WHERE id = %s", (found[0]["created_by"],))
+                owner = cur.fetchone()
+                owner_org = owner[0] if owner else None
         if not found:
             return
         target = found[0]
+        if owner_org != org_id:
+            # Same rule as a scheduled run: the replay executes with the
+            # owner's access, and an owner who has moved has another org's.
+            return
         if replay.still_catches(target) is not False:
             return
         with _org_cursor(user_id, org_id) as (cur, conn):
