@@ -193,8 +193,9 @@ def set_chat_level(user_id):
     """Move the slider: what Aurora does in every public channel. Admins only."""
     if not chat_intake_enabled():
         return jsonify({"error": "Reading chat is turned off on this install"}), 404
-    level = (request.get_json(silent=True) or {}).get("level")
-    if level not in chat_signals.LEVELS:
+    body = request.get_json(silent=True)
+    level = body.get("level") if isinstance(body, dict) else None
+    if not isinstance(level, str) or level not in chat_signals.LEVELS:
         return jsonify({"error": _ERR_LEVEL}), 400
     try:
         with db_pool.get_admin_connection() as conn, conn.cursor() as cur:

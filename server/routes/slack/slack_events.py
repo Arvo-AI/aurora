@@ -1174,7 +1174,9 @@ def _speak_clicker(slack_user_id: str, team_id: str, channel_id: str):
     client = get_slack_client_for_user(workspace_user_id) if workspace_user_id else None
     if not client or not org_id:
         return None, None, None
-    if not (sender["member"] or sender["matched_user_id"] or sender["installer_user_id"]):
+    # Membership is the whole test. Having an Aurora account or a Slack token does not make a
+    # guest a member of the workspace.
+    if not sender["member"]:
         _send_ephemeral(client, channel_id, slack_user_id,
                         "Only members of this workspace can change what Aurora does here.")
         return None, None, None

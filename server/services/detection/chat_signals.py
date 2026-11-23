@@ -120,8 +120,11 @@ def set_company_level(org_id: str, level: str) -> bool:
     """Store where the slider is. False when it did not take."""
     from utils.auth.stateless_auth import store_org_preference
 
+    from utils.auth.stateless_auth import get_org_preference
+
     store_org_preference(org_id, COMPANY_LEVEL_KEY, level)
-    return company_level(org_id) == level
+    # Strict: a read that fails must not pass for "off was stored".
+    return get_org_preference(org_id, COMPANY_LEVEL_KEY, default=None, strict=True) == level
 
 
 def speaks(level: str, kind: str, real: bool) -> bool:
@@ -295,12 +298,19 @@ def keep_report(cursor, org_id: str, channel_id: str, report: Report) -> Optiona
     """
     earlier = None
     if report.asset and report.kind == KIND_PROBLEM:
+        # Two channels read at once must not each find no earlier report and start a look each.
+        cursor.execute(
+            "SELECT pg_advisory_xact_lock(hashtext(%s))",
+            ("detection_chat_asset:%s:%s" % (org_id, report.asset.lower()),),
+        )
         cursor.execute(
             """SELECT id FROM detection_chat_signals
                WHERE org_id = %s AND lower(asset) = lower(%s) AND status <> %s AND kind = %s
-                 AND said_at >= to_timestamp(%s) - %s * INTERVAL '1 minute'
+                 AND said_at BETWEEN to_timestamp(%s) - %s * INTERVAL '1 minute'
+                                 AND to_timestamp(%s) + %s * INTERVAL '1 minute'
                ORDER BY said_at LIMIT 1""",
-            (org_id, report.asset, STATUS_MERGED, KIND_PROBLEM, float(report.ts), SAME_ISSUE_MINUTES),
+            (org_id, report.asset, STATUS_MERGED, KIND_PROBLEM, float(report.ts), SAME_ISSUE_MINUTES,
+             float(report.ts), SAME_ISSUE_MINUTES),
         )
         row = cursor.fetchone()
         earlier = str(row[0]) if row else None
@@ -340,6 +350,8 @@ def take_for_verification(cursor, org_id: str, limit: int) -> List[Dict[str, Any
     Reports beyond the org's daily limit are marked skipped instead, so they
     are neither investigated late nor left looking as if they still will be.
     """
+    # Two turns of the same org must not both count the same allowance.
+    cursor.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", ("detection_chat_looks:" + org_id,))
     cursor.execute(
         "SELECT COUNT(*) FROM detection_chat_signals "
         "WHERE org_id = %s AND verify_started_at >= NOW() - INTERVAL '1 day'",
@@ -475,9 +487,17 @@ def to_say(cursor, org_id: str, report_id: str) -> Optional[Dict[str, Any]]:
 
 
 def replies_left_today(cursor, org_id: str, channel_id: str) -> int:
+    """How many more unasked posts the channel may get today. Replies and pointers both count.
+
+    Holds the channel until the caller commits, so two posts cannot both take the last place.
+    """
     cursor.execute(
-        "SELECT COUNT(*) FROM detection_chat_signals WHERE org_id = %s AND channel_id = %s "
-        "AND replied_at >= NOW() - INTERVAL '1 day'",
+        "SELECT pg_advisory_xact_lock(hashtext(%s))", ("detection_chat_says:%s:%s" % (org_id, channel_id),),
+    )
+    cursor.execute(
+        """SELECT COUNT(*) FILTER (WHERE replied_at >= NOW() - INTERVAL '1 day')
+                + COUNT(*) FILTER (WHERE pointed_at >= NOW() - INTERVAL '1 day')
+           FROM detection_chat_signals WHERE org_id = %s AND channel_id = %s""",
         (org_id, channel_id),
     )
     return max(0, MAX_REPLIES_PER_CHANNEL_PER_DAY - cursor.fetchone()[0])
@@ -521,12 +541,21 @@ def count_reply_check(cursor, report_id: str) -> int:
 def claim_pointer(cursor, org_id: str, other_id: str, report_id: str, within_hours: int) -> bool:
     """Link *other_id* to *report_id*, once, if its thread is still recent."""
     cursor.execute(
-        """UPDATE detection_chat_signals SET related_to = %s
+        """UPDATE detection_chat_signals SET related_to = %s, pointed_at = NOW()
            WHERE id = %s AND org_id = %s AND related_to IS NULL
              AND said_at >= NOW() - %s * INTERVAL '1 hour'""",
         (report_id, other_id, org_id, within_hours),
     )
     return cursor.rowcount > 0
+
+
+def release_pointer(cursor, org_id: str, other_id: str, report_id: str) -> None:
+    """The pointer did not go out: *other_id* was not told, and may be told later."""
+    cursor.execute(
+        "UPDATE detection_chat_signals SET related_to = NULL, pointed_at = NULL "
+        "WHERE id = %s AND org_id = %s AND related_to = %s",
+        (other_id, org_id, report_id),
+    )
 
 
 def tidy(cursor, org_id: str) -> Tuple[int, int]:
@@ -559,15 +588,20 @@ def tidy(cursor, org_id: str) -> Tuple[int, int]:
 
 
 def list_reports(cursor, org_id: str, limit: int = 50) -> List[Dict[str, Any]]:
-    """Recent reports with how each ended, newest first, for the page."""
+    """Recent reports with how each ended, newest first, for the page.
+
+    Not those from a private channel: the page is open to the whole org, and
+    what was said in a private channel is for the people in it.
+    """
     cursor.execute(
         """SELECT r.id, r.channel_id, MAX(s.channel_name), r.said_at, r.asset, r.claim, r.status,
                   r.status_detail, r.incident_id, r.message_count, r.kind,
                   CASE WHEN r.reply_ts IS NOT NULL THEN r.reply END
            FROM detection_chat_signals r
-           LEFT JOIN slack_channels s ON s.org_id = r.org_id AND s.channel_id = r.channel_id
+           JOIN slack_channels s ON s.org_id = r.org_id AND s.channel_id = r.channel_id
            WHERE r.org_id = %s
            GROUP BY r.id
+           HAVING NOT BOOL_OR(COALESCE(s.is_private, FALSE))
            ORDER BY r.said_at DESC LIMIT %s""",
         (org_id, limit),
     )

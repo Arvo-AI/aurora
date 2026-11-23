@@ -65,8 +65,11 @@ def clean_reply(value: Any) -> str:
     """The reply as it may be posted: no mention, no broadcast, capped."""
     if not isinstance(value, str):
         return ""
-    text = _MENTION.sub("", value.replace("\x00", ""))
-    text = _BROADCAST.sub("", text)
+    text, before = value.replace("\x00", ""), None
+    # Until nothing changes: "<<!here>!here>" is a mention again once the inner one is gone.
+    while text != before:
+        before = text
+        text = _BROADCAST.sub("", _MENTION.sub("", text))
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
     return text[:REPLY_MAX_CHARS]
 
@@ -157,7 +160,8 @@ def _plan(cur, org_id: str, team_id: str, company: str, report_id: str) -> Optio
         return None
     real = report["status"] == STATUS_CONFIRMED
     other = None
-    if report["related_to"]:
+    # A private channel is never pointed from, in its own thread either.
+    if report["related_to"] and not channel["is_private"]:
         other = chat_signals.other_public_report(cur, org_id, team_id, report_id, report["related_to"])
     plan = {"report": report, "channel": channel, "real": real, "other": other, "here": None}
 
@@ -203,10 +207,16 @@ def _post_other_side(client, cur, org_id: str, team_id: str, company: str, plan:
     pointer = "<#%s> is on what looks like the same thing: <%s|open that thread>." % (
         report["channel_id"], thread_link(report["channel_id"], report["thread_ts"]),
     )
-    client.send_message(
-        channel=other["channel_id"], text=pointer, thread_ts=other["thread_ts"],
-        blocks=reply_blocks("", None, pointer),
-    )
+    try:
+        client.send_message(
+            channel=other["channel_id"], text=pointer, thread_ts=other["thread_ts"],
+            blocks=reply_blocks("", None, pointer),
+        )
+    except Exception:
+        # Not told: give the claim back, so a later look can tell them.
+        chat_signals.release_pointer(cur, org_id, other["id"], report["id"])
+        cur.connection.commit()
+        raise
 
 
 def _reply_here(client, user_id: str, org_id: str, report_id: str, plan: Dict[str, Any]) -> bool:

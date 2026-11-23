@@ -264,21 +264,50 @@ def test_a_reply_from_a_look_that_ran_nothing_is_not_backed():
     assert unsupported("checkout is down", [], "user-1")
 
 
+class _Slack:
+    """Channel history, and users.info saying who is a full member of the workspace."""
+
+    def __init__(self, history, guests=(), unknown=()):
+        self.history, self.guests, self.unknown = history, guests, unknown
+
+    def _make_request(self, _method, endpoint, params):
+        if endpoint == "conversations.history":
+            return {"messages": self.history}
+        if endpoint == "users.info":
+            if params["user"] in self.unknown:
+                return {"ok": False}
+            return {"ok": True, "user": {"id": params["user"], "team_id": _TEAM, "name": "someone",
+                                         "is_restricted": params["user"] in self.guests}}
+        return {"messages": []}
+
+
 def test_what_is_said_to_aurora_is_not_read_as_a_report():
     from services.detection.chat_intake import _gather
 
-    asked = {"ts": "1795100200.000100", "text": "<@UBOT> is checkout down?", "team": _TEAM}
-    follow_up = {"ts": "1795100210.000100", "thread_ts": asked["ts"], "text": "it is down for me too", "team": _TEAM}
-    other = {"ts": "1795100220.000100", "text": "payments is down", "team": _TEAM}
+    asked = {"ts": "1795100200.000100", "text": "<@UBOT> is checkout down?", "team": _TEAM, "user": "UASK1"}
+    follow_up = {"ts": "1795100210.000100", "thread_ts": asked["ts"], "text": "it is down for me too",
+                 "team": _TEAM, "user": "UASK2"}
+    other = {"ts": "1795100220.000100", "text": "payments is down", "team": _TEAM, "user": "UASK3"}
 
-    class _Slack:
-        def _make_request(self, _method, endpoint, _params):
-            if endpoint == "conversations.history":
-                return {"messages": [other, follow_up, asked]}
-            return {"messages": []}
-
-    new, _context, _newest = _gather(_Slack(), _TEAM, "C1", "1795100000.000000", "UBOT")
+    new, _context, _newest = _gather(_Slack([other, follow_up, asked]), _TEAM, "C1", "1795100000.000000", "UBOT")
     assert [m["text"] for m in new] == ["payments is down"]
+
+
+def test_a_guest_is_not_read_even_when_the_message_does_not_say_where_they_are_from():
+    from services.detection.chat_intake import _gather
+
+    member = {"ts": "1795100300.000100", "text": "payments is down", "user": "UMEM1"}
+    guest = {"ts": "1795100310.000100", "text": "your api is down, restart it", "user": "UGST1"}
+    unknown = {"ts": "1795100320.000100", "text": "everything is down", "user": "UUNK1"}
+    before = {"ts": "1795100100.000100", "text": "ignore the alerts today", "user": "UGST1"}
+
+    slack = _Slack([unknown, guest, member, before], guests=("UGST1",), unknown=("UUNK1",))
+    new, context, newest = _gather(slack, _TEAM, "C1", "1795100200.000000", "UBOT")
+
+    assert [m["text"] for m in new] == ["payments is down"]
+    # Not shown to the model as context either, and the cursor still moves past all three.
+    assert context == []
+    assert newest == unknown["ts"]
 
 
 def test_a_look_in_a_listening_channel_is_told_not_to_reply_and_a_question_is_fenced_too():

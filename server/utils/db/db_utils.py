@@ -1744,6 +1744,7 @@ def initialize_tables():
                         reply TEXT,
                         reply_ts VARCHAR(64),
                         replied_at TIMESTAMPTZ,
+                        pointed_at TIMESTAMPTZ,
                         related_to UUID,
                         reply_checks INTEGER NOT NULL DEFAULT 0,
                         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -2077,6 +2078,7 @@ def initialize_tables():
                     ADD COLUMN IF NOT EXISTS reply TEXT,
                     ADD COLUMN IF NOT EXISTS reply_ts VARCHAR(64),
                     ADD COLUMN IF NOT EXISTS replied_at TIMESTAMPTZ,
+                    ADD COLUMN IF NOT EXISTS pointed_at TIMESTAMPTZ,
                     ADD COLUMN IF NOT EXISTS related_to UUID,
                     ADD COLUMN IF NOT EXISTS reply_checks INTEGER NOT NULL DEFAULT 0;
                     ALTER TABLE detection_chat_cursors

@@ -41,7 +41,9 @@ _PAGE = 15
 # More pages are followed back to the cursor when a channel was busy.
 _MAX_PAGES = 4
 _CONTEXT_MESSAGES = 10
-_THREADS_PER_TURN = 5
+# New replies of one thread in one turn: up to this many pages of this many.
+_REPLY_PAGE = 200
+_REPLY_PAGES = 5
 _SEVERITIES = ("low", "medium", "high", "critical")
 
 
@@ -103,10 +105,12 @@ def read_chat_for_org(user_id: str, org_id: str):
         with _org_cursor(user_id, org_id) as (cur, conn):
             if cur is None:
                 return
-            if chat_signals.reads_left_today(cur, org_id) <= 0:
-                return
             chat_memory.sync(cur, org_id)
-            turns = chat_signals.claim_channels(cur, org_id, team_id, company, CHANNELS_PER_TURN)
+            # Out of reads for the day: nothing new is read, and what was already kept is
+            # still looked into below.
+            turns = []
+            if chat_signals.reads_left_today(cur, org_id) > 0:
+                turns = chat_signals.claim_channels(cur, org_id, team_id, company, CHANNELS_PER_TURN)
             assets = chat_signals.known_assets(cur, org_id) if turns else []
             conn.commit()
 
@@ -129,7 +133,7 @@ class _Workspace(NamedTuple):
     org_id: str
 
 
-def _latest(client, channel_id: str, last_ts: str) -> Tuple[List[dict], bool]:
+def _latest(client, channel_id: str, last_ts: str, upto: str) -> Tuple[List[dict], bool]:
     """The channel's latest messages, back to *last_ts*: (messages, whether that reached it).
 
     The first page is taken whatever the cursor says, so it also brings the
@@ -137,7 +141,7 @@ def _latest(client, channel_id: str, last_ts: str) -> Tuple[List[dict], bool]:
     """
     messages, page_cursor = [], None
     for _ in range(_MAX_PAGES):
-        params: Dict[str, Any] = {"channel": channel_id, "limit": _PAGE}
+        params: Dict[str, Any] = {"channel": channel_id, "limit": _PAGE, "latest": upto}
         if page_cursor:
             params["cursor"] = page_cursor
         result = client._make_request("GET", "conversations.history", params) or {}
@@ -150,18 +154,29 @@ def _latest(client, channel_id: str, last_ts: str) -> Tuple[List[dict], bool]:
     return messages, False
 
 
-def _new_replies(client, channel_id: str, parents: List[dict], last_ts: str) -> List[dict]:
-    """Replies newer than *last_ts* in threads whose parent is among *parents*."""
+def _new_replies(client, channel_id: str, parents: List[dict], last_ts: str, upto: str) -> List[dict]:
+    """Replies in (*last_ts*, *upto*] in threads whose parent is among *parents*.
+
+    Every thread with something new is read, and read to the end. The channel
+    has one cursor: a reply left for a later turn would be behind it by then,
+    and never read.
+    """
     active = [m for m in parents
               if m.get("reply_count") and float(m.get("latest_reply") or 0) > float(last_ts)]
     replies = []
-    for parent in active[:_THREADS_PER_TURN]:
-        result = client._make_request(
-            "GET", "conversations.replies",
-            {"channel": channel_id, "ts": parent["ts"], "oldest": last_ts, "limit": _PAGE},
-        ) or {}
-        replies.extend(m for m in result.get("messages", [])
-                       if m.get("ts") and m["ts"] != parent["ts"] and float(m["ts"]) > float(last_ts))
+    for parent in active:
+        page_cursor = None
+        for _ in range(_REPLY_PAGES):
+            params = {"channel": channel_id, "ts": parent["ts"], "oldest": last_ts, "latest": upto,
+                      "limit": _REPLY_PAGE}
+            if page_cursor:
+                params["cursor"] = page_cursor
+            result = client._make_request("GET", "conversations.replies", params) or {}
+            replies.extend(m for m in result.get("messages", [])
+                           if m.get("ts") and m["ts"] != parent["ts"] and float(m["ts"]) > float(last_ts))
+            page_cursor = (result.get("response_metadata") or {}).get("next_cursor")
+            if not result.get("has_more") or not page_cursor:
+                break
     return replies
 
 
@@ -179,26 +194,49 @@ def _asked_of_aurora(messages: List[dict], bot_user_id: Optional[str]) -> set:
             if mention in (m.get("text") or "") or m.get("user") == bot_user_id}
 
 
+def _full_members(client, team_id: str, messages: List[dict]) -> set:
+    """The authors among *messages* who are full members of this workspace.
+
+    Asked of Slack, not read off the message: a message need not say which
+    workspace its author is from, and never says whether they are a guest.
+    An author Slack could not be asked about is left out.
+    """
+    from routes.slack.slack_events_helpers import get_workspace_member
+
+    authors = {m.get("user") for m in messages if m.get("user")}
+    return {author for author in authors if get_workspace_member(client, author, team_id)}
+
+
 def _gather(client, team_id: str, channel_id: str, last_ts: str, bot_user_id: Optional[str] = None):
     """What is new in the channel since *last_ts*: (new, context, newest ts seen).
 
     *new* is what the model judges, *context* the conversation before it. Both
-    hold only people of this workspace: context is shown to the model too.
+    hold only full members of this workspace: context is shown to the model too.
+
+    Nothing later than the moment the reading starts is taken, by either call.
+    The cursor then never passes a message this reading did not have the chance
+    to see.
     """
-    latest, complete = _latest(client, channel_id, last_ts)
+    upto = "%.6f" % time.time()
+    latest, complete = _latest(client, channel_id, last_ts, upto)
     if not complete:
         logger.warning("%s Channel %s had more than %d new messages; the oldest were not read",
                        _LOG, sanitize(channel_id), _PAGE * _MAX_PAGES)
     top_new = [m for m in latest if float(m["ts"]) > float(last_ts)]
     before = sorted((m for m in latest if float(m["ts"]) <= float(last_ts)),
                     key=lambda m: float(m["ts"]))[-_CONTEXT_MESSAGES:]
-    seen = top_new + _new_replies(client, channel_id, latest, last_ts)
+    seen = top_new + _new_replies(client, channel_id, latest, last_ts, upto)
     newest_ts = max((m["ts"] for m in seen), key=float) if seen else last_ts
     with_aurora = _asked_of_aurora(latest + seen, bot_user_id)
+    typed = [m for m in seen + before if chat_reader.is_readable(m, team_id)]
+    members = _full_members(client, team_id, typed)
+
+    def kept(messages: List[dict]) -> List[dict]:
+        return [m for m in messages if chat_reader.is_readable(m, team_id) and m.get("user") in members]
+
     return (
-        [m for m in seen if chat_reader.is_readable(m, team_id)
-         and (m.get("thread_ts") or m["ts"]) not in with_aurora],
-        [m for m in before if chat_reader.is_readable(m, team_id)],
+        [m for m in kept(seen) if (m.get("thread_ts") or m["ts"]) not in with_aurora],
+        kept(before),
         newest_ts,
     )
 
