@@ -7,7 +7,11 @@ let pending: Promise<boolean> | null = null;
 
 function load(): Promise<boolean> {
   pending ??= fetch("/api/detection/status", { credentials: "include" })
-    .then((res) => (res.ok ? res.json() : { enabled: false }))
+    .then((res) => {
+      // A failed read is not an answer: throw so it is retried, not cached as "off".
+      if (!res.ok) throw new Error(`status ${res.status}`);
+      return res.json();
+    })
     .then((data) => Boolean(data?.enabled))
     .catch(() => {
       // Not cached: a failed read is retried on the next mount.

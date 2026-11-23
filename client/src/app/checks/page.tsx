@@ -34,7 +34,7 @@ interface Check {
   last_observed?: string | null;
   last_run_at: string | null;
   retired_reason: string | null;
-  vouched_by?: string | null;
+  person_vouched?: boolean;
 }
 
 const ORIGIN_WORDS: Record<string, string> = {
@@ -78,7 +78,7 @@ function healthOf(check: Check): Health {
 }
 
 function onFiring(check: Check): string {
-  if (check.state === 'proven' && check.vouched_by) return 'Opens an incident when it fires, because a person asked for that';
+  if (check.state === 'proven' && check.person_vouched) return 'Opens an incident when it fires, because a person asked for that';
   if (check.state === 'proven') return 'Opens an incident when it fires';
   if (check.state === 'silent') return 'Records only for now: it has not caught enough real incidents to notify anyone';
   return 'Stopped';

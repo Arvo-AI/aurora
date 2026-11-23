@@ -1645,6 +1645,7 @@ def initialize_tables():
                         error_streak INTEGER NOT NULL DEFAULT 0,
                         review_due_at TIMESTAMPTZ,
                         review_reason TEXT,
+                        review_attempts INTEGER NOT NULL DEFAULT 0,
                         vouched_by VARCHAR(255),
                         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -1911,6 +1912,7 @@ def initialize_tables():
                     ADD COLUMN IF NOT EXISTS error_streak INTEGER NOT NULL DEFAULT 0,
                     ADD COLUMN IF NOT EXISTS review_due_at TIMESTAMPTZ,
                     ADD COLUMN IF NOT EXISTS review_reason TEXT,
+                    ADD COLUMN IF NOT EXISTS review_attempts INTEGER NOT NULL DEFAULT 0,
                     ADD COLUMN IF NOT EXISTS vouched_by VARCHAR(255);
                 """)
                 conn.commit()
