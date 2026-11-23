@@ -72,6 +72,13 @@ def _org_cursor(user_id: str, org_id: str):
             yield None, None
 
 
+def _org_of(cur, user_id: str):
+    """The org a user is in now, from the table and not the membership cache. None if gone."""
+    cur.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
+    row = cur.fetchone()
+    return row[0] if row else None
+
+
 def _for_each_org(work, what: str) -> None:
     """Run work(cursor, conn, user_id, org_id) per org; one org failing skips only itself."""
     try:
@@ -140,9 +147,7 @@ def _open_or_join_case(fire_id: str, check_id: str, org_id: str, user_id: str, o
             # so the case waits until the check has an owner here. Read from
             # the table, not the membership cache; open_case then has the
             # incident refused if it would land anywhere but this org.
-            cur.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
-            owner = cur.fetchone()
-            if owner is None or owner[0] != org_id:
+            if _org_of(cur, user_id) != org_id:
                 logger.warning("%s Check %s has no owner in its org; case not opened",
                                _LOG, sanitize(check_id))
                 return
@@ -187,11 +192,7 @@ def run_check(check_id: str, org_id: str, user_id: str, claim: str | None = None
     try:
         with _org_cursor(user_id, org_id) as (cur, _conn):
             check = get_runnable_check(cur, check_id) if cur is not None else None
-            owner_org = None
-            if check is not None:
-                cur.execute("SELECT org_id FROM users WHERE id = %s", (check["created_by"],))
-                owner = cur.fetchone()
-                owner_org = owner[0] if owner else None
+            owner_org = _org_of(cur, check["created_by"]) if check is not None else None
         if check is None:
             return
 
@@ -417,11 +418,7 @@ def run_fire_drill(check_id: str, org_id: str, user_id: str):
             # Read again here: it may have been revised, demoted or retired
             # since it was queued.
             found = replay.drill_targets(cur, org_id, check_id) if cur is not None else []
-            owner_org = None
-            if found:
-                cur.execute("SELECT org_id FROM users WHERE id = %s", (found[0]["created_by"],))
-                owner = cur.fetchone()
-                owner_org = owner[0] if owner else None
+            owner_org = _org_of(cur, found[0]["created_by"]) if found else None
         if not found:
             return
         target = found[0]
