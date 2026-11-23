@@ -135,10 +135,44 @@ def apply_outcome(cursor, fire_id: str, check_id: str, org_id: str, outcome: str
         )
         return state, state
 
+    revision_false, consecutive_false = _count_on_current_revision(cursor, check_id, outcome)
+    if state == STATE_RETIRED:
+        return state, state
+
+    new_state = state
+    if outcome == OUTCOME_HIT:
+        if state == STATE_SILENT and earns_promotion(
+                pattern_record(cursor, org_id, pattern), revision_false):
+            new_state = STATE_PROVEN
+    else:
+        if consecutive_false == DEMOTE_AFTER_CONSECUTIVE_FALSE:
+            # Proven or not: a check that keeps firing on nothing is handed to
+            # the agent to revise or retire. Once per streak.
+            from services.detection.store import request_review
+            request_review(cursor, check_id,
+                           "It fired on nothing %d times in a row." % consecutive_false)
+        if state == STATE_PROVEN and loses_proven(consecutive_false):
+            new_state = STATE_SILENT
+            _restore_previous_revision(cursor, check_id, org_id, revision)
+
+    if new_state != state:
+        cursor.execute(
+            "UPDATE detection_checks SET state = %s, updated_at = NOW() WHERE id = %s",
+            (new_state, check_id),
+        )
+    return state, new_state
+
+
+def _count_on_current_revision(cursor, check_id: str, outcome: str) -> Tuple[int, int]:
+    """Add one graded fire to the check's counters.
+
+    Returns (false fires of this revision, false fires in a row). A hit ends
+    the run of false fires.
+    """
     if outcome == OUTCOME_HIT:
         cursor.execute(
             "UPDATE detection_checks SET hit_count = hit_count + 1, consecutive_false_fires = 0 "
-            "WHERE id = %s RETURNING revision_false_fires",
+            "WHERE id = %s RETURNING revision_false_fires, consecutive_false_fires",
             (check_id,),
         )
     else:
@@ -150,30 +184,8 @@ def apply_outcome(cursor, fire_id: str, check_id: str, org_id: str, outcome: str
                WHERE id = %s RETURNING revision_false_fires, consecutive_false_fires""",
             (check_id,),
         )
-    counters = cursor.fetchone()
-    if state == STATE_RETIRED:
-        return state, state
-    if outcome == OUTCOME_FALSE and counters[1] == DEMOTE_AFTER_CONSECUTIVE_FALSE:
-        # Proven or not: a check that keeps firing on nothing is handed to the
-        # agent to revise or retire. Once per streak.
-        from services.detection.store import request_review
-        request_review(cursor, check_id,
-                       "It fired on nothing %d times in a row." % counters[1])
-
-    new_state = state
-    if state == STATE_PROVEN and outcome == OUTCOME_FALSE and loses_proven(counters[1]):
-        new_state = STATE_SILENT
-        _restore_previous_revision(cursor, check_id, org_id, revision)
-    elif state == STATE_SILENT and outcome == OUTCOME_HIT:
-        if earns_promotion(pattern_record(cursor, org_id, pattern), counters[0]):
-            new_state = STATE_PROVEN
-
-    if new_state != state:
-        cursor.execute(
-            "UPDATE detection_checks SET state = %s, updated_at = NOW() WHERE id = %s",
-            (new_state, check_id),
-        )
-    return state, new_state
+    revision_false, consecutive_false = cursor.fetchone()
+    return revision_false, consecutive_false
 
 
 def promote_pattern_siblings(cursor, org_id: str, pattern: str) -> int:
