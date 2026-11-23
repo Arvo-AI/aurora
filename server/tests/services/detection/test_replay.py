@@ -31,14 +31,16 @@ _CHECK = {
 
 def _runner(by_end):
     """A stand-in executor: the verdict for each span end; healthy when not listed."""
-    seen = []
+    seen, timeouts = [], []
 
-    def run(check, user_id, check_id, at=None):
+    def run(check, user_id, check_id, at=None, timeout=None):
         seen.append(at)
+        timeouts.append(timeout)
         status = by_end.get(at, STATUS_PASS)
         return Verdict(status, "" if status == STATUS_ERROR else "7")
 
     run.seen = seen
+    run.timeouts = timeouts
     return run
 
 
@@ -134,10 +136,12 @@ def test_one_quiet_day_that_fails_still_refuses_the_check():
 
 def test_a_replay_stops_running_commands_once_its_time_is_used_up():
     run = _runner({_END: STATUS_FAIL})
-    ticks = iter([0, 40, 80, 120, 160])   # each command took 40 seconds
+    ticks = iter([0, 0, 40, 80, 120])     # each command took 40 seconds
     result = replay_origin(_CHECK, "u", _END, _QUIET, run=run, clock=lambda: next(ticks))
     assert len(run.seen) == 3              # the incident and two quiet days, not the third
     assert result.caught is True
+    # Each command may only use what is left, so the whole replay ends within its 90 seconds.
+    assert run.timeouts == [90, 50, 10]
 
 
 def test_the_span_can_be_written_as_epoch_seconds_or_milliseconds():
@@ -199,3 +203,22 @@ def test_a_check_that_missed_its_incident_is_refused_even_when_quiet_days_are_un
     result = replay_origin(_CHECK, "u", _END, _QUIET, run=missed)
     assert result.caught is False
     assert refusal(result)
+
+
+def test_a_line_count_over_a_span_with_no_data_is_not_read_as_healthy_at_admission():
+    lines = dict(_CHECK, assertion={"expect": "lines", "op": "lt", "value": 50})
+
+    def nothing_left(check, user_id, check_id, at=None, timeout=None):
+        return Verdict(STATUS_PASS, "")       # zero lines: the source no longer holds the span
+
+    # Not a miss over the incident, so the check is admitted without credit, not refused.
+    result = replay_origin(lines, "u", _END, _QUIET, run=nothing_left)
+    assert result.caught is None
+    assert refusal(result) == ""
+
+    def only_the_incident_is_left(check, user_id, check_id, at=None, timeout=None):
+        return Verdict(STATUS_FAIL, "80 lines") if at == _END else Verdict(STATUS_PASS, "")
+
+    # Empty quiet days are not quiet days: there is nothing to compare against.
+    result = replay_origin(lines, "u", _END, _QUIET, run=only_the_incident_is_left)
+    assert (result.caught, result.quiet_runs) == (None, 0)

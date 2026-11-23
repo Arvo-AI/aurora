@@ -137,3 +137,14 @@ def test_an_unknown_timezone_falls_back_to_utc_and_still_keeps_the_weekend_clear
         assert working_hours_now(client, installer, now=tuesday_noon_utc)
         # ...and not on a Saturday.
         assert not working_hours_now(client, installer, now=saturday_noon_utc)
+
+
+def test_a_post_full_of_escaped_characters_still_fits_in_one_slack_section():
+    from services.detection.attention import worth_a_look_blocks
+
+    candidate = {"fire_id": "f1", "name": "n", "asset": "checkout", "hours_failing": 2,
+                 "prediction": "&" * 400, "assertion": {"expect": "number", "op": "lt", "value": 5},
+                 "observed": "&" * 500, "origin": {"kind": "gap", "ref": ""}}
+    text = worth_a_look_blocks(candidate, 3)[0]["text"]["text"]
+    assert len(text) <= 3000
+    assert not text.rstrip("…").endswith(("&", "&a", "&am", "&amp"))   # no half-escaped character

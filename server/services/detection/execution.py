@@ -82,7 +82,7 @@ def _own_context(user_id: str, session_id: str, provider: str):
             cloud_utils._set_ctx(field, value)
 
 
-def _execute(check: dict, user_id: str, check_id: str, at=None) -> Verdict | str:
+def _execute(check: dict, user_id: str, check_id: str, at=None, timeout: int = COMMAND_TIMEOUT_SECONDS) -> Verdict | str:
     """Run the check's command and return its output, or an error Verdict.
 
     The command goes through the same executor an agent would use, in Ask mode,
@@ -103,13 +103,13 @@ def _execute(check: dict, user_id: str, check_id: str, at=None) -> Verdict | str
             from chat.backend.agent.tools.kubectl_onprem_tool import on_prem_kubectl
             raw = on_prem_kubectl(
                 command, cluster_id=target, user_id=user_id, session_id=session_id,
-                timeout=COMMAND_TIMEOUT_SECONDS,
+                timeout=timeout,
             )
         else:
             from chat.backend.agent.tools.cloud_exec_tool import cloud_exec
             raw = cloud_exec(
                 provider, command, user_id=user_id, session_id=session_id,
-                provider_preference=provider, timeout=COMMAND_TIMEOUT_SECONDS,
+                provider_preference=provider, timeout=timeout,
                 account_id=target or None,
             )
     try:
@@ -155,11 +155,13 @@ def _ran_and_failed(result: dict) -> bool:
     return not _ACCESS_ERROR.search(_QUOTED.sub(" ", said))
 
 
-def judge(check: dict, user_id: str, check_id: str, at=None) -> Verdict:
+def judge(check: dict, user_id: str, check_id: str, at=None, timeout=None) -> Verdict:
     """Produce the verdict for one run of *check*. Never raises.
 
-    *at* replays a windowed check over the span ending then.
+    *at* replays a windowed check over the span ending then. *timeout* shortens
+    the command's time limit; it never lengthens it.
     """
+    limit = COMMAND_TIMEOUT_SECONDS if timeout is None else max(1, min(COMMAND_TIMEOUT_SECONDS, int(timeout)))
     # Checked on every run, not only when the check was saved: a row changed
     # some other way must still be unable to run a write.
     if at is None and window.is_windowed(check.get("window_seconds")):
@@ -170,7 +172,7 @@ def judge(check: dict, user_id: str, check_id: str, at=None) -> Verdict:
     if rejection:
         return Verdict(STATUS_ERROR, detail="command is not read-only: " + rejection)
     try:
-        outcome = _execute(check, user_id, check_id, at)
+        outcome = _execute(check, user_id, check_id, at, limit)
     except Exception as exc:
         logger.exception("[DetectionExecution] Check %s raised while executing", sanitize(check_id))
         return Verdict(STATUS_ERROR, detail="execution raised %s" % type(exc).__name__, ran=False)
