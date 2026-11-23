@@ -266,6 +266,40 @@ def _post_other_side(client, cur, org_id: str, team_id: str, company: str, plan:
     )
 
 
+def _reply_here(client, user_id: str, org_id: str, report_id: str, plan: Dict[str, Any]) -> bool:
+    """Post the claimed reply and record it, or give the claim back when the post fails."""
+    from services.detection.runner import _org_cursor
+
+    posted_ts = None
+    try:
+        posted_ts = _post_here(client, plan)
+    except Exception:
+        logger.exception("%s Could not reply in channel %s", _LOG, sanitize(plan["report"]["channel_id"]))
+    with _org_cursor(user_id, org_id) as (cur, conn):
+        if cur is None:
+            return bool(posted_ts)
+        if posted_ts:
+            chat_signals.record_reply(cur, report_id, posted_ts)
+        else:
+            chat_signals.release_reply(cur, org_id, report_id, plan["here"]["first_time"])
+        conn.commit()
+    return bool(posted_ts)
+
+
+def _point_there(client, workspace: tuple, report_id: str, plan: Dict[str, Any]) -> None:
+    """Tell the other channel. A failure here leaves the report's own reply as it is."""
+    from services.detection.runner import _org_cursor
+
+    user_id, org_id, team_id, company = workspace
+    try:
+        with _org_cursor(user_id, org_id) as (cur, conn):
+            if cur is not None:
+                _post_other_side(client, cur, org_id, team_id, company, plan)
+                conn.commit()
+    except Exception:
+        logger.exception("%s Could not point the other channel at report %s", _LOG, sanitize(report_id))
+
+
 def say(user_id: str, org_id: str, report_id: str) -> bool:
     """Post what a concluded report's look left to say, where the channel's level allows it.
 
@@ -286,30 +320,10 @@ def say(user_id: str, org_id: str, report_id: str) -> bool:
             conn.commit()
         if plan is None:
             return False
-
-        posted_ts = None
-        if plan["here"]:
-            try:
-                posted_ts = _post_here(client, plan)
-            except Exception:
-                logger.exception("%s Could not reply in channel %s", _LOG, sanitize(plan["report"]["channel_id"]))
-            with _org_cursor(user_id, org_id) as (cur, conn):
-                if cur is not None:
-                    if posted_ts:
-                        chat_signals.record_reply(cur, report_id, posted_ts)
-                    else:
-                        chat_signals.release_reply(cur, org_id, report_id, plan["here"]["first_time"])
-                    conn.commit()
-
+        posted = bool(plan["here"]) and _reply_here(client, user_id, org_id, report_id, plan)
         if plan["other"]:
-            try:
-                with _org_cursor(user_id, org_id) as (cur, conn):
-                    if cur is not None:
-                        _post_other_side(client, cur, org_id, team_id, company, plan)
-                        conn.commit()
-            except Exception:
-                logger.exception("%s Could not point the other channel at report %s", _LOG, sanitize(report_id))
-        return bool(posted_ts)
+            _point_there(client, (user_id, org_id, team_id, company), report_id, plan)
+        return posted
     except Exception:
         logger.exception("%s Speaking for report %s failed", _LOG, sanitize(report_id))
         return False

@@ -168,6 +168,32 @@ def _json_object(raw: str) -> Optional[dict]:
     return parsed if isinstance(parsed, dict) else None
 
 
+def _one_report(item: Any, asked: Dict[str, dict], used: set, known_assets: List[str],
+                questions: bool) -> Optional[Report]:
+    """One entry of the model's answer as a report, or None when it may not be kept."""
+    if not isinstance(item, dict):
+        return None
+    listed = item.get("ts")
+    listed = [listed] if isinstance(listed, str) else listed
+    if not isinstance(listed, list):
+        return None
+    # Only ids that were asked about, each in one report at most.
+    mine = sorted({ts for ts in listed if isinstance(ts, str) and ts in asked and ts not in used},
+                  key=float)
+    claim = clean_claim(item.get("claim"))
+    if not mine or not claim:
+        # A report tied to no new message, or with nothing stated, cannot be checked.
+        return None
+    kind = KIND_QUESTION if item.get("kind") == KIND_QUESTION else KIND_PROBLEM
+    if kind == KIND_QUESTION and not questions:
+        # Not asked for here, so not kept: this channel only hears problems.
+        return None
+    return Report(
+        mine[0], tuple(mine), clean_asset(item.get("asset"), known_assets), claim, kind,
+        asked[mine[0]].get("thread_ts") or mine[0],
+    )
+
+
 def parse(raw: str, new: List[Dict[str, Any]], known_assets: List[str],
           questions: bool = False) -> Optional[List[Report]]:
     """Turn the model's answer into reports, keeping only what it was allowed to say.
@@ -183,28 +209,10 @@ def parse(raw: str, new: List[Dict[str, Any]], known_assets: List[str],
 
     reports, used = [], set()
     for item in answer["reports"]:
-        if not isinstance(item, dict):
-            continue
-        listed = item.get("ts")
-        listed = [listed] if isinstance(listed, str) else listed
-        if not isinstance(listed, list):
-            continue
-        # Only ids that were asked about, each in one report at most.
-        mine = [ts for ts in listed if isinstance(ts, str) and ts in asked and ts not in used]
-        claim = clean_claim(item.get("claim"))
-        if not mine or not claim:
-            # A report tied to no new message, or with nothing stated, cannot be checked.
-            continue
-        kind = KIND_QUESTION if item.get("kind") == KIND_QUESTION else KIND_PROBLEM
-        if kind == KIND_QUESTION and not questions:
-            # Not asked for here, so not kept: this channel only hears problems.
-            continue
-        mine = sorted(set(mine), key=float)
-        used.update(mine)
-        reports.append(Report(
-            mine[0], tuple(mine), clean_asset(item.get("asset"), known_assets), claim, kind,
-            asked[mine[0]].get("thread_ts") or mine[0],
-        ))
+        report = _one_report(item, asked, used, known_assets, questions)
+        if report is not None:
+            used.update(report.message_ts)
+            reports.append(report)
     return reports
 
 
