@@ -397,50 +397,24 @@ def _post_incident_actions(
         return
 
     try:
-        from chat.background.task import (
-            run_background_chat,
-            create_background_chat_session,
-            is_background_chat_allowed,
-        )
-        if not is_background_chat_allowed(user_id):
-            logger.info("[CLOUDWATCH][ALARM] Skipping RCA — rate limited for user %s", user_id)
-            return
-
+        from chat.background.rca_dispatch import dispatch_alert_rca
         from chat.background.rca_prompt_builder import build_rca_prompt
         rca_prompt, rail_text = build_rca_prompt(
             "cloudwatch", alarm_name, payload, user_id=user_id
         )
-        chat_title = f"RCA: {alarm_name}"
-        session_id = create_background_chat_session(
+        dispatch_alert_rca(
             user_id=user_id,
-            title=chat_title,
-            trigger_metadata={
-                "source": "cloudwatch",
-                "alarm_name": alarm_name,
-                "state": state_value,
-            },
-            incident_id=str(incident_id),
-        )
-        task = run_background_chat.delay(
-            user_id=user_id,
-            session_id=session_id,
-            initial_message=rca_prompt,
-            trigger_metadata={
-                "source": "cloudwatch",
-                "alarm_name": alarm_name,
-                "state": state_value,
-            },
-            incident_id=str(incident_id),
+            incident_id=incident_id,
+            source="cloudwatch",
+            prompt=rca_prompt,
             rail_text=rail_text,
-        )
-        cursor.execute(
-            "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
-            (task.id, str(incident_id)),
-        )
-        conn.commit()
-        logger.info(
-            "[CLOUDWATCH][ALARM] Triggered RCA for session %s (task=%s)",
-            session_id, task.id,
+            trigger_metadata={
+                "source": "cloudwatch",
+                "alarm_name": alarm_name,
+                "state": state_value,
+            },
+            session_title=f"RCA: {alarm_name}",
+            log_prefix="[CLOUDWATCH][ALARM]",
         )
     except Exception as exc:
         logger.exception("[CLOUDWATCH][ALARM] Failed to trigger RCA: %s", exc)

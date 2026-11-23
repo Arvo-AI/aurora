@@ -255,38 +255,19 @@ def process_bigpanda_event(
 
         # 6. Trigger RCA background chat
         try:
-            from chat.background.task import (
-                run_background_chat, create_background_chat_session, is_background_chat_allowed,
-            )
-            if not is_background_chat_allowed(user_id):
-                logger.info("[BIGPANDA] Skipping RCA - rate limited for user %s", user_id)
-                return
+            from chat.background.rca_dispatch import dispatch_alert_rca
 
-            session_id = create_background_chat_session(
-                user_id=user_id,
-                title=f"RCA: {title}",
-                trigger_metadata={"source": "bigpanda", "incident_id": incident_id},
-                incident_id=str(aurora_incident_id),
-            )
             rca_prompt, rail_text = build_rca_prompt("bigpanda", title, raw_payload or {"incident": incident, "alerts": alerts}, user_id=user_id)
-            task = run_background_chat.delay(
-                user_id=user_id, session_id=session_id,
-                initial_message=rca_prompt,
-                trigger_metadata={"source": "bigpanda", "incident_id": incident_id},
-                incident_id=str(aurora_incident_id),
+            dispatch_alert_rca(
+                user_id=user_id,
+                incident_id=aurora_incident_id,
+                source="bigpanda",
+                prompt=rca_prompt,
                 rail_text=rail_text,
+                trigger_metadata={"source": "bigpanda", "incident_id": incident_id},
+                session_title=f"RCA: {title}",
+                log_prefix="[BIGPANDA]",
             )
-            with db_pool.get_admin_connection() as conn:
-                cursor = conn.cursor()
-                if not set_rls_context(cursor, conn, user_id, log_prefix="[BIGPANDA:task_id_update]"):
-                    logger.error("[BIGPANDA] Failed to set RLS context for task_id update, user %s", user_id)
-                else:
-                    cursor.execute(
-                        "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
-                        (task.id, str(aurora_incident_id)),
-                    )
-                    conn.commit()
-            logger.info("[BIGPANDA] Triggered RCA for session %s (task=%s)", session_id, task.id)
         except Exception as chat_exc:
             logger.exception("[BIGPANDA] Failed to trigger background chat: %s", chat_exc)
 

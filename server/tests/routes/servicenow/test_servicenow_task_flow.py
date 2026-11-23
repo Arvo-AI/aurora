@@ -282,7 +282,7 @@ def _sync(tasks, cursor, conn, existing_status="resolved", **kwargs):
     )
 
 
-def test_reopen_commits_the_new_state_only_once_the_rca_is_dispatched(monkeypatch, tasks):
+def test_reopen_leaves_the_new_state_for_the_dispatch_to_commit(monkeypatch, tasks):
     cursor = _Cursor(fetches=[("resolved", None), ("investigating",)])
     conn = _Conn(cursor)
     lifecycle = MagicMock()
@@ -292,7 +292,7 @@ def test_reopen_commits_the_new_state_only_once_the_rca_is_dispatched(monkeypatc
 
     _sync(tasks, cursor, conn)
 
-    assert commits_at_dispatch == [0]  # the status change was still pending when the RCA was queued
+    assert commits_at_dispatch == [0]  # _dispatch_rca commits it once the prompt is built
     assert conn.commits == 1
     lifecycle.assert_called_once()
     assert lifecycle.call_args.args[5:] == ("status_changed", "investigating", "resolved")
@@ -367,11 +367,10 @@ def test_a_failed_dispatch_goes_through_the_celery_retry(monkeypatch, tasks, poo
     assert pool.open == 0
 
 
-def _background_stub(delay):
-    mod = ModuleType("chat.background.task")
-    mod.is_background_chat_allowed = lambda user_id: True  # type: ignore[attr-defined]
-    mod.create_background_chat_session = lambda **kw: "sess-1"  # type: ignore[attr-defined]
-    mod.run_background_chat = SimpleNamespace(delay=delay)  # type: ignore[attr-defined]
+def _dispatch_stub(dispatch):
+    mod = ModuleType("chat.background.rca_dispatch")
+    mod.MISSING = "missing"  # type: ignore[attr-defined]
+    mod.dispatch_alert_rca = dispatch  # type: ignore[attr-defined]
     return mod
 
 
@@ -379,25 +378,50 @@ def _dispatch(tasks, cursor, conn):
     return tasks._dispatch_rca(cursor, conn, "user-1", "inc-1", "Checkout down", "INC0010009", SYS_ID, _payload())
 
 
-def test_dispatch_records_the_task_id_and_commits(monkeypatch, tasks):
-    monkeypatch.setitem(sys.modules, "chat.background.task", _background_stub(lambda **kw: SimpleNamespace(id="task-7")))
+@pytest.mark.parametrize("outcome", ["dispatched", "queued"])
+def test_dispatch_commits_the_staged_state_then_hands_the_rca_to_the_dispatcher(monkeypatch, tasks, outcome):
     cursor = _Cursor()
     conn = _Conn(cursor)
+    commits_at_dispatch = []
+
+    def dispatch(**kw):
+        commits_at_dispatch.append(conn.commits)
+        return outcome
+
+    spy = MagicMock(side_effect=dispatch)
+    monkeypatch.setitem(sys.modules, "chat.background.rca_dispatch", _dispatch_stub(spy))
 
     _dispatch(tasks, cursor, conn)
 
-    sql, params = cursor.executed[-1]
-    assert "rca_celery_task_id" in sql
-    assert params == ("task-7", "inc-1")
-    assert conn.commits == 1
+    # Committed first: the dispatcher locks the incident row on its own connection.
+    assert commits_at_dispatch == [1]
+    assert cursor.executed == []
+    kwargs = spy.call_args.kwargs
+    assert kwargs["incident_id"] == "inc-1"
+    assert kwargs["source"] == "servicenow"
+    assert (kwargs["prompt"], kwargs["rail_text"]) == ("prompt", "rail")
+    assert kwargs["trigger_metadata"] == {"source": "servicenow", "number": "INC0010009", "sys_id": SYS_ID}
+    assert kwargs["session_title"] == "RCA: Checkout down"
     assert conn.rollbacks == 0
 
 
-def test_dispatch_failure_rolls_back_marks_the_session_failed_and_raises(monkeypatch, tasks):
-    def broker_down(**kw):
-        raise ConnectionError("broker down")
+def test_dispatch_raises_for_a_retry_when_the_dispatcher_could_not_start_or_queue(monkeypatch, tasks):
+    monkeypatch.setitem(sys.modules, "chat.background.rca_dispatch", _dispatch_stub(lambda **kw: "missing"))
+    cursor = _Cursor()
+    conn = _Conn(cursor)
 
-    monkeypatch.setitem(sys.modules, "chat.background.task", _background_stub(broker_down))
+    with pytest.raises(tasks.RcaDispatchError):
+        _dispatch(tasks, cursor, conn)
+
+
+def test_dispatch_prompt_failure_rolls_back_and_raises_without_dispatching(monkeypatch, tasks):
+    spy = MagicMock(return_value="dispatched")
+    monkeypatch.setitem(sys.modules, "chat.background.rca_dispatch", _dispatch_stub(spy))
+
+    def broken(*a, **k):
+        raise ValueError("bad payload")
+
+    monkeypatch.setattr(tasks, "build_rca_prompt", broken)
     cursor = _Cursor()
     conn = _Conn(cursor)
 
@@ -405,34 +429,19 @@ def test_dispatch_failure_rolls_back_marks_the_session_failed_and_raises(monkeyp
         _dispatch(tasks, cursor, conn)
 
     assert conn.rollbacks == 1
-    assert not any("rca_celery_task_id" in sql for sql, _ in cursor.executed)
-    sql, params = cursor.executed[-1]
-    assert "chat_sessions" in sql
-    assert params == ("failed", "sess-1")
-    assert conn.commits == 1  # only the failed-session mark, after the rollback
-
-
-def test_dispatch_skips_a_rate_limited_user_without_touching_the_connection(monkeypatch, tasks):
-    stub = _background_stub(lambda **kw: SimpleNamespace(id="task-7"))
-    stub.is_background_chat_allowed = lambda user_id: False  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "chat.background.task", stub)
-    cursor = _Cursor()
-    conn = _Conn(cursor)
-
-    _dispatch(tasks, cursor, conn)
-
-    assert cursor.executed == []
     assert conn.commits == 0
+    spy.assert_not_called()
 
 
 # ── the reopen lock against a real Postgres ───────────────────────────
 #
-# _sync_existing keeps the incident row locked while _dispatch_rca creates the
-# RCA chat session on a second connection. chat_sessions.incident_id references
-# incidents(id), so that insert takes a KEY SHARE lock on the incident row; with
-# the wrong lock mode it waits on the task's own transaction and never returns.
-# Mocks cannot see that, so this runs against Postgres and skips without one
-# (POSTGRES_HOST / POSTGRES_PORT, like the other db tests).
+# _sync_existing locks the incident row (FOR NO KEY UPDATE) and stages the
+# reopen; the shared dispatcher then locks the same row FOR UPDATE on its own
+# connection and creates the RCA chat session, whose foreign key to incidents
+# takes a KEY SHARE lock. Unless _dispatch_rca commits first, those wait on the
+# task's own transaction for ever. Mocks cannot see that, so this runs against
+# Postgres and skips without one (POSTGRES_HOST / POSTGRES_PORT, like the other
+# db tests).
 
 
 def _pg_connect():
@@ -528,25 +537,24 @@ def test_only_a_no_key_update_lock_lets_the_session_insert_through(pg_schema, lo
     task_conn.rollback()
 
 
-def test_reopen_dispatch_creates_the_session_on_another_connection_without_deadlocking(monkeypatch, tasks, pg_schema):
-    """The real _sync_existing and _dispatch_rca SQL, with the session insert on a second connection."""
+def test_reopen_dispatch_runs_on_another_connection_without_deadlocking(monkeypatch, tasks, pg_schema):
+    """The real _sync_existing and _dispatch_rca SQL, with the dispatcher on a second connection."""
     task_conn, other_conn = pg_schema
     incident_id = _insert_resolved_incident(task_conn)
     monkeypatch.setattr(tasks, "_record_lifecycle_event", lambda *a, **k: None)
 
-    def create_session(**kw):
-        # What chat.background.task.create_background_chat_session does: its own
-        # connection, an insert whose foreign key points at the locked incident.
-        session_id = str(uuid.uuid4())
+    def dispatch(**kw):
+        # What dispatch_alert_rca does: its own connection, a FOR UPDATE lock on
+        # the incident, the session insert, then the task id.
         with other_conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM incidents WHERE id = %s FOR UPDATE", (kw["incident_id"],))
             cur.execute("INSERT INTO chat_sessions (id, status, incident_id) VALUES (%s, 'in_progress', %s)",
-                        (session_id, kw["incident_id"]))
+                        (str(uuid.uuid4()), kw["incident_id"]))
+            cur.execute("UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s", ("task-pg", kw["incident_id"]))
         other_conn.commit()
-        return session_id
+        return "dispatched"
 
-    stub = _background_stub(lambda **kw: SimpleNamespace(id="task-pg"))
-    stub.create_background_chat_session = create_session  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "chat.background.task", stub)
+    monkeypatch.setitem(sys.modules, "chat.background.rca_dispatch", _dispatch_stub(dispatch))
 
     with task_conn.cursor() as cursor:
         tasks._sync_existing(

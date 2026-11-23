@@ -10,6 +10,7 @@ import {
   IncidentGroup,
   isGroupStalled,
   isInvestigating,
+  isNotInvestigatedYet,
   isStalled,
   lastFire,
   occurrenceOrdinal,
@@ -32,6 +33,9 @@ function formatFireTime(incident: Incident): string {
 }
 
 function OccurrenceStatusIcon({ incident, now }: Readonly<{ incident: Incident; now: number }>) {
+  if (isNotInvestigatedYet(incident)) {
+    return <Clock className="h-3.5 w-3.5 text-muted-foreground" aria-label="Not investigated yet" />;
+  }
   if (isStalled(incident, now)) {
     return <AlertTriangle className="h-3.5 w-3.5 text-red-400" aria-label="Investigation stalled" />;
   }
@@ -51,6 +55,9 @@ export default function IncidentGroupRow({ group, expanded, onToggle }: Readonly
   const now = Date.now();
   const isActive = group.section === 'investigating';
   const stalled = isGroupStalled(group, now);
+  // Nothing in the group is being investigated: its alerts wait for the org's
+  // budget, or are covered by another incident's investigation.
+  const waiting = isNotInvestigatedYet(anchor) && !group.investigating;
   // Severity is typed as a closed union but the API can still send 'unknown'.
   const severity: string = anchor.alert.severity;
   const showSeverity = (severity && severity !== 'unknown') || anchor.status === 'analyzed';
@@ -128,7 +135,13 @@ export default function IncidentGroupRow({ group, expanded, onToggle }: Readonly
                     <AlertTriangle className="h-3 w-3 text-red-400" /> Investigation stalled
                   </span>
                 )}
-                {!stalled && (isActive || group.investigating) && (
+                {waiting && (
+                  <span className="flex items-center gap-1">
+                    <Clock className="h-3 w-3" />
+                    {anchor.auroraStatus === 'grouped' ? 'Covered by another investigation' : 'Not investigated yet'}
+                  </span>
+                )}
+                {!stalled && !waiting && (isActive || group.investigating) && (
                   <span className="flex items-center gap-1">
                     <Loader2 className="h-3 w-3 animate-spin" /> Aurora investigating
                   </span>

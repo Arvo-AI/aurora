@@ -354,12 +354,16 @@ if _redis_client is None:
 
 
 def is_background_chat_allowed(user_id: str) -> bool:
-    """Check if user is allowed to create another background chat using Redis.
-    
+    """Check if user is allowed to create another non-alert background chat using Redis.
+
     Uses Redis INCR with expiration for counter-based rate limiting.
     Allows up to 5 background chats per 5 minute window.
-    This prevents alert floods from creating dozens of expensive RCA chats.
-    
+
+    Covers housekeeping and user-requested runs (actions, team routing,
+    postmortems, chat-triggered RCAs). Alert-driven RCAs do not use it: they go
+    through ``rca_dispatch.dispatch_alert_rca``, which has its own per-org
+    budget and queues instead of dropping, so neither starves the other.
+
     Args:
         user_id: The user ID
         
@@ -2874,6 +2878,8 @@ def _is_task_dead(task_id: str, last_activity, threshold, cursor=None, incident_
 # still be queued behind long investigations, so it keeps the old allowance.
 _DEAD_WORKER_MINUTES = 5
 _NEVER_STARTED_MINUTES = 20
+# Alert RCAs deliberately held back (rca_dispatch.py): never started, never lost.
+_NOT_YET_INVESTIGATED = ('queued', 'grouped')
 
 
 def _db_now(cursor) -> datetime:
@@ -3218,12 +3224,16 @@ def _sweep_stale_background_chats() -> Dict[str, Any]:
                         )
 
                     # --- 3. Stuck investigating (RCA done or orphaned, no active session) ---
+                    # An incident deliberately waiting for budget (queued) or
+                    # covered by another investigation (grouped) was never
+                    # started, so it cannot have been lost: it is skipped here.
                     cursor.execute("""
                         SELECT i.id, i.aurora_status,
                                CASE WHEN i.rca_run_task_id IS NOT NULL THEN i.aurora_chat_session_id END,
                                i.rca_run_task_id
                         FROM incidents i
                         WHERE i.status = 'investigating' AND i.updated_at < %s AND i.user_id = %s
+                          AND COALESCE(i.aurora_status, 'idle') NOT IN ('queued', 'grouped')
                           AND NOT EXISTS (
                               SELECT 1 FROM chat_sessions cs
                               WHERE cs.id::text = i.aurora_chat_session_id::text
@@ -3231,6 +3241,8 @@ def _sweep_stale_background_chats() -> Dict[str, Any]:
                           )
                     """, (stale_threshold, uid))
                     for inc_id, cur_aurora, rca_session_id, rca_run_task_id in cursor.fetchall():
+                        if cur_aurora in _NOT_YET_INVESTIGATED:
+                            continue
                         if cur_aurora in ('complete', 'error'):
                             cursor.execute(
                                 "UPDATE incidents SET status = 'analyzed', analyzed_at = COALESCE(analyzed_at, NOW()), updated_at = NOW() WHERE id = %s AND status = 'investigating' RETURNING id",
@@ -3251,6 +3263,26 @@ def _sweep_stale_background_chats() -> Dict[str, Any]:
                                 uid, str(inc_id), rca_session_id,
                                 "Investigation became orphaned and was cleaned up", rca_run_task_id,
                             )
+
+                    # --- 3b. Grouped alerts follow the investigation covering them ---
+                    # Once it ends they are analyzed (never 'error': they were not
+                    # run). One whose leader is gone waits in the queue again.
+                    cursor.execute("""
+                        UPDATE incidents f
+                        SET status = 'analyzed', analyzed_at = COALESCE(f.analyzed_at, NOW()), updated_at = NOW()
+                        FROM incidents l
+                        WHERE f.rca_group_leader_id = l.id AND f.aurora_status = 'grouped'
+                          AND f.status = 'investigating' AND f.user_id = %s
+                          AND (l.aurora_status IN ('complete', 'error') OR l.status IN ('analyzed', 'resolved', 'merged'))
+                    """, (uid,))
+                    cursor.execute("""
+                        UPDATE incidents
+                        SET aurora_status = 'queued', rca_queue_reason = 'burst',
+                            rca_queued_at = COALESCE(rca_queued_at, NOW()), updated_at = NOW()
+                        WHERE aurora_status = 'grouped' AND rca_group_leader_id IS NULL
+                          AND status = 'investigating' AND user_id = %s
+                    """, (uid,))
+                    conn.commit()
 
                     # --- 4. Stale rca_findings: cascade from any incident already
                     # marked aurora_status='error' (immediate, catches sections 1-3

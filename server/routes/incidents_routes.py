@@ -115,7 +115,9 @@ def _format_incident_response(
     that user's integration settings, so the key must include the user.
     """
     recurrence_of_incident_id = recurrence_of_title = None  # only the merge-target row carries them
+    queue_fields: tuple = ()  # trailing RCA-queue columns, when the row carries them
     if include_merge_target:
+        row, queue_fields = row[:26], tuple(row[26:])
         (
             incident_id,
             user_id,
@@ -281,6 +283,15 @@ def _format_incident_response(
     if recurrence_of_incident_id is not None:
         result["recurrenceOfTitle"] = recurrence_of_title
 
+    # Not investigated yet: waiting for the org's RCA budget, or covered by
+    # another incident's investigation (chat/background/rca_dispatch.py).
+    if len(queue_fields) == 3:
+        queue_reason, group_leader_id, group_leader_title = queue_fields
+        result["queueReason"] = queue_reason
+        result["groupedIntoIncidentId"] = str(group_leader_id) if group_leader_id else None
+        if group_leader_id:
+            result["groupedIntoTitle"] = group_leader_title
+
     return result
 
 
@@ -293,11 +304,13 @@ _INCIDENT_COLUMNS = """
         i.resolved_at, i.alert_fired_at,
         i.alert_metadata, i.correlated_alert_count, i.affected_services,
         i.merged_into_incident_id, target.alert_title AS merged_into_title,
-        i.recurrence_of_incident_id, anchor.alert_title AS recurrence_of_title
+        i.recurrence_of_incident_id, anchor.alert_title AS recurrence_of_title,
+        i.rca_queue_reason, i.rca_group_leader_id, rca_leader.alert_title AS rca_group_leader_title
 """
 _INCIDENT_JOINS = """
     LEFT JOIN incidents target ON i.merged_into_incident_id = target.id
     LEFT JOIN incidents anchor ON i.recurrence_of_incident_id = anchor.id
+    LEFT JOIN incidents rca_leader ON i.rca_group_leader_id = rca_leader.id
 """
 _INCIDENT_FROM = "\n    FROM incidents i" + _INCIDENT_JOINS
 _INCIDENT_SELECT = "SELECT" + _INCIDENT_COLUMNS + _INCIDENT_FROM
@@ -1954,6 +1967,23 @@ def continue_incident_investigation(user_id, incident_id: str):
     except Exception:
         logger.exception("[INCIDENTS] Failed to continue investigation %s", sanitize(incident_id))
         return jsonify({"error": "Failed to continue the investigation"}), 500
+    return jsonify(result), 202
+
+
+@incidents_bp.route("/api/incidents/<incident_id>/investigate", methods=["POST"])
+@require_permission("incidents", "write")
+def run_queued_incident_investigation(user_id, incident_id: str):
+    """Start the RCA of an incident that is waiting in the queue or was grouped."""
+    if not is_valid_uuid(incident_id):
+        return jsonify({"error": "Invalid incident ID format"}), 400
+    from chat.background.rca_dispatch import RunRefused, run_queued_investigation
+    try:
+        result = run_queued_investigation(incident_id, user_id, get_org_id_from_request())
+    except RunRefused as refused:
+        return jsonify({"error": refused.public_message}), refused.status
+    except Exception:
+        logger.exception("[INCIDENTS] Failed to start queued investigation %s", sanitize(incident_id))
+        return jsonify({"error": "Failed to start the investigation"}), 500
     return jsonify(result), 202
 
 

@@ -113,8 +113,90 @@ function ContinueInvestigation({ incident, canWrite, onStarted }: {
   );
 }
 
+// Why an alert has not been investigated yet. It was not dropped: it starts
+// on its own when the org has room, or a person can start it now.
+const QUEUE_REASON_LABELS: Record<string, string> = {
+  rate_limited: 'Many alerts arrived at once, so this investigation is waiting its turn.',
+  concurrency: 'Several investigations are already running, so this one is waiting its turn.',
+  hourly_limit: 'This organization reached its hourly investigation limit, so this one is waiting its turn.',
+  burst: 'This alert arrived in a burst and is waiting to be investigated with the others from it.',
+  dispatch_failed: 'This investigation could not be started and will be retried.',
+};
+
+function NotInvestigatedYet({ incident, canWrite, onStarted }: {
+  readonly incident: Incident;
+  readonly canWrite: boolean;
+  readonly onStarted: () => void;
+}) {
+  const { toast } = useToast();
+  const [starting, setStarting] = useState(false);
+  const queued = incident.auroraStatus === 'queued';
+  const grouped = incident.auroraStatus === 'grouped';
+  if ((!queued && !grouped) || incident.status === 'merged') return null;
+
+  const handleRun = async () => {
+    setStarting(true);
+    const result = await incidentsService.runQueuedInvestigation(incident.id);
+    setStarting(false);
+    if (result.success) {
+      toast({ title: 'Investigation started', description: 'Aurora is investigating this alert now.' });
+      onStarted();
+    } else {
+      toast({ title: 'Could not start the investigation', description: result.error, variant: 'destructive' });
+    }
+  };
+
+  return (
+    <div className="mt-4 p-3 rounded-lg border border-zinc-800 bg-zinc-900/60 flex flex-wrap items-center gap-3 text-xs text-zinc-400">
+      <Clock className="w-3.5 h-3.5 text-zinc-500 shrink-0" />
+      <span className="flex-1 min-w-0">
+        {grouped ? (
+          <>
+            Covered by the investigation of{' '}
+            {incident.groupedIntoIncidentId ? (
+              <Link href={`/incidents/${incident.groupedIntoIncidentId}`} className="text-zinc-200 underline underline-offset-2 hover:text-white">
+                {incident.groupedIntoTitle || 'another incident'}
+              </Link>
+            ) : 'another incident'}
+            , which arrived in the same burst. You can still investigate this alert on its own.
+          </>
+        ) : (
+          <>
+            {QUEUE_REASON_LABELS[incident.queueReason ?? ''] ?? QUEUE_REASON_LABELS.rate_limited}
+            {' '}It will start automatically.
+          </>
+        )}
+      </span>
+      {canWrite && (
+        <button
+          onClick={handleRun}
+          disabled={starting}
+          className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md border border-zinc-700 text-zinc-200 hover:bg-zinc-800 transition-colors disabled:opacity-50"
+        >
+          <Play className="w-3 h-3" />
+          {starting ? 'Starting...' : grouped ? 'Investigate separately' : 'Run investigation now'}
+        </button>
+      )}
+    </div>
+  );
+}
+
 function StatusPill({ status }: { readonly status: AuroraStatus }) {
   switch (status) {
+    case 'queued':
+      return (
+        <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-zinc-500/10 border border-zinc-500/30">
+          <Clock className="w-3.5 h-3.5 text-zinc-400" />
+          <span className="text-xs font-semibold text-zinc-300">Not Investigated Yet</span>
+        </div>
+      );
+    case 'grouped':
+      return (
+        <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-zinc-500/10 border border-zinc-500/30">
+          <Clock className="w-3.5 h-3.5 text-zinc-400" />
+          <span className="text-xs font-semibold text-zinc-300">Covered by Another Investigation</span>
+        </div>
+      );
     case 'running':
       return (
         <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-orange-500/10 border border-orange-500/30">
@@ -469,6 +551,12 @@ export default function IncidentCard({ incident, duration, showThoughts, onToggl
             total={incident.occurrencesTotal ?? incident.occurrences.length}
           />
         ) : null}
+
+        <NotInvestigatedYet
+          incident={incident}
+          canWrite={canWrite}
+          onStarted={() => { onRefresh?.(); onInvestigationRestarted?.(); }}
+        />
       </div>
 
       {/* Separator */}

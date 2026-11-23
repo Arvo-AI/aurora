@@ -155,6 +155,7 @@ celery_app.conf.update(
         'routes.slack.slack_onboarding',
         'utils.terminal.terminal_pod_cleanup',
         'chat.background.task',
+        'chat.background.rca_dispatch',
         'chat.background.summarization',
         'chat.background.visualization_generator',
         'chat.background.prediscovery_task',
@@ -183,6 +184,11 @@ celery_app.conf.update(
         'cleanup-stale-background-chats': {
             'task': 'chat.background.cleanup_stale_sessions',
             'schedule': 300.0,  # Every 5 minutes
+        },
+        # Starts alert RCAs that were queued over the org's budget.
+        'drain-queued-rcas': {
+            'task': 'chat.background.drain_queued_rcas',
+            'schedule': 60.0,
         },
         'run-full-discovery': {
             'task': 'services.discovery.tasks.run_full_discovery',

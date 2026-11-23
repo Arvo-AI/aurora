@@ -818,6 +818,11 @@ def initialize_tables():
                          rca_unfinished_reason VARCHAR(20),
                          rca_continuations INTEGER NOT NULL DEFAULT 0,
                          rca_run_task_id VARCHAR(255),
+                         rca_dispatched_at TIMESTAMP,
+                         rca_queue_reason VARCHAR(20),
+                         rca_queued_at TIMESTAMP,
+                         rca_queued_request JSONB,
+                         rca_group_leader_id UUID REFERENCES incidents(id) ON DELETE SET NULL,
                          started_at TIMESTAMP NOT NULL,
                          analyzed_at TIMESTAMP,
                          slack_message_ts VARCHAR(50),
@@ -833,6 +838,12 @@ def initialize_tables():
                      
                      CREATE INDEX IF NOT EXISTS idx_incidents_user_id ON incidents(user_id, started_at DESC);
                      CREATE INDEX IF NOT EXISTS idx_incidents_status ON incidents(status);
+                     CREATE INDEX IF NOT EXISTS idx_incidents_rca_queue
+                         ON incidents(org_id, rca_queued_at) WHERE aurora_status = 'queued';
+                     CREATE INDEX IF NOT EXISTS idx_incidents_rca_dispatched
+                         ON incidents(org_id, rca_dispatched_at) WHERE rca_dispatched_at IS NOT NULL;
+                     CREATE INDEX IF NOT EXISTS idx_incidents_rca_group_leader
+                         ON incidents(rca_group_leader_id) WHERE rca_group_leader_id IS NOT NULL;
                      CREATE INDEX IF NOT EXISTS idx_incidents_source ON incidents(source_type, source_alert_id);
                      CREATE INDEX IF NOT EXISTS idx_incidents_merged ON incidents(merged_into_incident_id) WHERE merged_into_incident_id IS NOT NULL;
                  """,
@@ -1786,6 +1797,30 @@ def initialize_tables():
             except Exception as e:
                 # Table may not exist yet (new install); CREATE TABLE includes the columns.
                 logging.warning(f"Error adding RCA continuation columns to incidents: {e}")
+                conn.rollback()
+
+            # Migration: alert RCAs over the org's budget wait on the incident
+            # (aurora_status 'queued' / 'grouped') instead of being dropped; see
+            # chat/background/rca_dispatch.py.
+            try:
+                cursor.execute("""
+                    ALTER TABLE incidents
+                    ADD COLUMN IF NOT EXISTS rca_dispatched_at TIMESTAMP,
+                    ADD COLUMN IF NOT EXISTS rca_queue_reason VARCHAR(20),
+                    ADD COLUMN IF NOT EXISTS rca_queued_at TIMESTAMP,
+                    ADD COLUMN IF NOT EXISTS rca_queued_request JSONB,
+                    ADD COLUMN IF NOT EXISTS rca_group_leader_id UUID REFERENCES incidents(id) ON DELETE SET NULL;
+                    CREATE INDEX IF NOT EXISTS idx_incidents_rca_queue
+                        ON incidents(org_id, rca_queued_at) WHERE aurora_status = 'queued';
+                    CREATE INDEX IF NOT EXISTS idx_incidents_rca_dispatched
+                        ON incidents(org_id, rca_dispatched_at) WHERE rca_dispatched_at IS NOT NULL;
+                    CREATE INDEX IF NOT EXISTS idx_incidents_rca_group_leader
+                        ON incidents(rca_group_leader_id) WHERE rca_group_leader_id IS NOT NULL;
+                """)
+                conn.commit()
+            except Exception as e:
+                # Table may not exist yet (new install); CREATE TABLE includes the columns.
+                logging.warning(f"Error adding RCA queue columns to incidents: {e}")
                 conn.rollback()
 
             # Migration: Add merged_into_incident_id column to incidents table if it exists
