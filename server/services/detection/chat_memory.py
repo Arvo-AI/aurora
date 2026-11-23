@@ -37,7 +37,7 @@ into problems, never posts), `sure` (also replies in the thread once it has conf
 is broken), `free` (also answers questions and says what it checked when it found nothing wrong).
 A private channel is read only if it has a line here."""
 
-_HEADING = re.compile(r"^##\s+(.*?)\s*$", re.MULTILINE)
+_HEADING = re.compile(r"^##[ \t]+(\S[^\n]*)$", re.MULTILINE)
 _LINE = re.compile(
     r"^\s*[-*]\s*`?#?(?P<name>[\w.-]{1,80})`?\s*:\s*`?(?P<level>%s)`?\s*$" % "|".join(LEVELS),
     re.IGNORECASE,
@@ -47,7 +47,7 @@ _LINE = re.compile(
 def _section_span(content: str) -> Optional[tuple]:
     """(start, end) of the section's body, or None when the entry has no such section."""
     for heading in _HEADING.finditer(content):
-        if heading.group(1).lower() == SECTION[3:].lower():
+        if heading.group(1).strip().lower() == SECTION[3:].lower():
             following = _HEADING.search(content, heading.end())
             return heading.end(), following.start() if following else len(content)
     return None

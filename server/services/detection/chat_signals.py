@@ -81,6 +81,11 @@ RETENTION_DAYS = 30
 CHANNEL_CLAIM_SECONDS = 300
 
 
+def _hold(cursor, what: str) -> None:
+    """Let one transaction at a time past this point for *what*, until it commits."""
+    cursor.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (what,))
+
+
 def known_assets(cursor, org_id: str) -> List[str]:
     """Names the model is offered: assets Aurora watches or has had incidents on."""
     cursor.execute(
@@ -299,10 +304,7 @@ def keep_report(cursor, org_id: str, channel_id: str, report: Report) -> Optiona
     earlier = None
     if report.asset and report.kind == KIND_PROBLEM:
         # Two channels read at once must not each find no earlier report and start a look each.
-        cursor.execute(
-            "SELECT pg_advisory_xact_lock(hashtext(%s))",
-            ("detection_chat_asset:%s:%s" % (org_id, report.asset.lower()),),
-        )
+        _hold(cursor, "detection_chat_asset:%s:%s" % (org_id, report.asset.lower()))
         cursor.execute(
             """SELECT id FROM detection_chat_signals
                WHERE org_id = %s AND lower(asset) = lower(%s) AND status <> %s AND kind = %s
@@ -351,7 +353,7 @@ def take_for_verification(cursor, org_id: str, limit: int) -> List[Dict[str, Any
     are neither investigated late nor left looking as if they still will be.
     """
     # Two turns of the same org must not both count the same allowance.
-    cursor.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", ("detection_chat_looks:" + org_id,))
+    _hold(cursor, "detection_chat_looks:" + org_id)
     cursor.execute(
         "SELECT COUNT(*) FROM detection_chat_signals "
         "WHERE org_id = %s AND verify_started_at >= NOW() - INTERVAL '1 day'",
@@ -491,9 +493,7 @@ def replies_left_today(cursor, org_id: str, channel_id: str) -> int:
 
     Holds the channel until the caller commits, so two posts cannot both take the last place.
     """
-    cursor.execute(
-        "SELECT pg_advisory_xact_lock(hashtext(%s))", ("detection_chat_says:%s:%s" % (org_id, channel_id),),
-    )
+    _hold(cursor, "detection_chat_says:%s:%s" % (org_id, channel_id))
     cursor.execute(
         """SELECT COUNT(*) FILTER (WHERE replied_at >= NOW() - INTERVAL '1 day')
                 + COUNT(*) FILTER (WHERE pointed_at >= NOW() - INTERVAL '1 day')
