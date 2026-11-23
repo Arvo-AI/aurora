@@ -21,6 +21,7 @@ failure as false on the spot, and "Stop this check" retires the check.
 """
 
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -225,11 +226,24 @@ def worth_a_look_message(candidate: Dict[str, Any], budget: int) -> str:
     ))
 
 
+# Slack refuses a section whose text is longer than 3000 characters.
+_SECTION_MAX_CHARS = 2900
+_CUT_ENTITY = re.compile(r"&[a-z]{0,4}$")
+
+
+def _fit_section(text: str) -> str:
+    """*text* short enough for one section, never cut in the middle of an escaped character."""
+    if len(text) <= _SECTION_MAX_CHARS:
+        return text
+    return _CUT_ENTITY.sub("", text[:_SECTION_MAX_CHARS]) + "…"
+
+
 def worth_a_look_blocks(candidate: Dict[str, Any], budget: int) -> List[Dict[str, Any]]:
     """The post with its two answers. The text is the same one a client without blocks shows."""
     fire_id = str(candidate["fire_id"])
     return [
-        {"type": "section", "text": {"type": "mrkdwn", "text": worth_a_look_message(candidate, budget)}},
+        {"type": "section", "text": {"type": "mrkdwn",
+                                     "text": _fit_section(worth_a_look_message(candidate, budget))}},
         {"type": "actions", "elements": [
             {"type": "button", "action_id": ACTION_NOT_A_PROBLEM, "value": fire_id,
              "text": {"type": "plain_text", "text": "Not a problem"}},

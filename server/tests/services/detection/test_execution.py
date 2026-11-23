@@ -139,6 +139,12 @@ def test_a_command_that_ran_and_failed_is_not_counted_as_lost_access():
     # Turned away by the provider: that is what losing access looks like.
     assert not _ran_and_failed(dict(ran, chat_output="Error from server (Forbidden): pods is forbidden"))
     assert not _ran_and_failed(dict(ran, chat_output="Unable to locate credentials"))
+    # A resource whose name is a word an access error would use is still a missing resource.
+    named_login = {"success": False, "final_command": "kubectl get deploy login", "return_code": 1,
+                   "chat_output": '$ kubectl get deploy login\nError from server (NotFound): deployments.apps "login" not found'}
+    assert _ran_and_failed(named_login)
+    assert not _ran_and_failed(dict(ran, chat_output="error: You must be logged in to the server (Unauthorized)"))
+    assert not _ran_and_failed(dict(ran, chat_output="An error occurred (ExpiredToken): the security token included in the request is expired"))
     # Never executed: a setup or gate failure has no result of a command.
     assert not _ran_and_failed({"success": False, "error": "No cluster connected", "return_code": 1})
     assert not _ran_and_failed({"success": False, "error": "blocked", "final_command": "x"})

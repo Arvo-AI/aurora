@@ -5,6 +5,7 @@ check may run, and when a run counts as healthy, can be tested on their own.
 """
 
 import json
+import re
 import logging
 from contextlib import contextmanager
 
@@ -81,7 +82,7 @@ def _own_context(user_id: str, session_id: str, provider: str):
             cloud_utils._set_ctx(field, value)
 
 
-def _execute(check: dict, user_id: str, check_id: str, at=None) -> Verdict | str:
+def _execute(check: dict, user_id: str, check_id: str, at=None, timeout: int = COMMAND_TIMEOUT_SECONDS) -> Verdict | str:
     """Run the check's command and return its output, or an error Verdict.
 
     The command goes through the same executor an agent would use, in Ask mode,
@@ -102,13 +103,13 @@ def _execute(check: dict, user_id: str, check_id: str, at=None) -> Verdict | str
             from chat.backend.agent.tools.kubectl_onprem_tool import on_prem_kubectl
             raw = on_prem_kubectl(
                 command, cluster_id=target, user_id=user_id, session_id=session_id,
-                timeout=COMMAND_TIMEOUT_SECONDS,
+                timeout=timeout,
             )
         else:
             from chat.backend.agent.tools.cloud_exec_tool import cloud_exec
             raw = cloud_exec(
                 provider, command, user_id=user_id, session_id=session_id,
-                provider_preference=provider, timeout=COMMAND_TIMEOUT_SECONDS,
+                provider_preference=provider, timeout=timeout,
                 account_id=target or None,
             )
     try:
@@ -126,10 +127,15 @@ def _execute(check: dict, user_id: str, check_id: str, at=None) -> Verdict | str
 
 
 # What a CLI says when it was turned away, or never had credentials to begin with.
-_ACCESS_WORDS = (
-    "credential", "unauthorized", "unauthenticated", "forbidden", "access denied",
-    "accessdenied", "permission", "not authorized", "expired", "login",
+# Whole phrases, matched outside quoted names: a deployment called "login" that
+# does not exist is a missing resource, not a login problem.
+_ACCESS_ERROR = re.compile(
+    r"\b(forbidden|unauthorized|unauthenticated|access ?denied|permission denied|not authorized"
+    r"|invalid credentials|unable to locate credentials|could not load credentials"
+    r"|(token|credentials?|session) (has |have |is |are )?expired|expiredtoken"
+    r"|must be logged in|you must log ?in|please (run .{0,40})?log ?in)\b"
 )
+_QUOTED = re.compile(r"\"[^\"]*\"|'[^']*'")
 
 
 def _ran_and_failed(result: dict) -> bool:
@@ -144,14 +150,18 @@ def _ran_and_failed(result: dict) -> bool:
     if "final_command" not in result or not isinstance(result.get("return_code"), int):
         return False
     said = " ".join(str(result.get(k) or "") for k in ("error", "chat_output", "output")).lower()
-    return not any(word in said for word in _ACCESS_WORDS)
+    # The command line is echoed in chat_output; what the CLI answered is what matters.
+    said = said.replace(str(result.get("final_command") or "").lower(), " ")
+    return not _ACCESS_ERROR.search(_QUOTED.sub(" ", said))
 
 
-def judge(check: dict, user_id: str, check_id: str, at=None) -> Verdict:
+def judge(check: dict, user_id: str, check_id: str, at=None, timeout=None) -> Verdict:
     """Produce the verdict for one run of *check*. Never raises.
 
-    *at* replays a windowed check over the span ending then.
+    *at* replays a windowed check over the span ending then. *timeout* shortens
+    the command's time limit; it never lengthens it.
     """
+    limit = COMMAND_TIMEOUT_SECONDS if timeout is None else max(1, min(COMMAND_TIMEOUT_SECONDS, int(timeout)))
     # Checked on every run, not only when the check was saved: a row changed
     # some other way must still be unable to run a write.
     if at is None and window.is_windowed(check.get("window_seconds")):
@@ -162,7 +172,7 @@ def judge(check: dict, user_id: str, check_id: str, at=None) -> Verdict:
     if rejection:
         return Verdict(STATUS_ERROR, detail="command is not read-only: " + rejection)
     try:
-        outcome = _execute(check, user_id, check_id, at)
+        outcome = _execute(check, user_id, check_id, at, limit)
     except Exception as exc:
         logger.exception("[DetectionExecution] Check %s raised while executing", sanitize(check_id))
         return Verdict(STATUS_ERROR, detail="execution raised %s" % type(exc).__name__, ran=False)

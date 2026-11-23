@@ -75,10 +75,23 @@ def incident_id_from(origin_ref: str) -> Optional[str]:
 
 
 def incident_time(cursor, org_id: str, incident_id: str) -> Optional[datetime]:
-    """When the incident began, or None when it is not one of this org's."""
+    """When the incident began, or None when it cannot stand as evidence for a check.
+
+    None for another org's incident, for one a check opened, and for an
+    investigation someone started by hand that nobody has resolved: the same
+    incidents grading does not count (record._independent_incident). A replay
+    over one of those would credit a check with a hit nothing independent
+    confirmed.
+    """
     cursor.execute(
-        """SELECT COALESCE(alert_fired_at, started_at, created_at)::timestamptz
-           FROM incidents WHERE id = %s AND org_id = %s""",
+        """SELECT COALESCE(i.alert_fired_at, i.started_at, i.created_at)::timestamptz
+           FROM incidents i
+           WHERE i.id = %s AND i.org_id = %s
+             AND (i.source_type <> 'chat' OR i.status = 'resolved')
+             AND NOT EXISTS (
+                 SELECT 1 FROM detection_check_fires f
+                 WHERE f.incident_id = i.id AND f.opened_incident
+             )""",
         (incident_id, org_id),
     )
     row = cursor.fetchone()
@@ -122,6 +135,25 @@ def quiet_ends(cursor, org_id: str, end: datetime, window_seconds: int) -> List[
     return ends
 
 
+def _time_left(started: float, clock: Callable[[], float]) -> int:
+    """Whole seconds of the replay budget still unspent."""
+    return int(REPLAY_BUDGET_SECONDS - (clock() - started))
+
+
+def _says_nothing(check: Dict[str, Any], verdict) -> bool:
+    """A replayed span that cannot be read as healthy or failing.
+
+    An error, and for a line count an empty answer: a source that no longer
+    holds that span returns nothing, which would count as zero lines. It is
+    neither a miss over the incident nor a quiet day. A number check is left
+    alone: for it, printing nothing is already a failure.
+    """
+    if verdict.status == STATUS_ERROR:
+        return True
+    counts_lines = (check.get("assertion") or {}).get("expect") == "lines"
+    return counts_lines and not (verdict.observed or "").strip()
+
+
 def replay_origin(check: Dict[str, Any], user_id: str, end: datetime,
                   quiet: List[datetime], run: Runner = judge,
                   clock: Callable[[], float] = time.monotonic) -> ReplayResult:
@@ -130,16 +162,19 @@ def replay_origin(check: Dict[str, Any], user_id: str, end: datetime,
         return ReplayResult(None, detail="the command does not name both ends of a time span")
 
     started = clock()
-    over_incident = run(check, user_id, "replay", at=end)
-    if over_incident.status == STATUS_ERROR:
-        return ReplayResult(None, detail="could not read that span: " + over_incident.detail)
+    over_incident = run(check, user_id, "replay", at=end, timeout=_time_left(started, clock))
+    if _says_nothing(check, over_incident):
+        return ReplayResult(None, detail="could not read that span: "
+                            + (over_incident.detail or "the source returned nothing for it"))
 
     quiet_runs = quiet_fails = 0
     for quiet_end in quiet:
-        if clock() - started >= REPLAY_BUDGET_SECONDS:
+        left = _time_left(started, clock)
+        if left <= 0:
             break
-        verdict = run(check, user_id, "replay", at=quiet_end)
-        if verdict.status == STATUS_ERROR:
+        # Capped by what is left, so the last command cannot run past the budget.
+        verdict = run(check, user_id, "replay", at=quiet_end, timeout=left)
+        if _says_nothing(check, verdict):
             continue
         quiet_runs += 1
         quiet_fails += verdict.status == STATUS_FAIL
@@ -196,7 +231,8 @@ def drill_targets(cursor, org_id: str, check_id: Optional[str] = None) -> List[D
     """Proven checks whose current revision caught its incident in replay, recently enough.
 
     Past DRILL_HORIZON_DAYS the check is no longer drilled: it stands on what
-    it has done since. *check_id* narrows this to one check, re-read at the
+    it has done since. A paused check is not drilled either: nothing runs with
+    its new owner's access until an editor resumes it. *check_id* narrows this to one check, re-read at the
     moment its drill runs.
     """
     cursor.execute(
@@ -204,6 +240,7 @@ def drill_targets(cursor, org_id: str, check_id: Optional[str] = None) -> List[D
            FROM detection_checks c
            JOIN detection_check_revisions r ON r.check_id = c.id AND r.revision = c.revision
            WHERE c.org_id = %s AND c.state = %s AND (r.replay->>'caught') = 'true'
+             AND c.paused_at IS NULL
              AND (r.replay->>'replayed_to')::timestamptz >= NOW() - %s * INTERVAL '1 day'
              AND (%s::uuid IS NULL OR c.id = %s::uuid)
            ORDER BY c.id""",
