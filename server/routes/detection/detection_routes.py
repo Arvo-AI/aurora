@@ -122,7 +122,7 @@ def resume(user_id, check_id):
                 cur, conn, user_id, org_id=get_org_id_from_request(), log_prefix="[Detection:resume]",
             )
             if not org_id:
-                return jsonify({"error": "No organization"}), 403
+                return jsonify({"error": _ERR_NO_ORG}), 403
             resumed = resume_check(cur, org_id, check_id, user_id)
             conn.commit()
     except Exception:
@@ -145,7 +145,7 @@ def get_reports(user_id):
                 cur, conn, user_id, org_id=get_org_id_from_request(), log_prefix="[Detection:reports]",
             )
             if not org_id:
-                return jsonify({"error": "No organization"}), 403
+                return jsonify({"error": _ERR_NO_ORG}), 403
             reports = chat_signals.list_reports(cur, org_id)
             channels = chat_signals.list_channels(cur, org_id)
     except Exception:
@@ -168,7 +168,7 @@ def set_chat_channel(user_id, channel_id):
                 cur, conn, user_id, org_id=get_org_id_from_request(), log_prefix="[Detection:channel]",
             )
             if not org_id:
-                return jsonify({"error": "No organization"}), 403
+                return jsonify({"error": _ERR_NO_ORG}), 403
             changed = chat_signals.set_channel_enabled(cur, org_id, channel_id[:64], enabled)
             conn.commit()
     except Exception:

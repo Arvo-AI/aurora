@@ -77,7 +77,8 @@ def test_a_claim_cannot_carry_a_mention_or_run_long():
          "claim": "<!channel> checkout is down\n\n<@U123> `rm -rf`" + "x" * 1000},
     ), _MESSAGES, _ASSETS)
     claim = reports[0].claim
-    assert "<" not in claim and ">" not in claim and "`" not in claim and "\n" not in claim
+    for forbidden in "<>`\n":
+        assert forbidden not in claim
     assert len(claim) <= CLAIM_MAX_CHARS
 
 

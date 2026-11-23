@@ -151,6 +151,45 @@ def _new_replies(client, channel_id: str, parents: List[dict], last_ts: str) -> 
     return replies
 
 
+def _gather(client, team_id: str, channel_id: str, last_ts: str):
+    """What is new in the channel since *last_ts*: (new, context, newest ts seen).
+
+    *new* is what the model judges, *context* the conversation before it. Both
+    hold only people of this workspace: context is shown to the model too.
+    """
+    latest, complete = _latest(client, channel_id, last_ts)
+    if not complete:
+        logger.warning("%s Channel %s had more than %d new messages; the oldest were not read",
+                       _LOG, sanitize(channel_id), _PAGE * _MAX_PAGES)
+    top_new = [m for m in latest if float(m["ts"]) > float(last_ts)]
+    before = sorted((m for m in latest if float(m["ts"]) <= float(last_ts)),
+                    key=lambda m: float(m["ts"]))[-_CONTEXT_MESSAGES:]
+    seen = top_new + _new_replies(client, channel_id, latest, last_ts)
+    newest_ts = max((m["ts"] for m in seen), key=float) if seen else last_ts
+    return (
+        [m for m in seen if chat_reader.is_readable(m, team_id)],
+        [m for m in before if chat_reader.is_readable(m, team_id)],
+        newest_ts,
+    )
+
+
+def _keep(cur, org_id: str, channel_id: str, new: list, reports, newest_ts: str) -> None:
+    """Store what one reading of a channel found, and move its cursor."""
+    if new:
+        chat_signals.record_read(cur, org_id, channel_id, len(new), len(reports or []),
+                                 reports is not None)
+    if reports is None:
+        if chat_signals.read_failed(cur, org_id, channel_id, newest_ts):
+            logger.warning("%s Gave up on %d message(s) in channel %s after repeated failures",
+                           _LOG, len(new), sanitize(channel_id))
+        return
+    for report in reports:
+        kept = chat_signals.keep_report(cur, org_id, channel_id, report)
+        if kept and report.asset:
+            chat_signals.run_checks_now(cur, org_id, report.asset)
+    chat_signals.advance(cur, org_id, channel_id, newest_ts)
+
+
 def _read_channel(client, team_id: str, user_id: str, org_id: str, channel_id: str,
                   last_ts: Optional[str], assets: List[str]) -> None:
     """Slack and the model are called with no database connection held."""
@@ -164,42 +203,15 @@ def _read_channel(client, team_id: str, user_id: str, org_id: str, channel_id: s
 
     reports, new, newest_ts = None, [], last_ts
     try:
-        latest, complete = _latest(client, channel_id, last_ts)
-        if not complete:
-            logger.warning("%s Channel %s had more than %d new messages; the oldest were not read",
-                           _LOG, sanitize(channel_id), _PAGE * _MAX_PAGES)
-        top_new = [m for m in latest if float(m["ts"]) > float(last_ts)]
-        before = sorted((m for m in latest if float(m["ts"]) <= float(last_ts)),
-                        key=lambda m: float(m["ts"]))[-_CONTEXT_MESSAGES:]
-        replies = _new_replies(client, channel_id, latest, last_ts)
-        seen = top_new + replies
-        if seen:
-            newest_ts = max((m["ts"] for m in seen), key=float)
-        new = [m for m in seen if chat_reader.is_readable(m, team_id)]
-        # Context is shown to the model, so it is held to the same rule: nothing
-        # from a bot or from outside the workspace.
-        context = [m for m in before if chat_reader.is_readable(m, team_id)]
+        new, context, newest_ts = _gather(client, team_id, channel_id, last_ts)
         reports = chat_reader.read(new, context, assets, user_id)
     except Exception:
         logger.exception("%s Could not read channel %s", _LOG, sanitize(channel_id))
 
     with _org_cursor(user_id, org_id) as (cur, conn):
-        if cur is None:
-            return
-        if new:
-            chat_signals.record_read(cur, org_id, channel_id, len(new), len(reports or []),
-                                     reports is not None)
-        if reports is None:
-            if chat_signals.read_failed(cur, org_id, channel_id, newest_ts):
-                logger.warning("%s Gave up on %d message(s) in channel %s after repeated failures",
-                               _LOG, len(new), sanitize(channel_id))
-        else:
-            for report in reports:
-                kept = chat_signals.keep_report(cur, org_id, channel_id, report)
-                if kept and report.asset:
-                    chat_signals.run_checks_now(cur, org_id, report.asset)
-            chat_signals.advance(cur, org_id, channel_id, newest_ts)
-        conn.commit()
+        if cur is not None:
+            _keep(cur, org_id, channel_id, new, reports, newest_ts)
+            conn.commit()
 
 
 # ---- verifying ------------------------------------------------------------
