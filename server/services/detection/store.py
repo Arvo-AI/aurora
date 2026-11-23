@@ -262,6 +262,13 @@ def _insert_new(cursor, org_id: str, user_id: str, definition: Dict[str, Any],
     # Held to the end of the transaction: two saves under different names
     # would otherwise both count 199 and both insert.
     cursor.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", ("detection-checks:%s" % org_id,))
+    # While waiting for the lock another save may have created this very name.
+    # That is a revision of its row, not a new check, so it needs no free slot.
+    cursor.execute(
+        "SELECT 1 FROM detection_checks WHERE org_id = %s AND name = %s", (org_id, definition["name"]),
+    )
+    if cursor.fetchone() is not None:
+        return None
     cursor.execute(
         "SELECT COUNT(*) FROM detection_checks WHERE org_id = %s AND state <> %s",
         (org_id, STATE_RETIRED),

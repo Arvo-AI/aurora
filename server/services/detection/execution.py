@@ -5,6 +5,7 @@ check may run, and when a run counts as healthy, can be tested on their own.
 """
 
 import json
+import re
 import logging
 from contextlib import contextmanager
 
@@ -123,10 +124,15 @@ def _execute(check: dict, user_id: str, check_id: str) -> Verdict | str:
 
 
 # What a CLI says when it was turned away, or never had credentials to begin with.
-_ACCESS_WORDS = (
-    "credential", "unauthorized", "unauthenticated", "forbidden", "access denied",
-    "accessdenied", "permission", "not authorized", "expired", "login",
+# Whole phrases, matched outside quoted names: a deployment called "login" that
+# does not exist is a missing resource, not a login problem.
+_ACCESS_ERROR = re.compile(
+    r"\b(forbidden|unauthorized|unauthenticated|access ?denied|permission denied|not authorized"
+    r"|invalid credentials|unable to locate credentials|could not load credentials"
+    r"|(token|credentials?|session) (has |have |is |are )?expired|expiredtoken"
+    r"|must be logged in|you must log ?in|please (run .{0,40})?log ?in)\b"
 )
+_QUOTED = re.compile(r"\"[^\"]*\"|'[^']*'")
 
 
 def _ran_and_failed(result: dict) -> bool:
@@ -141,7 +147,9 @@ def _ran_and_failed(result: dict) -> bool:
     if "final_command" not in result or not isinstance(result.get("return_code"), int):
         return False
     said = " ".join(str(result.get(k) or "") for k in ("error", "chat_output", "output")).lower()
-    return not any(word in said for word in _ACCESS_WORDS)
+    # The command line is echoed in chat_output; what the CLI answered is what matters.
+    said = said.replace(str(result.get("final_command") or "").lower(), " ")
+    return not _ACCESS_ERROR.search(_QUOTED.sub(" ", said))
 
 
 def judge(check: dict, user_id: str, check_id: str) -> Verdict:
