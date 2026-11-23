@@ -13,31 +13,22 @@ failure opens a case.
 """
 
 import logging
-import os
 import time
 from contextlib import contextmanager
 
 from celery_config import celery_app
-from services.detection import STATE_PROVEN, STATE_RETIRED, STATUS_ERROR
-from services.detection import (
-    access,
-    attention,
-    cases,
-    chat_reader,
-    chat_signals,
-    consolidation,
-    ownership,
-    record,
-    replay,
-)
+from services.detection import STATE_PROVEN, STATUS_ERROR, checks_enabled
+from services.detection import access, attention, cases, consolidation, ownership, record, replay
 from services.detection.assertion import Verdict
 from services.detection.execution import judge
 from services.detection.store import (
+    REVIEW_BATCH,
     claim_due_checks,
     fires_awaiting_a_case,
     get_check_for_case,
     get_runnable_check,
     link_fire_to_case,
+    orgs_review_is_due,
     record_result,
     reserve_case,
 )
@@ -54,20 +45,6 @@ MAX_CHECKS_PER_ORG_PER_TICK = 20
 # only bounds how often it is asked.
 MAX_CASE_RETRIES_PER_ORG_PER_TICK = 3
 _LOG = "[DetectionRunner]"
-
-
-def checks_enabled() -> bool:
-    """Off switch for the runner (DETECTION_CHECKS_ENABLED=false)."""
-    return (os.getenv("DETECTION_CHECKS_ENABLED") or "true").strip().lower() != "false"
-
-
-def chat_intake_enabled() -> bool:
-    """Reading chat channels is opt-in (DETECTION_CHAT_INTAKE_ENABLED=true).
-
-    It sends every message of the channels Aurora is in through a model, which
-    is a decision for whoever runs the install, not a default.
-    """
-    return (os.getenv("DETECTION_CHAT_INTAKE_ENABLED") or "false").strip().lower() == "true"
 
 
 def _org_representatives():
@@ -117,28 +94,29 @@ def run_due_checks():
     if not checks_enabled():
         return
 
-    claimed, awaiting = [], []
+    claimed, awaiting, handed_over = [], [], []
 
-    def _claim(cur, conn, _user_id, org_id):
+    def _claim(cur, conn, user_id, org_id):
         # Before claiming: a check claimed under a creator who has left would
-        # run, and fail, as that creator.
-        ownership.reassign_orphaned_checks(cur, org_id)
+        # run, and fail, as that creator. Handed-over checks are paused, and
+        # whoever installed Slack is told once, after the hand-off is committed.
+        _admin, handed = ownership.reassign_orphaned_checks(cur, org_id)
+        if handed:
+            handed_over.append((user_id, handed))
         due = claim_due_checks(cur, org_id, MAX_CHECKS_PER_ORG_PER_TICK)
         conn.commit()
         claimed.extend((check_id, org_id, created_by, claim) for check_id, created_by, claim in due)
         awaiting.extend(
-            (fire_id, check_id, org_id, created_by, observed, None)
+            (fire_id, check_id, org_id, created_by, observed)
             for fire_id, check_id, observed, created_by
             in fires_awaiting_a_case(cur, org_id, MAX_CASE_RETRIES_PER_ORG_PER_TICK)
         )
-        # An unproven check failing where a person just reported a problem.
-        awaiting.extend(
-            (fire_id, check_id, org_id, created_by, observed, (signal_id, claim))
-            for fire_id, check_id, observed, created_by, signal_id, claim
-            in chat_signals.corroborated(cur, org_id, MAX_CASE_RETRIES_PER_ORG_PER_TICK)
-        )
 
     _for_each_org(_claim, "claiming due checks")
+
+    # After the hand-off is committed, and with no database connection held.
+    for user_id, names in handed_over:
+        access.message_installer(user_id, ownership.handed_over_message(names))
 
     for check_id, org_id, created_by, claim in claimed:
         try:
@@ -147,17 +125,12 @@ def run_due_checks():
             # The claim expires by itself, so the check is picked up again later.
             logger.exception("%s Failed to queue check %s", _LOG, sanitize(check_id))
 
-    for fire_id, check_id, org_id, created_by, observed, report in awaiting:
-        _open_or_join_case(fire_id, check_id, org_id, created_by, observed, report)
+    for fire_id, check_id, org_id, created_by, observed in awaiting:
+        _open_or_join_case(fire_id, check_id, org_id, created_by, observed)
 
 
-def _open_or_join_case(fire_id: str, check_id: str, org_id: str, user_id: str, observed: str,
-                       report: tuple | None = None) -> None:
-    """Give a fire its case: join a fresh one on the asset, or open one.
-
-    A proven check earns a case by failing. An unproven one only gets a case
-    when *report* (signal_id, claim) says a person reported the same asset.
-    """
+def _open_or_join_case(fire_id: str, check_id: str, org_id: str, user_id: str, observed: str) -> None:
+    """Give a proven check's fire its case: join a fresh one on the asset, or open one."""
     try:
         with _org_cursor(user_id, org_id) as (cur, conn):
             if cur is None:
@@ -174,41 +147,33 @@ def _open_or_join_case(fire_id: str, check_id: str, org_id: str, user_id: str, o
                                _LOG, sanitize(check_id))
                 return
             check = get_check_for_case(cur, check_id)
-            # A retired check gets no case, report or not: retiring leaves its
-            # open fire in place, and a report must not bring it back to life.
-            if check is None or check["state"] == STATE_RETIRED:
-                return
-            if check["state"] != STATE_PROVEN and report is None:
+            if check is None or check["state"] != STATE_PROVEN:
                 return
             # Re-checked under the write: the fire may have cleared or been given
             # a case since the tick selected it, and another worker may hold it.
-            reserved = reserve_case(cur, fire_id, allow_graded=report is not None)
+            reserved = reserve_case(cur, fire_id)
+            cur.execute("SELECT fired_at FROM detection_check_fires WHERE id = %s", (fire_id,))
+            fired = cur.fetchone()
             existing = cases.find_open_case(cur, org_id, check["asset"]) if reserved else None
             if existing:
-                _link(cur, fire_id, existing, False, report)
+                link_fire_to_case(cur, fire_id, existing, opened=False)
             conn.commit()
             if not reserved or existing:
                 return
 
         incident_id = cases.open_case(
             check, observed, user_id, org_id=org_id, fire_id=fire_id,
-            reported=report[1] if report else "",
+            fired_at=fired[0] if fired else None,
         )
         if not incident_id:
             return
         with _org_cursor(user_id, org_id) as (cur, conn):
             if cur is None:
                 return
-            _link(cur, fire_id, incident_id, True, report)
+            link_fire_to_case(cur, fire_id, incident_id, opened=True)
             conn.commit()
     except Exception:
         logger.exception("%s Failed to open a case for check %s", _LOG, sanitize(check_id))
-
-
-def _link(cur, fire_id: str, incident_id: str, opened: bool, report: tuple | None) -> None:
-    link_fire_to_case(cur, fire_id, incident_id, opened=opened)
-    if report:
-        chat_signals.link_signal_to_case(cur, report[0], incident_id)
 
 
 @celery_app.task(name="services.detection.runner.run_check")
@@ -321,11 +286,15 @@ def spend_attention():
         return
 
     def _spend(cur, conn, user_id, org_id):
+        # A run that died between claiming a post and sending it left a claim
+        # with nothing behind it. Given back first, so it is a candidate again.
+        if attention.release_stale_claims(cur, org_id):
+            conn.commit()
         waiting = attention.candidates(cur, org_id)
         cleared = attention.cleared_to_note(cur, org_id)
         if not waiting and not cleared:
             return
-        client, channel = attention.slack_target(user_id)
+        client, channel, installer = attention.slack_target(user_id)
         if client is None:
             return
 
@@ -339,6 +308,10 @@ def spend_attention():
                     attention.unmark_clear_noted(cur, fire_id)
                     conn.commit()
 
+        if not waiting or not attention.working_hours_now(client, installer):
+            # A thread reply notifies nobody and went out above. A new post waits
+            # for a weekday daytime; the failure is still a candidate then.
+            return
         budget, spent = attention.channel_budget(cur, org_id, channel)
         for candidate in waiting[:max(0, budget - spent)]:
             # Claimed and committed before sending: two workers must not both post.
@@ -348,18 +321,25 @@ def spend_attention():
             conn.commit()
             if not claimed:
                 continue
-            ts, refused = _send(client, channel, attention.worth_a_look_message(candidate, budget))
+            ts, refused = _send(
+                client, channel, attention.worth_a_look_message(candidate, budget),
+                blocks=attention.worth_a_look_blocks(candidate, budget),
+            )
             if ts:
                 attention.record_post(cur, candidate["fire_id"], ts)
             elif refused:
                 attention.release(cur, candidate["fire_id"])
-            # Neither: the outcome is unknown and the claim is kept. See _send.
+            else:
+                # Unknown: it may be in the channel. Kept, and marked so the
+                # stale-claim sweep does not hand it out a second time.
+                attention.record_post(cur, candidate["fire_id"], attention.TS_UNKNOWN)
             conn.commit()
 
     _for_each_org(_spend, "spending attention")
 
 
-def _send(client, channel: str, text: str, thread_ts: str | None = None) -> tuple[str | None, bool]:
+def _send(client, channel: str, text: str, thread_ts: str | None = None,
+          blocks: list | None = None) -> tuple[str | None, bool]:
     """Post to Slack. Returns (message ts, whether Slack refused it).
 
     Three outcomes, and they are not the same:
@@ -374,7 +354,7 @@ def _send(client, channel: str, text: str, thread_ts: str | None = None) -> tupl
     from connectors.slack_connector.client import SlackAPIError
 
     try:
-        result = client.send_message(channel=channel, text=text, thread_ts=thread_ts)
+        result = client.send_message(channel=channel, text=text, thread_ts=thread_ts, blocks=blocks)
     except SlackAPIError:
         logger.warning("%s Slack refused a post", _LOG, exc_info=True)
         return None, True
@@ -387,128 +367,101 @@ def _send(client, channel: str, text: str, thread_ts: str | None = None) -> tupl
 
 @celery_app.task(name="services.detection.runner.run_fire_drills")
 def run_fire_drills():
-    """Re-run the replay that admitted each proven check; demote one that now misses.
+    """Queue one drill per proven check that was admitted by a replay.
 
-    A check can stop catching its own incident without anyone revising it: a
-    log format changes, a metric is renamed. The replay that let it in is the
-    test that says so.
+    One task per check, on the checks' own queue: a drill runs a command
+    against a customer's system and can take as long as the command timeout,
+    so a few hundred of them in one task would not finish.
     """
     if not checks_enabled():
         return
 
     targets = []
 
-    def _collect(cur, _conn, user_id, org_id):
-        targets.extend((org_id, user_id, target) for target in replay.drill_targets(cur, org_id))
+    def _collect(cur, _conn, _user_id, org_id):
+        targets.extend((org_id, target["created_by"], str(target["id"]))
+                       for target in replay.drill_targets(cur, org_id))
 
     _for_each_org(_collect, "collecting fire drills")
 
-    for org_id, user_id, target in targets:
+    for org_id, owner, check_id in targets:
         try:
-            if replay.still_catches(target) is not False:
-                continue
-            with _org_cursor(user_id, org_id) as (cur, conn):
-                if cur is None:
-                    continue
-                replay.fail_drill(
-                    cur, str(target["id"]), org_id, target["revision"],
-                    "Fire drill: replayed over incident %s, this check no longer fails."
-                    % target["replay"].get("incident_id"),
-                )
-                conn.commit()
-            logger.info("%s Fire drill demoted check %s", _LOG, sanitize(str(target["id"])))
+            run_fire_drill.delay(check_id, org_id, owner)
         except Exception:
-            logger.exception("%s Fire drill failed for check %s", _LOG, sanitize(str(target["id"])))
+            logger.exception("%s Failed to queue a fire drill for check %s", _LOG, sanitize(check_id))
 
 
-_HISTORY_LIMIT = 15
-# Pages read per turn when a channel has more new messages than one page holds.
-_HISTORY_MAX_PAGES = 4
+@celery_app.task(name="services.detection.runner.run_fire_drill")
+def run_fire_drill(check_id: str, org_id: str, user_id: str):
+    """Re-run the replay that admitted one proven check; demote it if it now misses.
 
-
-def _new_messages(client, channel_id: str, last_ts: str):
-    """Messages after *last_ts*: (messages, whether that is all of them).
-
-    Slack returns the newest page first, so stopping at one page would move the
-    cursor past older messages that were never read. This follows the pages
-    back to the cursor, up to a bound.
+    A check can stop catching its own incident without anyone revising it: a
+    log format changes, a metric is renamed. The replay that let it in is the
+    test that says so. A demoted check is put up for review, so the agent
+    looks at why.
     """
-    messages, page_cursor = [], None
-    for _ in range(_HISTORY_MAX_PAGES):
-        params = {"channel": channel_id, "oldest": last_ts, "limit": _HISTORY_LIMIT}
-        if page_cursor:
-            params["cursor"] = page_cursor
-        result = client._make_request("GET", "conversations.history", params) or {}
-        messages.extend(m for m in result.get("messages", []) if m.get("ts"))
-        page_cursor = (result.get("response_metadata") or {}).get("next_cursor")
-        if not result.get("has_more") or not page_cursor:
-            return messages, True
-    return messages, False
-
-
-@celery_app.task(name="services.detection.runner.read_chat")
-def read_chat():
-    """Read one channel per org for problem reports. Opt-in; posts nothing."""
-    if not checks_enabled() or not chat_intake_enabled():
+    if not checks_enabled():
         return
     try:
-        representatives = _org_representatives()
-    except Exception:
-        logger.exception("%s Failed to list orgs for reading chat", _LOG)
-        return
-    for user_id, org_id in representatives:
-        try:
-            _read_one_channel(user_id, org_id)
-        except Exception:
-            logger.exception("%s Reading chat failed for org %s", _LOG, sanitize(org_id))
-
-
-def _read_one_channel(user_id: str, org_id: str) -> None:
-    """Three steps, so no database connection is held while Slack or the model is called."""
-    with _org_cursor(user_id, org_id) as (cur, conn):
-        if cur is None:
+        with _org_cursor(user_id, org_id) as (cur, _conn):
+            # Read again here: it may have been revised, demoted or retired
+            # since it was queued.
+            found = replay.drill_targets(cur, org_id, check_id) if cur is not None else []
+        if not found:
             return
-        turn = chat_signals.next_channel(cur, org_id)
-        if turn is None:
+        target = found[0]
+        if replay.still_catches(target) is not False:
             return
-        channel_id, last_ts = turn
-        if last_ts is None:
-            # First sight of a channel: start from now. Its history is not read.
-            chat_signals.set_cursor(cur, org_id, channel_id, "%.6f" % time.time())
+        with _org_cursor(user_id, org_id) as (cur, conn):
+            if cur is None:
+                return
+            replay.fail_drill(
+                cur, check_id, org_id, target["revision"],
+                "Fire drill: replayed over incident %s, this check no longer fails."
+                % target["replay"].get("incident_id"),
+            )
             conn.commit()
-            return
-        assets = chat_signals.known_assets(cur, org_id)
-
-    from connectors.slack_connector.client import get_slack_client_for_user
-    client = get_slack_client_for_user(user_id)
-    if client is None:
-        return
-
-    readings, newest_ts = None, last_ts
-    try:
-        messages, complete = _new_messages(client, channel_id, last_ts)
-        if not complete:
-            # More arrived since the last turn than one turn reads. The oldest
-            # are skipped, and said so here: Slack returns newest first, so the
-            # only way to reach them is to page through everything newer.
-            logger.warning("%s Channel %s had more than %d new messages; the oldest were not read",
-                           _LOG, sanitize(channel_id), _HISTORY_LIMIT * _HISTORY_MAX_PAGES)
-        if messages:
-            newest_ts = max((m["ts"] for m in messages), key=float)
-        readings = chat_reader.read(
-            [m for m in messages if chat_reader.is_human_message(m)], assets, user_id,
-        )
+        logger.info("%s Fire drill demoted check %s", _LOG, sanitize(check_id))
     except Exception:
-        logger.exception("%s Could not read channel %s", _LOG, sanitize(channel_id))
+        logger.exception("%s Fire drill failed for check %s", _LOG, sanitize(check_id))
 
-    with _org_cursor(user_id, org_id) as (cur, conn):
-        if cur is None:
+
+@celery_app.task(name="services.detection.runner.review_checks")
+def review_checks():
+    """Hand checks that stopped working to the agent, for orgs that have any.
+
+    The work is the built-in "Check Review" action, so it shows up with the
+    other actions, its instructions can be edited and it can be turned off. It
+    is started from here rather than on a schedule so an org with nothing to
+    review costs no model call.
+    """
+    if not checks_enabled():
+        return
+    from services.actions.check_review_action import SYSTEM_KEY
+
+    waiting = []
+
+    def _find(cur, _conn, _user_id, org_id):
+        if not orgs_review_is_due(cur, org_id):
             return
-        if readings is None:
-            chat_signals.touch_cursor(cur, org_id, channel_id)
-        else:
-            for reading in readings:
-                if chat_signals.keep_report(cur, org_id, channel_id, reading) and reading.asset:
-                    chat_signals.run_checks_now(cur, org_id, reading.asset)
-            chat_signals.set_cursor(cur, org_id, channel_id, newest_ts)
-        conn.commit()
+        cur.execute(
+            """SELECT a.id, a.created_by FROM actions a
+               WHERE a.org_id = %s AND a.system_key = %s AND a.enabled
+                 AND NOT EXISTS (SELECT 1 FROM action_runs r WHERE r.action_id = a.id
+                                 AND r.status IN ('pending', 'running'))""",
+            (org_id, SYSTEM_KEY),
+        )
+        row = cur.fetchone()
+        if row:
+            waiting.append((str(row[0]), row[1], org_id))
+
+    _for_each_org(_find, "finding checks to review")
+
+    from services.actions.executor import dispatch_action
+
+    for action_id, owner, org_id in waiting:
+        try:
+            dispatch_action(action_id=action_id, user_id=owner,
+                            trigger_context={"source": "detection_review", "batch": REVIEW_BATCH})
+        except Exception:
+            logger.exception("%s Could not start the check review for org %s", _LOG, sanitize(org_id))

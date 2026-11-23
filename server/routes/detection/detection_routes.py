@@ -9,7 +9,9 @@ import logging
 
 from flask import jsonify, request
 
-from services.detection.store import list_checks, retire_check_by_id
+from services.detection import chat_intake_enabled, chat_signals, checks_enabled
+from services.detection.ownership import resume_check
+from services.detection.store import list_checks, retire_check_by_id, vouch_check
 from utils.auth.enforcer import enforce_with_reload
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
@@ -23,9 +25,18 @@ logger = logging.getLogger(__name__)
 _ERR_INTERNAL = "Internal server error"
 
 
+@detection_bp.route("/status", methods=["GET"])
+@require_permission("detection_checks", "read")
+def get_status(user_id):
+    """Whether the feature is on for this install. The sidebar hides the page when it is not."""
+    return jsonify({"enabled": checks_enabled()})
+
+
 @detection_bp.route("/checks", methods=["GET"])
 @require_permission("detection_checks", "read")
 def get_checks(user_id):
+    if not checks_enabled():
+        return jsonify({"enabled": False, "checks": [], "can_edit": False})
     include_retired = request.args.get("include_retired", "").lower() == "true"
     try:
         with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
@@ -46,7 +57,7 @@ def get_checks(user_id):
         # (a ConfigMap read by someone with connector access, for instance).
         for check in checks:
             check.pop("last_observed", None)
-    return jsonify({"checks": checks, "can_edit": can_edit})
+    return jsonify({"enabled": True, "checks": checks, "can_edit": can_edit})
 
 
 @detection_bp.route("/checks/<check_id>/retire", methods=["POST"])
@@ -71,3 +82,96 @@ def retire(user_id, check_id):
     if not retired:
         return jsonify({"error": "Check not found"}), 404
     return jsonify({"status": "retired"})
+
+
+@detection_bp.route("/checks/<check_id>/vouch", methods=["POST"])
+@require_permission("detection_checks", "write")
+def vouch(user_id, check_id):
+    """A person decides this check may open an incident when it fails."""
+    if not is_valid_uuid(check_id):
+        return jsonify({"error": "Check not found"}), 404
+    try:
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+            org_id = set_rls_context(
+                cur, conn, user_id, org_id=get_org_id_from_request(), log_prefix="[Detection:vouch]",
+            )
+            if not org_id:
+                return jsonify({"error": "No organization"}), 403
+            vouched = vouch_check(cur, org_id, check_id, user_id)
+            conn.commit()
+    except Exception:
+        logger.exception("[Detection] Failed to vouch for check")
+        return jsonify({"error": _ERR_INTERNAL}), 500
+    if not vouched:
+        # Not this org's, retired, or already trusted.
+        return jsonify({"error": "Check not found or not waiting to be trusted"}), 404
+    return jsonify({"status": "proven"})
+
+
+@detection_bp.route("/checks/<check_id>/resume", methods=["POST"])
+@require_permission("detection_checks", "write")
+def resume(user_id, check_id):
+    """Run a paused check again, as the person resuming it."""
+    if not is_valid_uuid(check_id):
+        return jsonify({"error": "Check not found"}), 404
+    try:
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+            org_id = set_rls_context(
+                cur, conn, user_id, org_id=get_org_id_from_request(), log_prefix="[Detection:resume]",
+            )
+            if not org_id:
+                return jsonify({"error": "No organization"}), 403
+            resumed = resume_check(cur, org_id, check_id, user_id)
+            conn.commit()
+    except Exception:
+        logger.exception("[Detection] Failed to resume check")
+        return jsonify({"error": _ERR_INTERNAL}), 500
+    if not resumed:
+        return jsonify({"error": "Check not found or not paused"}), 404
+    return jsonify({"status": "resumed"})
+
+
+@detection_bp.route("/reports", methods=["GET"])
+@require_permission("detection_checks", "read")
+def get_reports(user_id):
+    """Problem reports Aurora read in chat and how each ended, and the channels it reads."""
+    if not chat_intake_enabled():
+        return jsonify({"enabled": False, "reports": [], "channels": [], "can_edit": False})
+    try:
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+            org_id = set_rls_context(
+                cur, conn, user_id, org_id=get_org_id_from_request(), log_prefix="[Detection:reports]",
+            )
+            if not org_id:
+                return jsonify({"error": "No organization"}), 403
+            reports = chat_signals.list_reports(cur, org_id)
+            channels = chat_signals.list_channels(cur, org_id)
+    except Exception:
+        logger.exception("[Detection] Failed to list chat reports")
+        return jsonify({"error": _ERR_INTERNAL}), 500
+    can_edit = enforce_with_reload(user_id, org_id, "detection_checks", "write")
+    return jsonify({"enabled": True, "reports": reports, "channels": channels, "can_edit": can_edit})
+
+
+@detection_bp.route("/chat-channels/<channel_id>", methods=["POST"])
+@require_permission("detection_checks", "write")
+def set_chat_channel(user_id, channel_id):
+    """Turn reading of one channel on or off."""
+    enabled = (request.get_json(silent=True) or {}).get("enabled")
+    if not isinstance(enabled, bool):
+        return jsonify({"error": "enabled must be true or false"}), 400
+    try:
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+            org_id = set_rls_context(
+                cur, conn, user_id, org_id=get_org_id_from_request(), log_prefix="[Detection:channel]",
+            )
+            if not org_id:
+                return jsonify({"error": "No organization"}), 403
+            changed = chat_signals.set_channel_enabled(cur, org_id, channel_id[:64], enabled)
+            conn.commit()
+    except Exception:
+        logger.exception("[Detection] Failed to change a chat channel")
+        return jsonify({"error": _ERR_INTERNAL}), 500
+    if not changed:
+        return jsonify({"error": "Channel not found"}), 404
+    return jsonify({"status": "ok", "enabled": enabled})

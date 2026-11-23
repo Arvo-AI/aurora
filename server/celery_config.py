@@ -1,4 +1,5 @@
 from celery import Celery
+from celery.schedules import crontab
 import importlib
 import os
 import sys
@@ -134,6 +135,9 @@ celery_app.conf.update(
         # Check runs get their own queue, listed last on the workers. A backlog of
         # checks must never sit in front of an investigation in the default queue.
         "services.detection.runner.run_check": {"queue": "detection"},
+        "services.detection.runner.run_fire_drill": {"queue": "detection"},
+        # Reading chat calls Slack and a model; it must not sit in front of an RCA either.
+        "services.detection.chat_intake.read_chat_for_org": {"queue": "detection"},
     },
     # Explicitly include task modules from their new locations
     include=[
@@ -176,6 +180,7 @@ celery_app.conf.update(
         'utils.repo_metadata',
         'services.actions.scheduler',
         'services.detection.runner',
+        'services.detection.chat_intake',
         'services.connectors.heal',
     ],
     # Periodic task schedule
@@ -227,16 +232,26 @@ celery_app.conf.update(
         },
         'run-detection-fire-drills': {
             'task': 'services.detection.runner.run_fire_drills',
-            'schedule': 604800.0,  # Weekly
+            'schedule': crontab(day_of_week=0, hour=6, minute=10),
         },
-        # Off unless DETECTION_CHAT_INTAKE_ENABLED=true. One channel per org per tick.
+        # Off unless DETECTION_CHAT_INTAKE_ENABLED=true. Queues one task per org.
         'read-detection-chat': {
-            'task': 'services.detection.runner.read_chat',
+            'task': 'services.detection.chat_intake.read_chat',
             'schedule': 60.0,
         },
+        # Fixed times of day, not intervals: beat counts an interval from when it
+        # started, so a deploy more often than the interval would mean never.
         'consolidate-detection-checks': {
             'task': 'services.detection.runner.consolidate_checks',
-            'schedule': 86400.0,
+            'schedule': crontab(hour=4, minute=10),
+        },
+        'review-detection-checks': {
+            'task': 'services.detection.runner.review_checks',
+            'schedule': crontab(hour=5, minute=10),
+        },
+        'tidy-detection-chat-reports': {
+            'task': 'services.detection.chat_intake.tidy_chat_reports',
+            'schedule': crontab(hour=4, minute=40),
         },
         # Safety net for connector rows whose owner was removed outside the
         # member-deletion path. Not on the minute action tick.

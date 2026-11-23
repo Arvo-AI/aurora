@@ -5,7 +5,9 @@ Default instructions for the system action that audits monitoring coverage
 and opens PRs/MRs with alert definitions following SRE best practices.
 """
 
-DEFAULT_ALERT_GAP_INSTRUCTIONS = """**Step 1: Gather context**
+from services.detection import checks_enabled
+
+_AUDIT_STEPS = """**Step 1: Gather context**
 
 Understand what you're working with before judging anything.
 
@@ -68,10 +70,20 @@ Hard anti-slop rules:
 
 - First check for existing open PRs/MRs from prior runs of this action.
   Do not open a second one if a previous proposal is still pending review.
-- Then look at what happened to the PRs/MRs earlier runs opened in this repo. If the
-  last three were closed without merging, or sat open for 30 days with no review
-  activity, this team does not use them: do not open another one for this repo. Record
-  that in the living document. A later merged PR/MR means the team uses them again.
+- Then look at what happened to the PRs/MRs earlier runs opened in this repo, and read
+  the comments on them.
+  - Closed with a reason (a review comment, a note on why it was wrong): the team is
+    reading them and that one was not good enough. Take the reason into account and keep
+    proposing.
+  - The last three were all closed or left open for 30 days with no comment, no review
+    and no commit from anyone: nobody is reading them. Pause PRs for this repo. Do not
+    open another one.
+  - A pause must never be silent. Put a section at the very top of the living document
+    titled "Alert PRs paused for <repo>", with the three PRs, the date, and how to
+    resume: merge or comment on any of them, or delete that section. Say the same in
+    your final report for this run, first line.
+  - If that section is gone, or one of those PRs has since been merged or commented on,
+    the pause is over: propose again.
 - Create a branch, commit the alert definitions, and open a PR (GitHub/Bitbucket)
   or MR (GitLab) using the appropriate VCS tools.
 - When modifying an existing alert/rules file, use the provider's anchored edit
@@ -82,10 +94,25 @@ Hard anti-slop rules:
 - If you found no gaps worth proposing, do not open an empty or low-value PR. Instead,
   update the living document noting that coverage looks healthy and when you last checked.
 
+"""
+
+_COVER_THE_GAP_STEP = """
+
 **Step 5: Cover the gap yourself**
 
 A PR only helps once someone merges it. For each real gap that a read-only command can
 observe, also call save_detection_check with origin_kind "gap", so Aurora watches it
-from now on whether or not the PR is merged. Do this even when Step 4 told you not to
-open a PR. Skip a gap you cannot express as one read-only command with a clear healthy
-condition; do not save a check you are not sure measures the gap."""
+from now on whether or not the PR is merged. Put the PR/MR link in origin_ref when
+there is one. Do this even when Step 4 told you not to open a PR. Skip a gap you
+cannot express as one read-only command with a clear healthy condition; do not save a
+check you are not sure measures the gap.
+
+Then tidy up after earlier runs. Call list_detection_checks and look at the checks whose
+origin is "gap". When the PR/MR a check was saved alongside has been merged, the team's
+own alert covers that gap now: retire the check with retire_detection_check, and give
+the merged PR as the reason. Leave the others running."""
+
+# Without the feature there is no tool to call, so the step is not offered.
+DEFAULT_ALERT_GAP_INSTRUCTIONS = _AUDIT_STEPS.rstrip() + (
+    _COVER_THE_GAP_STEP if checks_enabled() else ""
+)

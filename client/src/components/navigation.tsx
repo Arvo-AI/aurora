@@ -16,6 +16,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+import { useDetectionEnabled } from "@/hooks/useDetectionEnabled"
 
 interface NavigationProps {
   isChatExpanded?: boolean;
@@ -45,6 +46,7 @@ export default function Navigation({
   onSettingsClick,
 }: NavigationProps) {
   const pathname = usePathname()
+  const detectionEnabled = useDetectionEnabled()
   const router = useRouter()
   const { user } = useUser()
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false)
@@ -207,7 +209,7 @@ export default function Navigation({
           </li>
 
           {/* Checks Navigation Item */}
-          <li>
+          {detectionEnabled && <li>
             <Link
               href="/checks"
               className={cn(
@@ -222,7 +224,7 @@ export default function Navigation({
                 <span className="ml-2">Checks</span>
               </div>
             </Link>
-          </li>
+          </li>}
 
           {/* Monitor Navigation Item */}
           <li>

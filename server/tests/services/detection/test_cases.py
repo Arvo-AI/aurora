@@ -57,3 +57,17 @@ def test_an_incident_is_refused_rather_than_created_in_another_org(monkeypatch):
     ))
     assert "error" in result
     assert "incident_id" not in result
+
+
+def test_a_windowed_check_is_handed_over_with_the_span_that_failed():
+    # The stored command has placeholders. An investigation cannot run that.
+    from datetime import datetime, timezone
+
+    windowed = dict(
+        _CHECK, window_seconds=600, lag_seconds=120,
+        command="logging read 'timestamp>={from} AND timestamp<={to}' | jq length",
+    )
+    fired_at = datetime(2026, 11, 10, 14, 15, tzinfo=timezone.utc)
+    description = case_description(windowed, "81", fired_at)
+    assert "timestamp>=2026-11-10T14:03:00Z AND timestamp<=2026-11-10T14:13:00Z" in description
+    assert "{from}" not in description

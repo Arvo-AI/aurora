@@ -105,6 +105,27 @@ def _handle_member_joined(event: dict, team_id: str | None) -> None:
         logger.warning("Error handling member_joined_channel", exc_info=True)
 
 
+def _note_channel_message(event: dict, team_id: str | None) -> None:
+    """Tell the chat reader a public channel has something new. Never raises."""
+    try:
+        from services.detection import chat_intake_enabled, chat_signals
+
+        if not chat_intake_enabled() or not team_id or event.get('channel_type') != 'channel':
+            return
+        if event.get('bot_id') or not event.get('channel'):
+            return
+        user_id = get_user_id_from_slack_team(team_id)
+        if not user_id:
+            return
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cursor:
+            org_id = set_rls_context(cursor, conn, user_id, log_prefix="[SlackEvents:message]")
+            if org_id:
+                chat_signals.note_activity(cursor, org_id, event['channel'])
+                conn.commit()
+    except Exception:
+        logger.exception("Failed to note a channel message for the chat reader")
+
+
 def process_event_callback(data: dict) -> None:
     """Process a Slack ``event_callback`` payload.
 
@@ -121,6 +142,13 @@ def process_event_callback(data: dict) -> None:
 
         event = data.get('event', {})
         event_type = event.get('type')
+
+        # A message in a channel (only delivered when the app subscribes to
+        # message.channels): nothing is read here, the channel is just moved
+        # to the front of the queue for the chat reader.
+        if event_type == 'message':
+            _note_channel_message(event, data.get('team_id'))
+            return
 
         # Handle app_mention events (when someone @mentions Aurora)
         if event_type == 'app_mention':
@@ -434,6 +462,16 @@ def process_interaction(payload: dict) -> dict:
             # Handle "More details" button
             if action_id.startswith('suggestion_details_'):
                 return _handle_suggestion_details(
+                    payload=payload,
+                    action=action,
+                    slack_user_id=slack_user_id,
+                    team_id=team_id,
+                    channel_id=channel_id
+                )
+
+            # "Not a problem" / "Stop this check" on a worth-a-look post
+            if action_id in _DETECTION_NUDGE_ACTIONS:
+                return _handle_detection_nudge(
                     payload=payload,
                     action=action,
                     slack_user_id=slack_user_id,
@@ -1021,6 +1059,73 @@ def _warn_unauthenticated_clicker(slack_user_id: str, team_id: str, channel_id: 
             )
     except Exception:
         logger.exception("Failed to warn unauthenticated Slack user %s", sanitize(slack_user_id))
+
+
+# The two answers on a "worth a look" post (services/detection/attention.py).
+_DETECTION_NUDGE_ACTIONS = ("detection_nudge_false", "detection_nudge_stop")
+_DETECTION_NUDGE_REPLIES = {
+    "false": "Marked not a problem by <@%s>. I counted it against this check.",
+    "stopped": "Check stopped by <@%s>. I will not run it again.",
+}
+_DETECTION_NUDGE_NOTES = {
+    "already": "That was already answered.",
+    "not_allowed": "Stopping a check needs the editor role in Aurora.",
+    "missing": "I could not find that post's check in your organization.",
+}
+
+
+def _handle_detection_nudge(payload: dict, action: dict, slack_user_id: str, team_id: str, channel_id: str) -> dict:
+    """Handle the buttons on a worth-a-look post.
+
+    The answer is applied first and the post is rewritten after, without its
+    buttons. Returns an empty body always: a non-empty one would replace the post.
+    """
+    from services.detection import attention
+    from utils.auth.enforcer import enforce_with_reload
+    from utils.validation import is_valid_uuid
+
+    try:
+        clicker_user_id = aurora_user_for_slack_sender(slack_user_id, team_id)
+        if not clicker_user_id:
+            _warn_unauthenticated_clicker(slack_user_id, team_id, channel_id)
+            return {"text": ""}
+        client = _slack_client_for_feedback(clicker_user_id, team_id)
+        fire_id = (action.get("value") or "").strip()
+        if not is_valid_uuid(fire_id):
+            _send_ephemeral(client, channel_id, slack_user_id, _DETECTION_NUDGE_NOTES["missing"])
+            return {"text": ""}
+
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cursor:
+            org_id = set_rls_context(cursor, conn, clicker_user_id, log_prefix="[SlackEvents:detection_nudge]")
+            if not org_id:
+                _send_ephemeral(client, channel_id, slack_user_id, _DETECTION_NUDGE_NOTES["missing"])
+                return {"text": ""}
+            may_stop = enforce_with_reload(clicker_user_id, org_id, "detection_checks", "write")
+            done, _name = attention.answer(cursor, org_id, fire_id, action.get("action_id", ""), may_stop)
+            conn.commit()
+
+        if done not in _DETECTION_NUDGE_REPLIES:
+            _send_ephemeral(client, channel_id, slack_user_id, _DETECTION_NUDGE_NOTES.get(done, "Nothing changed."))
+            return {"text": ""}
+
+        # Keep the post, drop the buttons, say who answered.
+        message = payload.get("message") or {}
+        section = next((b for b in message.get("blocks") or [] if b.get("type") == "section"), None)
+        note = _DETECTION_NUDGE_REPLIES[done] % slack_user_id
+        blocks = ([section] if section else []) + [
+            {"type": "context", "elements": [{"type": "mrkdwn", "text": note}]},
+        ]
+        if client and message.get("ts"):
+            try:
+                client.update_message(
+                    channel_id, message["ts"], text=(message.get("text") or "") + "\n" + note, blocks=blocks,
+                )
+            except Exception:
+                logger.exception("Failed to rewrite a worth-a-look post after an answer")
+        return {"text": ""}
+    except Exception:
+        logger.exception("Error handling a worth-a-look answer")
+        return {"text": ""}
 
 
 def _handle_hpa_vpa_dismiss(payload: dict, action: dict, slack_user_id: str, team_id: str, channel_id: str) -> dict:

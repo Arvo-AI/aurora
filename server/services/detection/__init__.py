@@ -5,6 +5,29 @@ schedule with no model in the loop. Every check starts ``silent``: its failures
 are recorded and reach no one.
 """
 
+import os
+
+
+def checks_enabled() -> bool:
+    """The switch for the whole feature (DETECTION_CHECKS_ENABLED=false turns it off).
+
+    Off means off everywhere: no check runs, the agent has no check tools and
+    is not told to save checks, nothing is replayed, and the page says so.
+    """
+    return (os.getenv("DETECTION_CHECKS_ENABLED") or "true").strip().lower() != "false"
+
+
+def chat_intake_enabled() -> bool:
+    """Reading chat channels is opt-in (DETECTION_CHAT_INTAKE_ENABLED=true), and off with the feature.
+
+    It sends the messages of the public channels Aurora is in through a model,
+    which is a decision for whoever runs the install, not a default.
+    """
+    return checks_enabled() and (
+        (os.getenv("DETECTION_CHAT_INTAKE_ENABLED") or "false").strip().lower() == "true"
+    )
+
+
 STATE_SILENT = "silent"
 STATE_PROVEN = "proven"
 STATE_RETIRED = "retired"

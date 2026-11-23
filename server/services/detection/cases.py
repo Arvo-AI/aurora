@@ -10,6 +10,7 @@ import json
 import logging
 from typing import Any, Dict, Optional
 
+from services.detection import window
 from utils.log_sanitizer import sanitize
 
 logger = logging.getLogger(__name__)
@@ -64,24 +65,30 @@ def case_title(check: Dict[str, Any]) -> str:
     return "Aurora check: %s failing on %s" % (name, asset)
 
 
-def case_description(check: Dict[str, Any], observed: str, reported: str = "") -> str:
-    """*reported* is what a person said in chat about the same asset, when that is why
-    an unproven check's failure is being raised."""
+def command_as_run(check: Dict[str, Any], fired_at=None) -> str:
+    """The command with the span it read when it failed, so it can be run again as written.
+
+    A windowed check is stored with placeholders for its span. Handed to an
+    investigation like that, it cannot be re-run. *fired_at* is when the
+    failure was recorded; the window ended then, less the check's lag.
+    """
+    seconds = check.get("window_seconds")
+    if not window.is_windowed(seconds):
+        return check["command"]
+    end = window.span_end(check.get("lag_seconds"), now=fired_at)
+    return window.render(check["command"], seconds, end)
+
+
+def case_description(check: Dict[str, Any], observed: str, fired_at=None) -> str:
     assertion = check["assertion"]
     healthy = healthy_condition(assertion)
-    opening = (
-        "One of Aurora's own checks is failing, and a person reported a problem with the same "
-        "asset in chat. They said: %s" % reported
-        if reported else
-        "One of Aurora's own checks started failing. No person or alert reported this."
-    )
     return "\n".join((
-        opening,
+        "One of Aurora's own checks started failing. No person or alert reported this.",
         "",
         "Check: %s (revision %s)" % (check["name"], check["revision"]),
         "Asset: %s" % check["asset"],
         "What it predicts: %s" % check["prediction"],
-        "Command: %s" % check["command"],
+        "Command: %s" % command_as_run(check, fired_at),
         "Healthy when: %s" % healthy,
         "Value seen: %s" % (observed or "(empty)"),
         "Why this check exists: %s." % origin_sentence(check["origin"]),
@@ -106,7 +113,7 @@ def find_open_case(cursor, org_id: str, asset: str) -> Optional[str]:
 
 
 def open_case(check: Dict[str, Any], observed: str, user_id: str, *, org_id: str,
-              fire_id: str, reported: str = "") -> Optional[str]:
+              fire_id: str, fired_at=None) -> Optional[str]:
     """Create the incident and start its RCA. Returns the incident id, or None.
 
     None means nothing was opened (rate limit, dispatch failure); the caller
@@ -120,7 +127,7 @@ def open_case(check: Dict[str, Any], observed: str, user_id: str, *, org_id: str
 
     try:
         raw = trigger_rca(
-            issue_description=case_description(check, observed, reported),
+            issue_description=case_description(check, observed, fired_at),
             title=case_title(check),
             service=check["asset"],
             severity="medium",
