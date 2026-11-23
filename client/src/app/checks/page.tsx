@@ -34,6 +34,7 @@ interface Check {
   last_observed?: string | null;
   last_run_at: string | null;
   retired_reason: string | null;
+  vouched_by?: string | null;
 }
 
 const ORIGIN_WORDS: Record<string, string> = {
@@ -77,12 +78,14 @@ function healthOf(check: Check): Health {
 }
 
 function onFiring(check: Check): string {
+  if (check.state === 'proven' && check.vouched_by) return 'Opens an incident when it fires, because a person asked for that';
   if (check.state === 'proven') return 'Opens an incident when it fires';
   if (check.state === 'silent') return 'Records only for now: it has not caught enough real incidents to notify anyone';
   return 'Stopped';
 }
 
 interface ChecksResponse {
+  enabled: boolean;
   checks: Check[];
   can_edit: boolean;
 }
@@ -91,7 +94,7 @@ const checksFetcher = async (key: string, signal: AbortSignal): Promise<ChecksRe
   const res = await fetch(key, { credentials: 'include', signal });
   if (!res.ok) throw new Error(`Failed to load checks: ${res.status}`);
   const data = await res.json();
-  return { checks: data.checks || [], can_edit: Boolean(data.can_edit) };
+  return { enabled: data.enabled !== false, checks: data.checks || [], can_edit: Boolean(data.can_edit) };
 };
 
 function every(seconds: number): string {
@@ -138,7 +141,22 @@ function CheckRow({ check, canEdit, onChanged }: {
   const [confirming, setConfirming] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [stopError, setStopError] = useState('');
+  const [trusting, setTrusting] = useState(false);
   const health = healthOf(check);
+
+  const trust = async () => {
+    setTrusting(true);
+    setStopError('');
+    try {
+      const res = await fetch(`/api/detection/checks/${check.id}/vouch`, { method: 'POST', credentials: 'include' });
+      if (!res.ok) throw new Error(String(res.status));
+      onChanged();
+    } catch {
+      setStopError('Could not change this check.');
+    } finally {
+      setTrusting(false);
+    }
+  };
 
   const stop = async () => {
     setStopping(true);
@@ -226,7 +244,17 @@ function CheckRow({ check, canEdit, onChanged }: {
                   </Button>
                 </>
               ) : (
-                <Button variant="outline" size="sm" onClick={() => setConfirming(true)}>Stop this check</Button>
+                <>
+                  {check.state === 'silent' && (
+                    <Button
+                      variant="outline" size="sm" disabled={trusting} onClick={trust}
+                      title="You vouch for this check: it opens an incident the next time it fires, without waiting to earn that from its record. Two fires in a row on nothing turn this back off."
+                    >
+                      {trusting ? 'Saving...' : 'Open incidents when it fires'}
+                    </Button>
+                  )}
+                  <Button variant="outline" size="sm" onClick={() => setConfirming(true)}>Stop this check</Button>
+                </>
               )}
               {stopError && <span className="text-xs text-red-400">{stopError}</span>}
             </div>
@@ -260,6 +288,13 @@ export default function ChecksPage() {
   const renderBody = () => {
     if (isLoading) return <div className="text-sm text-zinc-500 py-12 text-center">Loading...</div>;
     if (error) return <div className="text-sm text-red-400 py-12 text-center">Could not load checks.</div>;
+    if (data && !data.enabled) {
+      return (
+        <div className="text-sm text-zinc-500 py-12 text-center">
+          Checks are turned off on this install (DETECTION_CHECKS_ENABLED).
+        </div>
+      );
+    }
     if (checks.length === 0) {
       return (
         <div className="flex flex-col items-center justify-center py-16 text-center border border-zinc-800/80 rounded-xl bg-zinc-900/60">

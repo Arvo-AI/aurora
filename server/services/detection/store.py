@@ -47,6 +47,13 @@ _MAX_COMMAND = 4000
 _MAX_PREDICTION = 2000
 _DETAIL_MAX_CHARS = 2000
 
+# Errors in a row before a check is handed to the agent to fix or retire.
+REVIEW_AFTER_ERRORS = 5
+# Checks handed over per review, so one pass stays a small piece of work.
+REVIEW_BATCH = 5
+_REVIEW_RUNS = 8
+_REVIEW_FIRES = 5
+
 # A claim older than this belongs to a run that died; the check is due again.
 CLAIM_TTL_SECONDS = 600
 
@@ -209,8 +216,12 @@ def save_check(
     origin: Dict[str, str],
     reason: str,
     source: str,
+    vouched_by: Optional[str] = None,
 ) -> Tuple[str, int, bool]:
     """Create a check, or revise the one with the same name.
+
+    *vouched_by* is the person who asked for this check, when one did (see
+    vouch_check). The version they asked for starts ``proven``.
 
     Returns (check_id, revision, changed). An identical definition is a no-op:
     a model that re-saves the same check every run must not grow the history.
@@ -239,6 +250,8 @@ def save_check(
         if inserted:
             check_id = str(inserted[0])
             insert_revision(cursor, check_id, org_id, user_id, 1, definition, reason, source)
+            if vouched_by:
+                vouch_check(cursor, org_id, check_id, vouched_by)
             return check_id, 1, True
         # Another session created this name between the lookup and the insert.
         # Its row is committed now; apply the usual rules to it.
@@ -252,12 +265,34 @@ def save_check(
 
     current = _definition_of(row[4:])
     if all(current[f] == definition[f] for f in DEFINITION_FIELDS):
+        if vouched_by:
+            vouch_check(cursor, org_id, check_id, vouched_by)
         return check_id, revision, False
 
     revision += 1
     set_definition(cursor, check_id, definition, revision, owner=user_id)
     insert_revision(cursor, check_id, org_id, user_id, revision, definition, reason, source)
+    if vouched_by:
+        vouch_check(cursor, org_id, check_id, vouched_by)
     return check_id, revision, True
+
+
+def vouch_check(cursor, org_id: str, check_id: str, user_id: str) -> bool:
+    """A person takes responsibility for a check: it opens a case when it fails.
+
+    Aurora's own checks have to earn that from their record, because nobody
+    asked for them. A check a person asked for, or one a person has looked at
+    and decided to trust, does not have to wait for three incidents. It can
+    still lose it the usual way: two fires in a row on nothing send it back to
+    silent (record.loses_proven).
+    """
+    cursor.execute(
+        """UPDATE detection_checks
+           SET state = %s, vouched_by = %s, consecutive_false_fires = 0, updated_at = NOW()
+           WHERE id = %s AND org_id = %s AND state = %s""",
+        (STATE_PROVEN, user_id, check_id, org_id, STATE_SILENT),
+    )
+    return cursor.rowcount > 0
 
 
 def _lock_by_name(cursor, org_id: str, name: str):
@@ -291,6 +326,7 @@ def set_definition(cursor, check_id: str, definition: Dict[str, Any], revision: 
         "UPDATE detection_checks SET " + assignments + """,
                revision = %s, state = %s, revision_false_fires = 0,
                consecutive_false_fires = 0, created_by = COALESCE(%s, created_by),
+               error_streak = 0, review_due_at = NULL, review_reason = NULL, vouched_by = NULL,
                updated_at = NOW()
            WHERE id = %s""",
         (*values, revision, STATE_SILENT, owner, check_id),
@@ -341,6 +377,7 @@ _LIST_COLUMNS = (
     "id", "name", "state", "revision", "origin", "prediction", "asset", "pattern", "provider",
     "target", "command", "assertion", "interval_seconds", "run_count", "fail_count", "error_count",
     "consecutive_errors", "hit_count", "false_fire_count", "last_status", "last_observed", "last_run_at", "retired_reason",
+    "vouched_by", "review_reason",
 )
 
 
@@ -353,13 +390,82 @@ def list_checks(cursor, org_id: str, include_retired: bool = False) -> List[Dict
            ORDER BY created_at DESC""",
         (org_id, include_retired, STATE_RETIRED),
     )
-    checks = []
-    for row in cursor.fetchall():
-        check = dict(zip(_LIST_COLUMNS, row))
-        check["id"] = str(check["id"])
-        if check["last_run_at"] is not None:
-            check["last_run_at"] = check["last_run_at"].isoformat()
-        checks.append(check)
+    return [_listed(row) for row in cursor.fetchall()]
+
+
+def _listed(row: Tuple) -> Dict[str, Any]:
+    check = dict(zip(_LIST_COLUMNS, row))
+    check["id"] = str(check["id"])
+    if check["last_run_at"] is not None:
+        check["last_run_at"] = check["last_run_at"].isoformat()
+    return check
+
+
+def request_review(cursor, check_id: str, reason: str) -> None:
+    """Mark a check as needing a look: it was demoted, or it keeps erroring.
+
+    Nothing reads a silent check's failures, so without this a check that
+    stopped working would sit there until the cleanup retires it months later.
+    """
+    cursor.execute(
+        "UPDATE detection_checks SET review_due_at = NOW(), review_reason = %s "
+        "WHERE id = %s AND state <> %s",
+        (reason[:500], check_id, STATE_RETIRED),
+    )
+
+
+def orgs_review_is_due(cursor, org_id: str) -> int:
+    cursor.execute(
+        "SELECT COUNT(*) FROM detection_checks "
+        "WHERE org_id = %s AND review_due_at IS NOT NULL AND state <> %s",
+        (org_id, STATE_RETIRED),
+    )
+    return cursor.fetchone()[0]
+
+
+def take_checks_for_review(cursor, org_id: str, limit: int = REVIEW_BATCH) -> List[Dict[str, Any]]:
+    """Hand over the checks waiting longest for review, with what a reviewer needs.
+
+    Each comes with why it is here, its recent runs and its recent fires.
+    Handing one over clears its mark: it comes back only if it is demoted or
+    starts a new run of errors again, so a check nobody can fix is not
+    reviewed every day.
+    """
+    cursor.execute(
+        "SELECT " + ", ".join(_LIST_COLUMNS) + """
+           FROM detection_checks
+           WHERE org_id = %s AND review_due_at IS NOT NULL AND state <> %s
+           ORDER BY review_due_at LIMIT %s FOR UPDATE SKIP LOCKED""",
+        (org_id, STATE_RETIRED, limit),
+    )
+    checks = [_listed(row) for row in cursor.fetchall()]
+    for check in checks:
+        cursor.execute(
+            """SELECT status, COALESCE(observed, ''), COALESCE(detail, ''), created_at
+               FROM detection_check_runs WHERE check_id = %s
+               ORDER BY created_at DESC LIMIT %s""",
+            (check["id"], _REVIEW_RUNS),
+        )
+        check["recent_runs"] = [
+            {"status": r[0], "observed": r[1], "detail": r[2], "at": r[3].isoformat()}
+            for r in cursor.fetchall()
+        ]
+        cursor.execute(
+            """SELECT fired_at, cleared_at, outcome, COALESCE(observed, '')
+               FROM detection_check_fires WHERE check_id = %s
+               ORDER BY fired_at DESC LIMIT %s""",
+            (check["id"], _REVIEW_FIRES),
+        )
+        check["recent_fires"] = [
+            {"fired_at": r[0].isoformat(), "cleared_at": r[1].isoformat() if r[1] else None,
+             "outcome": r[2], "observed": r[3]}
+            for r in cursor.fetchall()
+        ]
+    if checks:
+        cursor.execute(
+            "UPDATE detection_checks SET review_due_at = NULL WHERE id = ANY(%s::uuid[])",
+            ([c["id"] for c in checks],),
+        )
     return checks
 
 
@@ -439,14 +545,16 @@ def record_result(cursor, check_id: str, org_id: str, verdict: Verdict, duration
     taken over records nothing.
     """
     cursor.execute(
-        """SELECT last_status, revision, state, pattern, asset, consecutive_errors, claimed_at
+        """SELECT last_status, revision, state, pattern, asset, consecutive_errors, claimed_at,
+                  error_streak
            FROM detection_checks WHERE id = %s FOR UPDATE""",
         (check_id,),
     )
     row = cursor.fetchone()
     if row is None:
         return Recorded()
-    previous, current_revision, state, pattern, asset, consecutive_errors, held = row
+    (previous, current_revision, state, pattern, asset, consecutive_errors, held,
+     error_streak) = row
     if claim is not None and (held is None or held.isoformat() != claim):
         # This run's claim expired and another run took the check. Whatever this
         # one saw is older than what that run records: writing it now could put
@@ -461,20 +569,27 @@ def record_result(cursor, check_id: str, org_id: str, verdict: Verdict, duration
     # is read from. A run that executed and returned something unreadable is an
     # error in the totals but resets this.
     consecutive_errors = consecutive_errors + 1 if not verdict.ran else 0
+    # Every error in a row, readable or not. A check whose output stopped being
+    # a number errors on every run without ever looking like lost access.
+    error_streak = error_streak + 1 if is_error else 0
 
     cursor.execute(
         """UPDATE detection_checks
            SET run_count = run_count + 1,
                fail_count = fail_count + %s,
                error_count = error_count + %s,
-               consecutive_errors = %s,
+               consecutive_errors = %s, error_streak = %s,
                last_status = %s, last_observed = %s, last_run_at = NOW()
            WHERE id = %s""",
         (
-            int(verdict.status == STATUS_FAIL), int(is_error), consecutive_errors,
+            int(verdict.status == STATUS_FAIL), int(is_error), consecutive_errors, error_streak,
             verdict.status, verdict.observed, check_id,
         ),
     )
+    if error_streak == REVIEW_AFTER_ERRORS:
+        # Once per streak: on the run that reaches the threshold, not every run after.
+        request_review(cursor, check_id, "It has errored on %d runs in a row: %s"
+                       % (error_streak, verdict.detail[:200] or "no detail"))
     _release_claim(cursor, check_id, claim)
 
     fire_id = None

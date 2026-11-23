@@ -153,6 +153,12 @@ def apply_outcome(cursor, fire_id: str, check_id: str, org_id: str, outcome: str
     counters = cursor.fetchone()
     if state == STATE_RETIRED:
         return state, state
+    if outcome == OUTCOME_FALSE and counters[1] == DEMOTE_AFTER_CONSECUTIVE_FALSE:
+        # Proven or not: a check that keeps firing on nothing is handed to the
+        # agent to revise or retire. Once per streak.
+        from services.detection.store import request_review
+        request_review(cursor, check_id,
+                       "It fired on nothing %d times in a row." % counters[1])
 
     new_state = state
     if state == STATE_PROVEN and outcome == OUTCOME_FALSE and loses_proven(counters[1]):

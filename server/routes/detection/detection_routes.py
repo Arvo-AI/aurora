@@ -9,7 +9,8 @@ import logging
 
 from flask import jsonify, request
 
-from services.detection.store import list_checks, retire_check_by_id
+from services.detection import checks_enabled
+from services.detection.store import list_checks, retire_check_by_id, vouch_check
 from utils.auth.enforcer import enforce_with_reload
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import get_org_id_from_request, set_rls_context
@@ -23,9 +24,18 @@ logger = logging.getLogger(__name__)
 _ERR_INTERNAL = "Internal server error"
 
 
+@detection_bp.route("/status", methods=["GET"])
+@require_permission("detection_checks", "read")
+def get_status(user_id):
+    """Whether the feature is on for this install. The sidebar hides the page when it is not."""
+    return jsonify({"enabled": checks_enabled()})
+
+
 @detection_bp.route("/checks", methods=["GET"])
 @require_permission("detection_checks", "read")
 def get_checks(user_id):
+    if not checks_enabled():
+        return jsonify({"enabled": False, "checks": [], "can_edit": False})
     include_retired = request.args.get("include_retired", "").lower() == "true"
     try:
         with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
@@ -46,7 +56,7 @@ def get_checks(user_id):
         # (a ConfigMap read by someone with connector access, for instance).
         for check in checks:
             check.pop("last_observed", None)
-    return jsonify({"checks": checks, "can_edit": can_edit})
+    return jsonify({"enabled": True, "checks": checks, "can_edit": can_edit})
 
 
 @detection_bp.route("/checks/<check_id>/retire", methods=["POST"])
@@ -71,3 +81,27 @@ def retire(user_id, check_id):
     if not retired:
         return jsonify({"error": "Check not found"}), 404
     return jsonify({"status": "retired"})
+
+
+@detection_bp.route("/checks/<check_id>/vouch", methods=["POST"])
+@require_permission("detection_checks", "write")
+def vouch(user_id, check_id):
+    """A person decides this check may open an incident when it fails."""
+    if not is_valid_uuid(check_id):
+        return jsonify({"error": "Check not found"}), 404
+    try:
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+            org_id = set_rls_context(
+                cur, conn, user_id, org_id=get_org_id_from_request(), log_prefix="[Detection:vouch]",
+            )
+            if not org_id:
+                return jsonify({"error": "No organization"}), 403
+            vouched = vouch_check(cur, org_id, check_id, user_id)
+            conn.commit()
+    except Exception:
+        logger.exception("[Detection] Failed to vouch for check")
+        return jsonify({"error": _ERR_INTERNAL}), 500
+    if not vouched:
+        # Not this org's, retired, or already trusted.
+        return jsonify({"error": "Check not found or not waiting to be trusted"}), 404
+    return jsonify({"status": "proven"})

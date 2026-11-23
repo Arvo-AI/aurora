@@ -13,21 +13,22 @@ failure opens a case.
 """
 
 import logging
-import os
 import time
 from contextlib import contextmanager
 
 from celery_config import celery_app
-from services.detection import STATE_PROVEN, STATUS_ERROR
+from services.detection import STATE_PROVEN, STATUS_ERROR, checks_enabled
 from services.detection.assertion import Verdict
 from services.detection import access, cases, consolidation, record
 from services.detection.execution import judge
 from services.detection.store import (
+    REVIEW_BATCH,
     claim_due_checks,
     fires_awaiting_a_case,
     get_check_for_case,
     get_runnable_check,
     link_fire_to_case,
+    orgs_review_is_due,
     record_result,
     reserve_case,
 )
@@ -44,11 +45,6 @@ MAX_CHECKS_PER_ORG_PER_TICK = 20
 # only bounds how often it is asked.
 MAX_CASE_RETRIES_PER_ORG_PER_TICK = 3
 _LOG = "[DetectionRunner]"
-
-
-def checks_enabled() -> bool:
-    """Off switch for the runner (DETECTION_CHECKS_ENABLED=false)."""
-    return (os.getenv("DETECTION_CHECKS_ENABLED") or "true").strip().lower() != "false"
 
 
 def _org_representatives():
@@ -266,3 +262,44 @@ def consolidate_checks():
             logger.info("%s Consolidated org %s: %s", _LOG, sanitize(org_id), retired)
 
     _for_each_org(_consolidate, "consolidating checks")
+
+
+@celery_app.task(name="services.detection.runner.review_checks")
+def review_checks():
+    """Hand checks that stopped working to the agent, for orgs that have any.
+
+    The work is the built-in "Check Review" action, so it shows up with the
+    other actions, its instructions can be edited and it can be turned off. It
+    is started from here rather than on a schedule so an org with nothing to
+    review costs no model call.
+    """
+    if not checks_enabled():
+        return
+    from services.actions.check_review_action import SYSTEM_KEY
+
+    waiting = []
+
+    def _find(cur, _conn, _user_id, org_id):
+        if not orgs_review_is_due(cur, org_id):
+            return
+        cur.execute(
+            """SELECT a.id, a.created_by FROM actions a
+               WHERE a.org_id = %s AND a.system_key = %s AND a.enabled
+                 AND NOT EXISTS (SELECT 1 FROM action_runs r WHERE r.action_id = a.id
+                                 AND r.status IN ('pending', 'running'))""",
+            (org_id, SYSTEM_KEY),
+        )
+        row = cur.fetchone()
+        if row:
+            waiting.append((str(row[0]), row[1], org_id))
+
+    _for_each_org(_find, "finding checks to review")
+
+    from services.actions.executor import dispatch_action
+
+    for action_id, owner, org_id in waiting:
+        try:
+            dispatch_action(action_id=action_id, user_id=owner,
+                            trigger_context={"source": "detection_review", "batch": REVIEW_BATCH})
+        except Exception:
+            logger.exception("%s Could not start the check review for org %s", _LOG, sanitize(org_id))
