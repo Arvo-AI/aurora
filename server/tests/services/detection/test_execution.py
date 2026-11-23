@@ -128,3 +128,17 @@ def test_an_exception_while_executing_is_an_error(monkeypatch):
     monkeypatch.setattr(cloud_utils, "set_user_context", lambda **kwargs: None)
 
     assert runner.judge(_CHECK, "user-1", "check-1").status == STATUS_ERROR
+
+
+def test_a_command_that_ran_and_failed_is_not_counted_as_lost_access():
+    from services.detection.execution import _ran_and_failed
+
+    ran = {"success": False, "final_command": "kubectl get deploy nope", "return_code": 1,
+           "chat_output": 'Error from server (NotFound): deployments.apps "nope" not found'}
+    assert _ran_and_failed(ran)
+    # Turned away by the provider: that is what losing access looks like.
+    assert not _ran_and_failed(dict(ran, chat_output="Error from server (Forbidden): pods is forbidden"))
+    assert not _ran_and_failed(dict(ran, chat_output="Unable to locate credentials"))
+    # Never executed: a setup or gate failure has no result of a command.
+    assert not _ran_and_failed({"success": False, "error": "No cluster connected", "return_code": 1})
+    assert not _ran_and_failed({"success": False, "error": "blocked", "final_command": "x"})

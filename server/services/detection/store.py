@@ -54,6 +54,8 @@ _DETAIL_MAX_CHARS = 2000
 REVIEW_AFTER_ERRORS = 5
 # Checks handed over per review, so one pass stays a small piece of work.
 REVIEW_BATCH = 5
+# How many times a check is handed to a review before its mark is dropped.
+REVIEW_ATTEMPTS = 2
 _REVIEW_RUNS = 8
 _REVIEW_FIRES = 5
 
@@ -75,7 +77,10 @@ MAX_ACTIVE_CHECKS_PER_ORG = 200
 # to be that bare name: no namespace, cluster or description around it.
 _ASSET = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]*$")
 # Flags that keep a command open instead of answering once.
-_STREAMING_FLAGS = ("-w", "--watch", "--watch-only", "-f", "--follow")
+_STREAMING_FLAGS = ("-w", "--watch", "--watch-only", "--follow")
+# -f means "follow" only for these; elsewhere it names a file (kubectl get -f x.yaml).
+_FOLLOW_COMMANDS = ("logs", "tail", "journalctl")
+_FLAG_TURNED_OFF = ("false", "0")
 
 
 def _clean(value: Any) -> str:
@@ -126,9 +131,13 @@ def streaming_flag(command: str) -> str:
         tokens = shlex.split(command)
     except ValueError:
         return ""
+    follows = any(token in _FOLLOW_COMMANDS for token in tokens)
     for token in tokens:
-        flag = token.split("=", 1)[0]
-        if flag in _STREAMING_FLAGS:
+        flag, _, value = token.partition("=")
+        if value.lower() in _FLAG_TURNED_OFF:
+            # --watch=false answers once.
+            continue
+        if flag in _STREAMING_FLAGS or (flag == "-f" and follows):
             return flag
     return ""
 
@@ -275,6 +284,9 @@ def save_check(
 def _insert_new(cursor, org_id: str, user_id: str, definition: Dict[str, Any],
                 origin: Dict[str, str]) -> Optional[str]:
     """Insert a check under a new name. None when another session took the name first."""
+    # Held to the end of the transaction: two saves under different names
+    # would otherwise both count 199 and both insert.
+    cursor.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", ("detection-checks:%s" % org_id,))
     cursor.execute(
         "SELECT COUNT(*) FROM detection_checks WHERE org_id = %s AND state <> %s",
         (org_id, STATE_RETIRED),
@@ -365,7 +377,8 @@ def set_definition(cursor, check_id: str, definition: Dict[str, Any], revision: 
         "UPDATE detection_checks SET " + assignments + """,
                revision = %s, state = %s, revision_false_fires = 0,
                consecutive_false_fires = 0, created_by = COALESCE(%s, created_by),
-               error_streak = 0, review_due_at = NULL, review_reason = NULL, vouched_by = NULL,
+               error_streak = 0, review_due_at = NULL, review_reason = NULL, review_attempts = 0,
+               vouched_by = NULL,
                updated_at = NOW()
            WHERE id = %s""",
         (*values, revision, STATE_SILENT, owner, check_id),
@@ -438,6 +451,8 @@ def list_checks(cursor, org_id: str, include_retired: bool = False) -> List[Dict
 def _listed(row: Tuple) -> Dict[str, Any]:
     check = dict(zip(_LIST_COLUMNS, row))
     check["id"] = str(check["id"])
+    # Whether a person vouched, not who: nothing that lists checks needs a user id.
+    check["person_vouched"] = bool(check.pop("vouched_by"))
     if check["last_run_at"] is not None:
         check["last_run_at"] = check["last_run_at"].isoformat()
     return check
@@ -450,7 +465,7 @@ def request_review(cursor, check_id: str, reason: str) -> None:
     stopped working would sit there until the cleanup retires it months later.
     """
     cursor.execute(
-        "UPDATE detection_checks SET review_due_at = NOW(), review_reason = %s "
+        "UPDATE detection_checks SET review_due_at = NOW(), review_reason = %s, review_attempts = 0 "
         "WHERE id = %s AND state <> %s",
         (reason[:500], check_id, STATE_RETIRED),
     )
@@ -459,7 +474,7 @@ def request_review(cursor, check_id: str, reason: str) -> None:
 def orgs_review_is_due(cursor, org_id: str) -> int:
     cursor.execute(
         "SELECT COUNT(*) FROM detection_checks "
-        "WHERE org_id = %s AND review_due_at IS NOT NULL AND state <> %s",
+        "WHERE org_id = %s AND review_due_at <= NOW() AND state <> %s",
         (org_id, STATE_RETIRED),
     )
     return cursor.fetchone()[0]
@@ -469,14 +484,18 @@ def take_checks_for_review(cursor, org_id: str, limit: int = REVIEW_BATCH) -> Li
     """Hand over the checks waiting longest for review, with what a reviewer needs.
 
     Each comes with why it is here, its recent runs and its recent fires.
-    Handing one over clears its mark: it comes back only if it is demoted or
-    starts a new run of errors again, so a check nobody can fix is not
-    reviewed every day.
+
+    A review ends by revising or retiring the check, and either clears its
+    mark. Handing a check over does not: the conversation may fail before it
+    gets that far. The mark is pushed back a day instead, so the check is
+    offered once more. After REVIEW_ATTEMPTS hand-overs it is dropped, and the
+    check comes back only if it is demoted or starts a new run of errors, so a
+    check nobody can fix is not reviewed every day.
     """
     cursor.execute(
         _SELECT_LISTED + """
            FROM detection_checks
-           WHERE org_id = %s AND review_due_at IS NOT NULL AND state <> %s
+           WHERE org_id = %s AND review_due_at <= NOW() AND state <> %s
            ORDER BY review_due_at LIMIT %s FOR UPDATE SKIP LOCKED""",
         (org_id, STATE_RETIRED, limit),
     )
@@ -505,8 +524,12 @@ def take_checks_for_review(cursor, org_id: str, limit: int = REVIEW_BATCH) -> Li
         ]
     if checks:
         cursor.execute(
-            "UPDATE detection_checks SET review_due_at = NULL WHERE id = ANY(%s::uuid[])",
-            ([c["id"] for c in checks],),
+            """UPDATE detection_checks
+               SET review_attempts = review_attempts + 1,
+                   review_due_at = CASE WHEN review_attempts + 1 >= %s THEN NULL
+                                        ELSE NOW() + INTERVAL '1 day' END
+               WHERE id = ANY(%s::uuid[])""",
+            (REVIEW_ATTEMPTS, [c["id"] for c in checks]),
         )
     return checks
 

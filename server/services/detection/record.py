@@ -163,16 +163,17 @@ def _count_on_old_revision(cursor, check_id: str, outcome: str) -> None:
 def _after_false_fire(cursor, check_id: str, org_id: str, state: str, revision: int,
                       consecutive_false: int) -> str:
     """What a false fire on the current revision does. Returns the check's state after it."""
+    demoted = state == STATE_PROVEN and loses_proven(consecutive_false)
+    if demoted:
+        _restore_previous_revision(cursor, check_id, org_id, revision)
     if consecutive_false == DEMOTE_AFTER_CONSECUTIVE_FALSE:
         # Proven or not: a check that keeps firing on nothing is handed to the
-        # agent to revise or retire. Once per streak.
+        # agent to revise or retire. Once per streak, and after the restore
+        # above: putting a revision back clears any review request.
         from services.detection.store import request_review
         request_review(cursor, check_id,
                        "It fired on nothing %d times in a row." % consecutive_false)
-    if state != STATE_PROVEN or not loses_proven(consecutive_false):
-        return state
-    _restore_previous_revision(cursor, check_id, org_id, revision)
-    return STATE_SILENT
+    return STATE_SILENT if demoted else state
 
 
 def _count_on_current_revision(cursor, check_id: str, outcome: str) -> Tuple[int, int]:
