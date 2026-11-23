@@ -14,6 +14,7 @@ from utils.auth.rbac_decorators import require_permission
 from utils.auth.stateless_auth import set_rls_context
 from utils.db.connection_pool import db_pool
 from utils.db.org_scope import resolve_org, org_read_predicate
+from connectors.github_connector.hosts import github_oauth_token
 
 github_repo_selection_bp = Blueprint('github_repo_selection', __name__)
 logger = logging.getLogger(__name__)
@@ -96,9 +97,7 @@ def get_repo_selections(user_id):
                     creds = get_token_data(owner_id, "github")
                 except Exception:
                     creds = None
-                oauth_owner_cache[owner_id] = bool(
-                    creds and creds.get("access_token")
-                )
+                oauth_owner_cache[owner_id] = bool(github_oauth_token(creds))
             return oauth_owner_cache[owner_id]
 
         repos = []
