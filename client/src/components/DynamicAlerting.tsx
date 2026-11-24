@@ -60,48 +60,50 @@ const STOPS: readonly { key: Level; name: string; means: string }[] = [
   { key: "free", name: "Speaks freely", means: "Also answers questions nobody answered." },
 ];
 const LAST = STOPS.length - 1;
-const BARS = 64;
-// How close to a stop, as a share of the track, the thumb starts being pulled to it.
+// How close to a stop, as a share of the bar, the fill starts being pulled to it.
 const PULL = 0.07;
-// Half the thumb: its centre travels between these insets, so it never leaves the track.
-const INSET = 18;
-const place = (at: number) => `calc(${INSET}px + (100% - ${INSET * 2}px) * ${at})`;
+// How far past an end the bar gives, as a share of how far the hand went.
+const GIVE = 0.18;
+// A release faster than this (bar widths per millisecond) carries on to the next stop.
+const FLICK = 0.0011;
 
-// The end labels sit flush with the track; the ones between are centred on their stop.
-const EDGES: Record<number, string> = { 0: "left-0", [LAST]: "right-0" };
+const SPRING = "ease-[cubic-bezier(0.2,1.5,0.4,1)]";
 
 const nearest = (at: number) => Math.min(LAST, Math.max(0, Math.round(at * LAST)));
 
-/** Where the thumb sits for a pointer at *raw* (0..1 across the track): held back
+/** How full the bar is for a pointer at *raw* (0..1 across the bar): held back
  *  past either end, and drawn towards a stop when close to one. */
 function feel(raw: number): number {
-  if (raw < 0) return raw * 0.18;
-  if (raw > 1) return 1 + (raw - 1) * 0.18;
+  if (raw < 0) return raw * GIVE;
+  if (raw > 1) return 1 + (raw - 1) * GIVE;
   const stop = nearest(raw) / LAST;
   const off = raw - stop;
   return Math.abs(off) < PULL ? stop + off * 0.3 : raw;
 }
 
-/** The track: quiet on the left, loud on the right, drawn as the noise itself. */
-function Track({ at, moving }: { readonly at: number; readonly moving: boolean }) {
+/** A speaker that gets louder with the stop: crossed out at off, one more wave at each stop after. */
+function Loudness({ index }: { readonly index: number }) {
+  const wave = (from: number) =>
+    `origin-left transition-[opacity,transform] duration-300 ${SPRING} motion-reduce:transition-none ${
+      index >= from ? "scale-100 opacity-100" : "scale-50 opacity-0"
+    }`;
   return (
-    <div className="absolute inset-x-0 bottom-0 top-0 flex items-end gap-[3px]" aria-hidden>
-      {Array.from({ length: BARS }, (_, i) => {
-        const share = (i + 0.5) / BARS;
-        const lit = share <= at + 0.0001;
-        // A slow swell, so the loud end reads as louder and not only taller.
-        const height = 8 + 92 * Math.pow(share, 1.7) * (0.82 + 0.18 * Math.sin(i * 1.9));
-        return (
-          <span
-            key={i}
-            className={`flex-1 rounded-full ${moving ? "" : "transition-colors duration-300 motion-reduce:transition-none"} ${
-              lit ? "bg-foreground" : "bg-foreground/15"
-            }`}
-            style={{ height: `${height}%` }}
-          />
-        );
-      })}
-    </div>
+    <svg
+      aria-hidden
+      viewBox="0 0 32 24"
+      className="pointer-events-none absolute right-5 top-1/2 h-6 w-8 -translate-y-1/2 text-white mix-blend-difference"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M3 9h3.5L11 5v14l-4.5-4H3z" fill="currentColor" />
+      <path d="M15 9.5a4 4 0 0 1 0 5" className={wave(1)} />
+      <path d="M18.5 7a8 8 0 0 1 0 10" className={wave(2)} />
+      <path d="M22 4.5a12 12 0 0 1 0 15" className={wave(3)} />
+      <path d="M15 9l6 6m0-6l-6 6" className={`transition-opacity duration-200 ${index === 0 ? "opacity-100" : "opacity-0"}`} />
+    </svg>
   );
 }
 
@@ -162,7 +164,8 @@ function Channel({ index }: { readonly index: number }) {
   );
 }
 
-/** The one control for what Aurora does unasked in Slack: a slider, quiet to noisy.
+/** The one control for what Aurora does unasked in Slack: a bar that fills, quiet to noisy.
+ *  No thumb; the whole bar is the handle.
  *  Renders nothing when the install has it off or the org has no Slack. */
 export default function DynamicAlerting() {
   const { data, mutate } = useQuery<AlertingResponse>(ALERTING_KEY, alertingFetcher, {
@@ -170,12 +173,34 @@ export default function DynamicAlerting() {
     retryCount: 0,
   });
   const track = useRef<HTMLDivElement>(null);
-  // Where the thumb is while a hand is on it (0..1, may run a little past an end).
+  // How full the bar is while a hand is on it (0..1, may run a little past an end).
   const [drag, setDrag] = useState<number | null>(null);
   // The stop just chosen, shown until the save has been read back.
   const [chosen, setChosen] = useState<number | null>(null);
   const [failed, setFailed] = useState(false);
   const ticked = useRef<number | null>(null);
+  const last = useRef<{ at: number; when: number; speed: number } | null>(null);
+  const sound = useRef<AudioContext | null>(null);
+
+  // A soft click, a little higher at each louder stop. Silent where sound is not allowed.
+  const click = (stopIndex: number) => {
+    navigator.vibrate?.(6);
+    try {
+      sound.current ??= new AudioContext();
+      const ctx = sound.current;
+      const tone = ctx.createOscillator();
+      const volume = ctx.createGain();
+      tone.type = "sine";
+      tone.frequency.value = 330 * Math.pow(2, stopIndex / 4);
+      volume.gain.setValueAtTime(0.05, ctx.currentTime);
+      volume.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.07);
+      tone.connect(volume).connect(ctx.destination);
+      tone.start();
+      tone.stop(ctx.currentTime + 0.08);
+    } catch {
+      // No sound on this device; the bar works the same.
+    }
+  };
 
   if (!data?.enabled) return null;
 
@@ -209,21 +234,33 @@ export default function DynamicAlerting() {
   const follow = (clientX: number) => {
     const box = track.current?.getBoundingClientRect();
     if (!box) return;
-    const next = feel((clientX - box.left - INSET) / (box.width - INSET * 2));
+    const next = feel((clientX - box.left) / box.width);
     const over = nearest(next);
     if (ticked.current !== over) {
-      // A click under the finger when a stop is crossed, where the device has one.
-      if (ticked.current !== null) navigator.vibrate?.(6);
+      if (ticked.current !== null) click(over);
       ticked.current = over;
     }
+    const now = performance.now();
+    const before = last.current;
+    last.current = {
+      at: next,
+      when: now,
+      speed: before && now > before.when ? (next - before.at) / (now - before.when) : 0,
+    };
     setDrag(next);
   };
 
   const release = () => {
     if (drag === null) return;
-    const next = nearest(drag);
+    // Thrown, the bar carries on to the next stop the way it was going.
+    const speed = last.current?.speed ?? 0;
+    let next = nearest(drag);
+    if (speed > FLICK) next = Math.min(LAST, Math.ceil(drag * LAST));
+    if (speed < -FLICK) next = Math.max(0, Math.floor(drag * LAST));
+    if (next !== ticked.current) click(next);
     setDrag(null);
     ticked.current = null;
+    last.current = null;
     void save(next);
   };
 
@@ -233,22 +270,19 @@ export default function DynamicAlerting() {
     };
     if (!(e.key in moves)) return;
     e.preventDefault();
-    void save(Math.min(LAST, Math.max(0, moves[e.key])));
+    const next = Math.min(LAST, Math.max(0, moves[e.key]));
+    if (next !== index) click(next);
+    void save(next);
   };
 
   const grip = drag === null ? "cursor-grab" : "cursor-grabbing";
+  const full = Math.min(1, Math.max(0, at));
+  const past = at - full;
   const reading = data.channels.filter((c) => c.level !== "off").length;
 
   return (
     <section aria-labelledby="dynamic-alerting">
       <h3 id="dynamic-alerting" className="text-sm font-medium">Dynamic alerting</h3>
-
-      <div className="mt-5 flex items-end justify-between gap-6">
-        <p key={stop.key} className="text-3xl font-semibold tracking-tight animate-in fade-in slide-in-from-bottom-1 duration-200">
-          {stop.name}
-        </p>
-        <p className="max-w-[16rem] pb-1 text-right text-sm text-muted-foreground">{stop.means}</p>
-      </div>
 
       <div
         ref={track}
@@ -269,43 +303,40 @@ export default function DynamicAlerting() {
         onPointerMove={(e) => drag !== null && follow(e.clientX)}
         onPointerUp={release}
         onPointerCancel={release}
-        className={`group relative mt-5 h-20 touch-none select-none rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-foreground/40 focus-visible:ring-offset-4 focus-visible:ring-offset-background ${
-          locked ? "cursor-not-allowed opacity-60" : grip
-        }`}
+        style={{
+          // Pulled past an end, the bar stretches towards the hand and thins, then springs back.
+          // Held, it swells a little under the hand.
+          transform: `scale(${1 + Math.abs(past) * 0.5}, ${(drag === null ? 1 : 1.06) - Math.abs(past) * 0.6})`,
+          transformOrigin: past < 0 ? "right center" : "left center",
+        }}
+        className={`relative isolate mt-4 h-16 touch-none select-none overflow-hidden rounded-2xl bg-muted outline-none focus-visible:ring-2 focus-visible:ring-foreground/40 focus-visible:ring-offset-4 focus-visible:ring-offset-background motion-reduce:transition-none ${
+drag === null ? `transition-transform duration-500 ${SPRING}` : "transition-transform duration-150"
+        } ${locked ? "cursor-not-allowed opacity-60" : grip}`}
       >
-        <Track at={at} moving={drag !== null} />
         <div
-          className={`absolute top-1/2 h-9 w-9 -translate-x-1/2 -translate-y-1/2 rounded-full border border-black/10 bg-white shadow-[0_2px_10px_rgba(0,0,0,0.45)] motion-reduce:transition-none ${
-            drag === null
-              ? "transition-[left,transform] duration-500 ease-[cubic-bezier(0.2,1.5,0.4,1)] group-hover:scale-105"
-              : "scale-110 transition-transform duration-150"
+          className={`absolute inset-y-0 left-0 bg-foreground motion-reduce:transition-none ${
+            drag === null ? `transition-[width] duration-500 ${SPRING}` : ""
           }`}
-          style={{ left: place(at) }}
+          style={{ width: `${full * 100}%` }}
+        />
+        {STOPS.slice(1, LAST).map((s, i) => (
+          <span
+            key={s.key}
+            aria-hidden
+            className="absolute top-1/2 h-2 w-0.5 -translate-y-1/2 rounded-full bg-white/40 mix-blend-difference"
+            style={{ left: `${((i + 1) / LAST) * 100}%` }}
+          />
+        ))}
+        <p
+          key={stop.key}
+          className="pointer-events-none absolute inset-y-0 left-5 flex items-center text-lg font-semibold tracking-tight text-white mix-blend-difference animate-in fade-in zoom-in-90 slide-in-from-left-2 duration-200"
         >
-          <span className="absolute inset-0 m-auto h-3 w-3 rounded-full bg-black/80" />
-        </div>
+          {stop.name}
+        </p>
+        <Loudness index={index} />
       </div>
 
-      <div className="relative mt-3 h-4">
-        {STOPS.map((s, i) => {
-          const edge = EDGES[i] ?? "-translate-x-1/2";
-          return (
-            <button
-              key={s.key}
-              type="button"
-              tabIndex={-1}
-              disabled={locked}
-              onClick={() => void save(i)}
-              style={i in EDGES ? undefined : { left: place(i / LAST) }}
-              className={`absolute top-0 whitespace-nowrap text-xs transition-colors ${edge} ${
-                i === index ? "text-foreground" : "text-muted-foreground/60 hover:text-muted-foreground"
-              }`}
-            >
-              {s.name}
-            </button>
-          );
-        })}
-      </div>
+      <p className="mt-3 text-sm text-muted-foreground">{stop.means}</p>
 
       <div className="mt-6 rounded-xl border border-border bg-muted/30 px-4 py-4">
         <p className="mb-3 text-xs text-muted-foreground"># payments</p>
