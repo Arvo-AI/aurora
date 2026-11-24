@@ -17,7 +17,6 @@ logger = logging.getLogger(__name__)
 # One shared failure trips many checks. Fires on an asset that already has a
 # fresh open case join it instead of opening another.
 JOIN_OPEN_CASE_MINUTES = 60
-_TITLE_MAX_CHARS = 200
 _TITLE_NAME_CHARS = 90
 _TITLE_ASSET_CHARS = 80
 
