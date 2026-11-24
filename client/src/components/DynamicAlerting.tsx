@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@/lib/query";
 
 export type Level = "off" | "listen" | "sure" | "free";
@@ -181,6 +181,10 @@ export default function DynamicAlerting() {
   const ticked = useRef<number | null>(null);
   const last = useRef<{ at: number; when: number; speed: number } | null>(null);
   const sound = useRef<AudioContext | null>(null);
+
+  useEffect(() => () => {
+    void sound.current?.close();
+  }, []);
 
   // A soft click, a little higher at each louder stop. Silent where sound is not allowed.
   const click = (stopIndex: number) => {
