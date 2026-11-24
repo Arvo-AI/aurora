@@ -91,7 +91,7 @@ function Loudness({ index }: { readonly index: number }) {
     <svg
       aria-hidden
       viewBox="0 0 32 24"
-      className="pointer-events-none absolute right-5 top-1/2 h-6 w-8 -translate-y-1/2 text-white mix-blend-difference"
+      className="pointer-events-none absolute right-5 top-1/2 hidden h-6 w-8 -translate-y-1/2 text-white mix-blend-difference sm:block"
       fill="none"
       stroke="currentColor"
       strokeWidth="2"
@@ -333,7 +333,7 @@ drag === null ? `transition-transform duration-500 ${SPRING}` : "transition-tran
         ))}
         <p
           key={stop.key}
-          className="pointer-events-none absolute inset-y-0 left-5 flex items-center text-lg font-semibold tracking-tight text-white mix-blend-difference animate-in fade-in zoom-in-90 slide-in-from-left-2 duration-200"
+          className="pointer-events-none absolute inset-y-0 left-5 flex items-center whitespace-nowrap text-lg font-semibold tracking-tight text-white mix-blend-difference animate-in fade-in zoom-in-90 slide-in-from-left-2 duration-200"
         >
           {stop.name}
         </p>
