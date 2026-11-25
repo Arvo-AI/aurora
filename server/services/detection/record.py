@@ -242,9 +242,10 @@ def _restore_previous_revision(cursor, check_id: str, org_id: str, revision: int
         return False
     definition, created_by = row
 
-    from services.detection.store import DEFINITION_FIELDS, insert_revision, set_definition
+    from services.detection.store import complete_definition, insert_revision, set_definition
 
-    if any(f not in definition for f in DEFINITION_FIELDS):
+    definition = complete_definition(definition)
+    if definition is None:
         return False
     set_definition(cursor, check_id, definition, revision + 1)
     insert_revision(
@@ -347,3 +348,30 @@ def grade_fires(cursor, org_id: str) -> Tuple[int, int]:
             apply_outcome(cursor, str(fire_id), str(check_id), org_id, OUTCOME_FALSE)
             false_fires += 1
     return hits, false_fires
+
+
+def credit_replay(cursor, check_id: str, org_id: str, revision: int, pattern: str, asset: str,
+                  incident_id: str, incident_at) -> None:
+    """Record that this check, replayed, would have caught *incident_id*.
+
+    Stored as a fire at the incident's time, already cleared and graded, with
+    the incident as its evidence. It counts once for the pattern like any hit:
+    hits are counted by incident, so it cannot be earned twice for the same one.
+    Saving the same check again for the same incident does nothing.
+    """
+    cursor.execute(
+        "SELECT 1 FROM detection_check_fires "
+        "WHERE check_id = %s AND replayed AND evidence_incident_id = %s",
+        (check_id, incident_id),
+    )
+    if cursor.fetchone() is not None:
+        return
+    cursor.execute(
+        """INSERT INTO detection_check_fires
+           (check_id, org_id, revision, pattern, asset, observed, fired_at, cleared_at, replayed)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, TRUE) RETURNING id""",
+        (check_id, org_id, revision, pattern, asset, "replay", incident_at, incident_at),
+    )
+    fire_id = str(cursor.fetchone()[0])
+    apply_outcome(cursor, fire_id, check_id, org_id, OUTCOME_HIT, incident_id)
+    promote_pattern_siblings(cursor, org_id, pattern)

@@ -135,6 +135,7 @@ celery_app.conf.update(
         # Check runs get their own queue, listed last on the workers. A backlog of
         # checks must never sit in front of an investigation in the default queue.
         "services.detection.runner.run_check": {"queue": "detection"},
+        "services.detection.runner.run_fire_drill": {"queue": "detection"},
     },
     # Explicitly include task modules from their new locations
     include=[
@@ -221,6 +222,14 @@ celery_app.conf.update(
         'watch-detection-access': {
             'task': 'services.detection.runner.watch_access',
             'schedule': 900.0,
+        },
+        'spend-detection-attention': {
+            'task': 'services.detection.runner.spend_attention',
+            'schedule': 900.0,
+        },
+        'run-detection-fire-drills': {
+            'task': 'services.detection.runner.run_fire_drills',
+            'schedule': crontab(day_of_week=0, hour=6, minute=10),
         },
         # Fixed times of day, not intervals: beat counts an interval from when it
         # started, so a deploy more often than the interval would mean never.

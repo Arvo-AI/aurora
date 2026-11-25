@@ -1629,6 +1629,10 @@ def initialize_tables():
                         command TEXT NOT NULL,
                         assertion JSONB NOT NULL,
                         interval_seconds INTEGER NOT NULL DEFAULT 900,
+                        window_seconds INTEGER NOT NULL DEFAULT 0,
+                        lag_seconds INTEGER NOT NULL DEFAULT 0,
+                        paused_at TIMESTAMPTZ,
+                        paused_reason TEXT,
                         run_count INTEGER NOT NULL DEFAULT 0,
                         fail_count INTEGER NOT NULL DEFAULT 0,
                         error_count INTEGER NOT NULL DEFAULT 0,
@@ -1665,6 +1669,7 @@ def initialize_tables():
                         revision INTEGER NOT NULL,
                         definition JSONB NOT NULL,
                         reason TEXT,
+                        replay JSONB,
                         source VARCHAR(50) NOT NULL DEFAULT 'agent',
                         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                     );
@@ -1679,6 +1684,7 @@ def initialize_tables():
                 # can be summed across checks, including retired ones.
                 # incident_id is the case the fire opened or joined;
                 # evidence_incident_id is the incident that proved it right.
+                # nudge_* record a "worth a look" post (services/detection/attention.py).
                 "detection_check_fires": """
                     CREATE TABLE IF NOT EXISTS detection_check_fires (
                         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1695,7 +1701,13 @@ def initialize_tables():
                         incident_id UUID,
                         evidence_incident_id UUID,
                         case_claimed_at TIMESTAMPTZ,
-                        opened_incident BOOLEAN NOT NULL DEFAULT FALSE
+                        opened_incident BOOLEAN NOT NULL DEFAULT FALSE,
+                        nudged_at TIMESTAMPTZ,
+                        nudge_channel VARCHAR(64),
+                        nudge_ts VARCHAR(64),
+                        nudge_clear_noted BOOLEAN NOT NULL DEFAULT FALSE,
+                        nudge_clear_attempts INTEGER NOT NULL DEFAULT 0,
+                        replayed BOOLEAN NOT NULL DEFAULT FALSE
                     );
                     CREATE INDEX IF NOT EXISTS idx_detection_check_fires_check
                         ON detection_check_fires(check_id, fired_at DESC);
@@ -1706,6 +1718,20 @@ def initialize_tables():
                 """,
                 # One row while Aurora cannot run checks against a provider, so the
                 # "I have lost access" message is sent once per outage, not per check.
+                # One row per replay tried for an incident (services/detection/replay.py):
+                # caps how often a check can be reshaped against the same incident.
+                "detection_replay_attempts": """
+                    CREATE TABLE IF NOT EXISTS detection_replay_attempts (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        org_id VARCHAR(255) NOT NULL,
+                        incident_id UUID NOT NULL,
+                        check_name VARCHAR(255) NOT NULL,
+                        refused BOOLEAN NOT NULL DEFAULT FALSE,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_detection_replay_attempts_incident
+                        ON detection_replay_attempts(org_id, incident_id, created_at DESC);
+                """,
                 "detection_access_alerts": """
                     CREATE TABLE IF NOT EXISTS detection_access_alerts (
                         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1897,6 +1923,7 @@ def initialize_tables():
             rls_tables.append("detection_check_runs")
             rls_tables.append("detection_check_fires")
             rls_tables.append("detection_access_alerts")
+            rls_tables.append("detection_replay_attempts")
 
 
             # Migration: columns added to the detection tables after they first
@@ -1918,6 +1945,41 @@ def initialize_tables():
                 conn.commit()
             except Exception as e:
                 logging.warning(f"Error adding columns to detection tables: {e}")
+                conn.rollback()
+
+            # Migration: "worth a look" posts on detection fires. The table may not
+            # exist yet (new install); CREATE TABLE includes the columns.
+            try:
+                cursor.execute("""
+                    ALTER TABLE detection_check_fires
+                    ADD COLUMN IF NOT EXISTS nudged_at TIMESTAMPTZ,
+                    ADD COLUMN IF NOT EXISTS nudge_channel VARCHAR(64),
+                    ADD COLUMN IF NOT EXISTS nudge_ts VARCHAR(64),
+                    ADD COLUMN IF NOT EXISTS nudge_clear_noted BOOLEAN NOT NULL DEFAULT FALSE,
+                    ADD COLUMN IF NOT EXISTS nudge_clear_attempts INTEGER NOT NULL DEFAULT 0;
+                """)
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error adding nudge columns to detection_check_fires: {e}")
+                conn.rollback()
+
+            # Migration: windowed checks and replay (services/detection/window.py,
+            # replay.py). Same note: on a new install CREATE TABLE has these.
+            try:
+                cursor.execute("""
+                    ALTER TABLE detection_checks
+                    ADD COLUMN IF NOT EXISTS window_seconds INTEGER NOT NULL DEFAULT 0,
+                    ADD COLUMN IF NOT EXISTS lag_seconds INTEGER NOT NULL DEFAULT 0,
+                    ADD COLUMN IF NOT EXISTS paused_at TIMESTAMPTZ,
+                    ADD COLUMN IF NOT EXISTS paused_reason TEXT;
+                    ALTER TABLE detection_check_revisions
+                    ADD COLUMN IF NOT EXISTS replay JSONB;
+                    ALTER TABLE detection_check_fires
+                    ADD COLUMN IF NOT EXISTS replayed BOOLEAN NOT NULL DEFAULT FALSE;
+                """)
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error adding replay columns to detection tables: {e}")
                 conn.rollback()
 
             # Migration: Add rca_celery_task_id column to incidents table if it doesn't exist

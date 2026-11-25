@@ -10,6 +10,7 @@ import logging
 from flask import jsonify, request
 
 from services.detection import checks_enabled
+from services.detection.ownership import resume_check
 from services.detection.store import list_checks, retire_check_by_id, vouch_check
 from utils.auth.enforcer import enforce_with_reload
 from utils.auth.rbac_decorators import require_permission
@@ -107,3 +108,26 @@ def vouch(user_id, check_id):
         # Not this org's, retired, or already trusted.
         return jsonify({"error": "Check not found or not waiting to be trusted"}), 404
     return jsonify({"status": "proven"})
+
+
+@detection_bp.route("/checks/<check_id>/resume", methods=["POST"])
+@require_permission("detection_checks", "write")
+def resume(user_id, check_id):
+    """Run a paused check again, as the person resuming it."""
+    if not is_valid_uuid(check_id):
+        return jsonify({"error": "Check not found"}), 404
+    try:
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+            org_id = set_rls_context(
+                cur, conn, user_id, org_id=get_org_id_from_request(), log_prefix="[Detection:resume]",
+            )
+            if not org_id:
+                return jsonify({"error": "No organization"}), 403
+            resumed = resume_check(cur, org_id, check_id, user_id)
+            conn.commit()
+    except Exception:
+        logger.exception("[Detection] Failed to resume check")
+        return jsonify({"error": _ERR_INTERNAL}), 500
+    if not resumed:
+        return jsonify({"error": "Check not found or not paused"}), 404
+    return jsonify({"status": "resumed"})
