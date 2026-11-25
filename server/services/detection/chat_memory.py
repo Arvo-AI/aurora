@@ -110,8 +110,12 @@ def _write(cursor, org_id: str, user_id: str, artifact_id: str, content: str) ->
 
 
 def sync(cursor, org_id: str) -> None:
-    """Make every channel's stored level what the memory says. The caller commits."""
-    entry = _entry(cursor, org_id)
+    """Make every channel's stored level what the memory says. The caller commits.
+
+    The entry is locked while it is read: a level someone is setting right now
+    is waited for, not overwritten with what the entry said a moment before.
+    """
+    entry = _entry(cursor, org_id, lock=True)
     named = parse(entry[1]) if entry else {}
     cursor.execute(
         "SELECT DISTINCT channel_id, lower(channel_name) FROM slack_channels "

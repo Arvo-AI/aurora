@@ -110,6 +110,7 @@ function Loudness({ index }: { readonly index: number }) {
 function Reveal({ show, children }: { readonly show: boolean; readonly children: React.ReactNode }) {
   return (
     <div
+      aria-hidden={!show}
       className={`grid transition-[grid-template-rows,opacity] duration-300 ease-out motion-reduce:transition-none ${
         show ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
       }`}
@@ -181,6 +182,9 @@ export default function DynamicAlerting() {
   const ticked = useRef<number | null>(null);
   const last = useRef<{ at: number; when: number; speed: number } | null>(null);
   const sound = useRef<AudioContext | null>(null);
+  // Saves go out one at a time, and the last stop chosen is the last one sent.
+  const sending = useRef(false);
+  const wanted = useRef<number | null>(null);
 
   useEffect(() => () => {
     void sound.current?.close();
@@ -214,11 +218,7 @@ export default function DynamicAlerting() {
   const stop = STOPS[index];
   const locked = !data.can_set_level;
 
-  const save = async (next: number) => {
-    if (next === saved) return;
-    setChosen(next);
-    setFailed(false);
-    let ok = false;
+  const send = async (next: number) => {
     try {
       const res = await fetch("/api/detection/chat-level", {
         method: "POST",
@@ -226,11 +226,28 @@ export default function DynamicAlerting() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ level: STOPS[next].key }),
       });
-      ok = res.ok;
+      return res.ok;
     } catch {
-      ok = false;
+      return false;
     }
-    await mutate();
+  };
+
+  const save = async (next: number) => {
+    if (next === saved && !sending.current) return;
+    setChosen(next);
+    setFailed(false);
+    wanted.current = next;
+    if (sending.current) return;
+    sending.current = true;
+    let ok = true;
+    // A stop chosen while the answer is being read back is sent too.
+    while (wanted.current !== null) {
+      const now = wanted.current;
+      wanted.current = null;
+      ok = await send(now);
+      if (wanted.current === null) await mutate();
+    }
+    sending.current = false;
     setFailed(!ok);
     setChosen(null);
   };

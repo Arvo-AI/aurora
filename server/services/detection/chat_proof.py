@@ -62,9 +62,12 @@ Answer with JSON only: {{"unsupported": ["each unsupported statement, quoted"], 
 
 def _steps(cursor, org_id: str, session_id: str) -> List[tuple]:
     cursor.execute(
-        """SELECT tool_name, tool_input, tool_output, status FROM execution_steps
-           WHERE org_id = %s AND split_part(session_id, '::', 1) = %s AND tool_name <> %s
-           ORDER BY started_at, id LIMIT %s""",
+        # The newest steps when there are more than fit, in the order they ran.
+        """SELECT tool_name, tool_input, tool_output, status FROM (
+               SELECT tool_name, tool_input, tool_output, status, started_at, id FROM execution_steps
+               WHERE org_id = %s AND split_part(session_id, '::', 1) = %s AND tool_name <> %s
+               ORDER BY started_at DESC, id DESC LIMIT %s
+           ) newest ORDER BY started_at, id""",
         (org_id, session_id, _CONCLUDE_TOOL, _MAX_STEPS),
     )
     return cursor.fetchall()

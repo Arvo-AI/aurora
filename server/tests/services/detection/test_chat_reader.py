@@ -320,3 +320,34 @@ def test_a_look_in_a_listening_channel_is_told_not_to_reply_and_a_question_is_fe
     fenced = question[question.index("<untrusted_chat_report>"):question.index("</untrusted_chat_report>")]
     assert claim in fenced
     assert question.count(claim) == 1
+
+
+class _SlackWithThreads(_Slack):
+    """History that does not reach back to a thread's first message, and that thread's replies."""
+
+    def __init__(self, history, replies):
+        super().__init__(history)
+        self.replies = replies
+
+    def _make_request(self, method, endpoint, params):
+        if endpoint == "conversations.replies":
+            return {"messages": self.replies.get(params["ts"], [])}
+        return super()._make_request(method, endpoint, params)
+
+
+def test_a_reply_in_a_thread_older_than_the_history_page_is_read_when_the_thread_was_noted():
+    from services.detection.chat_intake import _gather
+
+    old_thread = "1795000000.000100"
+    reply = {"ts": "1795100400.000100", "thread_ts": old_thread, "text": "checkout is failing again",
+             "team": _TEAM, "user": "UMEM1"}
+    recent = {"ts": "1795100100.000100", "text": "lunch?", "team": _TEAM, "user": "UMEM2"}
+    slack = _SlackWithThreads([recent], {old_thread: [{"ts": old_thread, "text": "checkout"}, reply]})
+
+    unnoted, _context, _newest = _gather(slack, _TEAM, "C1", "1795100200.000000", "UBOT")
+    assert unnoted == []
+
+    new, _context, newest = _gather(slack, _TEAM, "C1", "1795100200.000000", "UBOT",
+                                    {old_thread: reply["ts"]})
+    assert [m["text"] for m in new] == ["checkout is failing again"]
+    assert newest == reply["ts"]

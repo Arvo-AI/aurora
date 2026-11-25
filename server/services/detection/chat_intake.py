@@ -109,17 +109,18 @@ def read_chat_for_org(user_id: str, org_id: str):
             # Out of reads for the day: nothing new is read, and what was already kept is
             # still looked into below.
             turns = []
-            if chat_signals.reads_left_today(cur, org_id) > 0:
-                turns = chat_signals.claim_channels(cur, org_id, team_id, company, CHANNELS_PER_TURN)
+            allowed = chat_signals.reads_to_claim(cur, org_id, CHANNELS_PER_TURN)
+            if allowed:
+                turns = chat_signals.claim_channels(cur, org_id, team_id, company, allowed)
             assets = chat_signals.known_assets(cur, org_id) if turns else []
             conn.commit()
 
-        for channel_id, last_ts, level in turns:
+        for turn in turns:
             try:
                 _read_channel(client, _Workspace(team_id, bot_user_id, user_id, org_id),
-                              channel_id, last_ts, level, assets)
+                              turn, assets)
             except Exception:
-                logger.exception("%s Reading channel %s failed", _LOG, sanitize(channel_id))
+                logger.exception("%s Reading channel %s failed", _LOG, sanitize(turn.channel_id))
 
         _start_verifications(user_id, org_id, team_id, company)
     except Exception:
@@ -207,8 +208,13 @@ def _full_members(client, team_id: str, messages: List[dict]) -> set:
     return {author for author in authors if get_workspace_member(client, author, team_id)}
 
 
-def _gather(client, team_id: str, channel_id: str, last_ts: str, bot_user_id: Optional[str] = None):
+def _gather(client, team_id: str, channel_id: str, last_ts: str, bot_user_id: Optional[str] = None,
+            threads: Optional[Dict[str, str]] = None):
     """What is new in the channel since *last_ts*: (new, context, newest ts seen).
+
+    *threads* are threads noted as having a new reply (thread ts to reply ts).
+    Their first message may be older than the history taken here, so they are
+    read as well as the ones that history shows.
 
     *new* is what the model judges, *context* the conversation before it. Both
     hold only full members of this workspace: context is shown to the model too.
@@ -225,7 +231,10 @@ def _gather(client, team_id: str, channel_id: str, last_ts: str, bot_user_id: Op
     top_new = [m for m in latest if float(m["ts"]) > float(last_ts)]
     before = sorted((m for m in latest if float(m["ts"]) <= float(last_ts)),
                     key=lambda m: float(m["ts"]))[-_CONTEXT_MESSAGES:]
-    seen = top_new + _new_replies(client, channel_id, latest, last_ts, upto)
+    shown = {m["ts"] for m in latest}
+    noted = [{"ts": thread_ts, "reply_count": 1, "latest_reply": reply_ts}
+             for thread_ts, reply_ts in (threads or {}).items() if thread_ts not in shown]
+    seen = top_new + _new_replies(client, channel_id, latest + noted, last_ts, upto)
     newest_ts = max((m["ts"] for m in seen), key=float) if seen else last_ts
     with_aurora = _asked_of_aurora(latest + seen, bot_user_id)
     typed = [m for m in seen + before if chat_reader.is_readable(m, team_id)]
@@ -241,13 +250,14 @@ def _gather(client, team_id: str, channel_id: str, last_ts: str, bot_user_id: Op
     )
 
 
-def _keep(cur, org_id: str, channel_id: str, new: list, reports, newest_ts: str) -> None:
+def _keep(cur, org_id: str, turn: chat_signals.Turn, new: list, reports, newest_ts: str) -> None:
     """Store what one reading of a channel found, and move its cursor."""
+    channel_id = turn.channel_id
     if new:
         chat_signals.record_read(cur, org_id, channel_id, len(new), len(reports or []),
                                  reports is not None)
     if reports is None:
-        if chat_signals.read_failed(cur, org_id, channel_id, newest_ts):
+        if chat_signals.read_failed(cur, org_id, channel_id, newest_ts, turn.claim):
             logger.warning("%s Gave up on %d message(s) in channel %s after repeated failures",
                            _LOG, len(new), sanitize(channel_id))
         return
@@ -255,24 +265,25 @@ def _keep(cur, org_id: str, channel_id: str, new: list, reports, newest_ts: str)
         kept = chat_signals.keep_report(cur, org_id, channel_id, report)
         if kept and report.asset:
             chat_signals.run_checks_now(cur, org_id, report.asset)
-    chat_signals.advance(cur, org_id, channel_id, newest_ts)
+    chat_signals.advance(cur, org_id, channel_id, newest_ts, turn.claim)
 
 
-def _read_channel(client, workspace: _Workspace, channel_id: str, last_ts: Optional[str],
-                  level: str, assets: List[str]) -> None:
+def _read_channel(client, workspace: _Workspace, turn: chat_signals.Turn, assets: List[str]) -> None:
     """Slack and the model are called with no database connection held."""
     team_id, bot_user_id, user_id, org_id = workspace
+    channel_id, last_ts, level = turn.channel_id, turn.last_ts, turn.level
     if last_ts is None:
         # First sight of a channel: start from now. Its history is not read.
         with _org_cursor(user_id, org_id) as (cur, conn):
             if cur is not None:
-                chat_signals.advance(cur, org_id, channel_id, "%.6f" % time.time())
+                chat_signals.advance(cur, org_id, channel_id, "%.6f" % time.time(), turn.claim)
                 conn.commit()
         return
 
     reports, new, newest_ts = None, [], last_ts
     try:
-        new, context, newest_ts = _gather(client, team_id, channel_id, last_ts, bot_user_id)
+        new, context, newest_ts = _gather(client, team_id, channel_id, last_ts, bot_user_id,
+                                          turn.threads)
         # Questions are only picked out where Aurora would answer them.
         reports = chat_reader.read(new, context, assets, user_id,
                                    questions=level == chat_signals.LEVEL_FREE)
@@ -281,7 +292,7 @@ def _read_channel(client, workspace: _Workspace, channel_id: str, last_ts: Optio
 
     with _org_cursor(user_id, org_id) as (cur, conn):
         if cur is not None:
-            _keep(cur, org_id, channel_id, new, reports, newest_ts)
+            _keep(cur, org_id, turn, new, reports, newest_ts)
             conn.commit()
 
 
@@ -427,47 +438,69 @@ def _start_verifications(user_id: str, org_id: str, team_id: str, company: str) 
         conn.commit()
 
     for report in reports:
+        # The session is tied to the report before the look can run: a look that
+        # concluded first would be told it is not investigating this report.
         session_id = None
         try:
-            session_id = _dispatch(investigator, report)
+            session_id = _open_session(investigator, org_id, report)
         except Exception:
             logger.exception("%s Could not start an investigation for report %s",
                              _LOG, sanitize(report["id"]))
-        with _org_cursor(user_id, org_id) as (cur, conn):
-            if cur is None:
-                continue
-            if session_id:
-                chat_signals.set_session(cur, report["id"], session_id)
-            else:
-                chat_signals.back_to_new(cur, report["id"])
-            conn.commit()
+        started = bool(session_id) and _tie(user_id, org_id, report["id"], session_id)
+        if started:
+            try:
+                _run(investigator, session_id, report)
+            except Exception:
+                started = False
+                logger.exception("%s Could not queue the investigation for report %s",
+                                 _LOG, sanitize(report["id"]))
+        if not started:
+            _tie(user_id, org_id, report["id"], None)
 
 
-def _dispatch(investigator: str, report: Dict[str, Any]) -> Optional[str]:
-    """Start the read-only investigation. Returns its session id, or None when rate limited."""
-    from chat.background.task import (
-        create_background_chat_session,
-        is_background_chat_allowed,
-        run_background_chat,
-    )
+def _tie(user_id: str, org_id: str, report_id: str, session_id: Optional[str]) -> bool:
+    """Write which session looks into the report, or put it back when there is none."""
+    with _org_cursor(user_id, org_id) as (cur, conn):
+        if cur is None:
+            return False
+        if session_id:
+            chat_signals.set_session(cur, report_id, session_id)
+        else:
+            chat_signals.back_to_new(cur, report_id)
+        conn.commit()
+    return True
+
+
+def _meta(report: Dict[str, Any]) -> Dict[str, Any]:
+    return {"source": "detection_chat_report", "report_id": report["id"]}
+
+
+def _open_session(investigator: str, org_id: str, report: Dict[str, Any]) -> Optional[str]:
+    """Create the investigation's session, in the report's org. None when rate limited."""
+    from chat.background.task import create_background_chat_session, is_background_chat_allowed
 
     if not is_background_chat_allowed(investigator):
         return None
-    meta = {"source": "detection_chat_report", "report_id": report["id"]}
-    session_id = create_background_chat_session(
-        user_id=investigator, title="From chat: %s" % report["claim"][:80], trigger_metadata=meta,
+    return create_background_chat_session(
+        user_id=investigator, title="From chat: %s" % report["claim"][:80],
+        trigger_metadata=_meta(report), org_id=org_id,
     )
+
+
+def _run(investigator: str, session_id: str, report: Dict[str, Any]) -> None:
+    """Queue the read-only investigation in its session."""
+    from chat.background.task import run_background_chat
+
     run_background_chat.delay(
         user_id=investigator, session_id=session_id,
         initial_message=verification_prompt(
             report, report["checks"], report.get("level", chat_signals.LEVEL_LISTEN),
             report.get("related"),
         ),
-        trigger_metadata=meta, mode="ask", send_notifications=False,
+        trigger_metadata=_meta(report), mode="ask", send_notifications=False,
         # The only part a person outside Aurora wrote: what the input rail should look at.
         rail_text=report["claim"],
     )
-    return session_id
 
 
 # ---- concluding -----------------------------------------------------------
