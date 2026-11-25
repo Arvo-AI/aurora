@@ -646,10 +646,11 @@ def _dispatch_rca(
     reopen's new state), which also releases the caller's row lock, because
     ``dispatch_alert_rca`` locks the incident on its own connection. The
     dispatcher starts the RCA now or queues it on the incident when the org is
-    over its alert RCA budget; only when it could do neither (``missing``) is
-    ``RcaDispatchError`` raised, and the retried delivery dispatches again.
+    over its alert RCA budget; only when it could do neither (``missing`` or
+    ``failed``) is ``RcaDispatchError`` raised, and the retried delivery
+    dispatches again.
     """
-    from chat.background.rca_dispatch import MISSING, dispatch_alert_rca
+    from chat.background.rca_dispatch import FAILED, MISSING, dispatch_alert_rca
 
     try:
         rca_prompt, rail_text = build_rca_prompt(SOURCE, title, payload, user_id=user_id)
@@ -672,6 +673,6 @@ def _dispatch_rca(
         session_title=f"RCA: {title}",
         log_prefix=_LOG,
     )
-    if outcome == MISSING:
+    if outcome in (MISSING, FAILED):
         raise RcaDispatchError(f"RCA dispatch failed for incident {incident_id}")
     logger.info("%s RCA for %s %s", _LOG, sanitize(number), outcome)

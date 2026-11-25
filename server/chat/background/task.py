@@ -3238,7 +3238,9 @@ def _sweep_stale_background_chats() -> Dict[str, Any]:
                     cursor.execute("""
                         SELECT i.id, i.aurora_status,
                                CASE WHEN i.rca_run_task_id IS NOT NULL THEN i.aurora_chat_session_id END,
-                               i.rca_run_task_id
+                               i.rca_run_task_id,
+                               (COALESCE(i.aurora_status, 'idle') = 'idle' AND i.rca_celery_task_id IS NULL
+                                AND i.rca_run_task_id IS NULL AND i.rca_queued_request IS NOT NULL) AS unpublished
                         FROM incidents i
                         WHERE i.status = 'investigating' AND i.updated_at < %s AND i.user_id = %s
                           AND COALESCE(i.aurora_status, 'idle') NOT IN ('queued', 'grouped')
@@ -3248,8 +3250,22 @@ def _sweep_stale_background_chats() -> Dict[str, Any]:
                                 AND cs.status = 'in_progress'
                           )
                     """, (stale_threshold, uid))
-                    for inc_id, cur_aurora, rca_session_id, rca_run_task_id in cursor.fetchall():
+                    for row in cursor.fetchall():
+                        inc_id, cur_aurora, rca_session_id, rca_run_task_id = row[:4]
+                        unpublished = len(row) > 4 and bool(row[4])
                         if cur_aurora in _NOT_YET_INVESTIGATED:
+                            continue
+                        if unpublished:
+                            # Reserved by the alert dispatcher, but the worker that
+                            # held the reservation died before publishing the task.
+                            # Its request is still on the row: queue it again.
+                            cursor.execute(
+                                "UPDATE incidents SET aurora_status = 'queued', rca_queue_reason = 'dispatch_failed', "
+                                "rca_queued_at = COALESCE(rca_queued_at, NOW()), rca_dispatched_at = NULL, updated_at = NOW() "
+                                "WHERE id = %s AND status = 'investigating' AND rca_celery_task_id IS NULL",
+                                (inc_id,)
+                            )
+                            conn.commit()
                             continue
                         if cur_aurora in ('complete', 'error'):
                             cursor.execute(

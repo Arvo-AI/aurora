@@ -78,7 +78,11 @@ _SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 
 DISPATCHED = "dispatched"
 QUEUED_OUTCOME = "queued"
+# The incident is not visible (deleted, wrong org): retrying cannot help.
 MISSING = "missing"
+# A temporary error (database, lock timeout) stopped the dispatch before the
+# RCA was started or queued: the caller should retry the dispatch.
+FAILED = "failed"
 
 
 @dataclass
@@ -169,6 +173,21 @@ def grouped_prompt(leader: RcaRequest, followers: List[QueuedIncident]) -> str:
         "each getting their own. Check whether they share this alert's root cause, and "
         "say so in your conclusions:\n" + "\n".join(lines)
     )
+
+
+def grouped_rail_text(leader: RcaRequest, followers: List[QueuedIncident]) -> Optional[str]:
+    """The input-rail text of a grouped run: the leader's, plus every alert text it adds.
+
+    The follower titles and services enter the prompt, so they go through the
+    same rail check a standalone alert's title does.
+    """
+    if not followers:
+        return leader.rail_text
+    lines = []
+    for q in followers[:_MAX_LISTED_ALERTS]:
+        title = " ".join((q.title or "untitled alert").split())[:_MAX_LISTED_TITLE_CHARS]
+        lines.append(title + (f" (service: {q.service})" if q.service else ""))
+    return "\n".join([leader.rail_text or "", *lines]).strip()
 
 
 def is_settled(items: List[QueuedIncident], now: datetime) -> bool:
@@ -274,17 +293,30 @@ class SqlStore:
             (request.to_json(), incident_id),
         )
 
-    def mark_dispatched(self, incident_id: str) -> None:
-        # updated_at moves so the never-started sweep counts from now, not from
-        # when the alert arrived.
+    def mark_dispatched(self, incident_id: str, request: Optional[RcaRequest] = None) -> None:
+        """Reserve a start for the incident.
+
+        The request stays on the row until the task is published (set_task),
+        so a worker that dies between this commit and the publish leaves
+        something the stale sweep can put back in the queue. updated_at moves so
+        the never-started sweep counts from now, not from when the alert arrived.
+        """
         self.cursor.execute(
             """
             UPDATE incidents
             SET aurora_status = 'idle', rca_dispatched_at = LOCALTIMESTAMP,
                 rca_queue_reason = NULL, rca_queued_at = NULL, rca_group_leader_id = NULL,
-                rca_queued_request = NULL, updated_at = LOCALTIMESTAMP
+                rca_queued_request = COALESCE(%s::jsonb, rca_queued_request),
+                rca_celery_task_id = NULL, updated_at = LOCALTIMESTAMP
             WHERE id = %s
             """,
+            (request.to_json() if request else None, incident_id),
+        )
+
+    def release_dispatch(self, incident_id: str) -> None:
+        """A start that was never published does not count against the budget."""
+        self.cursor.execute(
+            "UPDATE incidents SET rca_dispatched_at = NULL WHERE id = %s",
             (incident_id,),
         )
 
@@ -330,44 +362,72 @@ class SqlStore:
         )
 
     def queued(self) -> List[QueuedIncident]:
+        """The org's queue, metadata only: requests are loaded for the chosen batch."""
         self.cursor.execute(
             """
-            SELECT id, user_id, source_type, alert_title, alert_service, severity,
-                   rca_queued_at, rca_queued_request
+            SELECT id, user_id, source_type, alert_title, alert_service, severity, rca_queued_at
             FROM incidents
             WHERE org_id = %s AND aurora_status = %s AND status = 'investigating'
               AND rca_queued_request IS NOT NULL
             ORDER BY rca_queued_at, id
-            FOR UPDATE SKIP LOCKED
             """,
             (self.org_id, QUEUED),
         )
         return [
             QueuedIncident(
                 id=str(r[0]), user_id=r[1], source_type=r[2] or "", title=r[3] or "",
-                service=r[4], severity=r[5], queued_at=r[6], request=RcaRequest.from_db(r[7]),
+                service=r[4], severity=r[5], queued_at=r[6], request=None,
             )
             for r in self.cursor.fetchall()
         ]
 
-    def set_reason(self, incident_ids: List[str], reason: str) -> None:
+    def load_batch(self, batch: List[QueuedIncident]) -> List[QueuedIncident]:
+        """Lock the batch's rows that are still queued and attach their requests."""
+        by_id = {q.id: q for q in batch}
         self.cursor.execute(
-            "UPDATE incidents SET rca_queue_reason = %s WHERE id = ANY(%s::uuid[]) AND aurora_status = %s",
-            (reason, incident_ids, QUEUED),
+            """
+            SELECT id, rca_queued_request FROM incidents
+            WHERE id = ANY(%s::uuid[]) AND aurora_status = %s AND status = 'investigating'
+            FOR UPDATE SKIP LOCKED
+            """,
+            (list(by_id), QUEUED),
+        )
+        loaded = []
+        for incident_id, raw in self.cursor.fetchall():
+            q = by_id.get(str(incident_id))
+            request = RcaRequest.from_db(raw)
+            if q is not None and request is not None:
+                q.request = request
+                loaded.append(q)
+        return sorted(loaded, key=lambda q: (q.queued_at, q.id))
+
+    def set_reason_all(self, reason: str) -> None:
+        self.cursor.execute(
+            "UPDATE incidents SET rca_queue_reason = %s WHERE org_id = %s AND aurora_status = %s"
+            " AND rca_queue_reason IS DISTINCT FROM %s",
+            (reason, self.org_id, QUEUED, reason),
         )
 
     def set_task(self, incident_id: str, task_id: str) -> None:
+        # Published: the request is no longer needed for recovery.
         self.cursor.execute(
-            "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
+            "UPDATE incidents SET rca_celery_task_id = %s, rca_queued_request = NULL WHERE id = %s",
             (task_id, incident_id),
         )
 
 
 # --- Starting an investigation ----------------------------------------------------
 
-def start_rca(user_id: str, incident_id: str, request: RcaRequest, prompt: Optional[str] = None) -> str:
-    """Create the RCA's chat session and enqueue it. Returns the Celery task id."""
-    from chat.background.task import create_background_chat_session, run_background_chat
+def start_rca(user_id: str, incident_id: str, request: RcaRequest, prompt: Optional[str] = None,
+              rail_text: Optional[str] = None) -> str:
+    """Create the RCA's chat session and enqueue it. Returns the Celery task id.
+
+    When the broker refuses the task, the session is marked failed before the
+    error propagates, so a retry does not leave an extra chat in progress.
+    """
+    from chat.background.task import (
+        _update_session_status, create_background_chat_session, run_background_chat,
+    )
 
     session_id = create_background_chat_session(
         user_id=user_id,
@@ -375,14 +435,21 @@ def start_rca(user_id: str, incident_id: str, request: RcaRequest, prompt: Optio
         trigger_metadata=request.trigger_metadata,
         incident_id=incident_id,
     )
-    task = run_background_chat.delay(
-        user_id=user_id,
-        session_id=session_id,
-        initial_message=prompt or request.prompt,
-        trigger_metadata=request.trigger_metadata,
-        incident_id=incident_id,
-        rail_text=request.rail_text,
-    )
+    try:
+        task = run_background_chat.delay(
+            user_id=user_id,
+            session_id=session_id,
+            initial_message=prompt or request.prompt,
+            trigger_metadata=request.trigger_metadata,
+            incident_id=incident_id,
+            rail_text=rail_text if rail_text is not None else request.rail_text,
+        )
+    except Exception:
+        try:
+            _update_session_status(session_id, "failed", user_id=user_id)
+        except Exception:
+            logger.warning("[RcaDispatch] Could not mark session %s failed", sanitize(session_id))
+        raise
     return task.id
 
 
@@ -398,14 +465,22 @@ def _notify(user_id: str, org_id: str, incident_id: str, source: str) -> None:
 
 
 def _start_or_requeue(store, user_id: str, incident_id: str, request: RcaRequest,
-                      prompt: Optional[str] = None, grouped: bool = False) -> bool:
-    """Start a dispatched RCA; on failure put it (and its group) back in the queue."""
+                      prompt: Optional[str] = None, rail_text: Optional[str] = None,
+                      grouped: bool = False) -> str:
+    """Start a reserved RCA. Returns DISPATCHED, QUEUED_OUTCOME or FAILED.
+
+    On a failed start the reservation is released and the incident (and its
+    group) goes back in the queue: QUEUED_OUTCOME. If even that write fails,
+    FAILED: the request is still on the row from the reservation, so the stale
+    sweep puts it back in the queue later.
+    """
     try:
-        task_id = start_rca(user_id, incident_id, request, prompt)
+        task_id = start_rca(user_id, incident_id, request, prompt, rail_text)
     except Exception:
         logger.exception("[RcaDispatch] Could not start RCA for incident %s; queued for retry", sanitize(incident_id))
         try:
             store.rollback()
+            store.release_dispatch(incident_id)
             store.queue(incident_id, REASON_DISPATCH_FAILED, request)
             if grouped:
                 store.requeue_group(incident_id)
@@ -413,7 +488,8 @@ def _start_or_requeue(store, user_id: str, incident_id: str, request: RcaRequest
         except Exception:
             store.rollback()
             logger.exception("[RcaDispatch] Could not requeue incident %s", sanitize(incident_id))
-        return False
+            return FAILED
+        return QUEUED_OUTCOME
     try:
         store.set_task(incident_id, task_id)
         store.commit()
@@ -421,7 +497,7 @@ def _start_or_requeue(store, user_id: str, incident_id: str, request: RcaRequest
         # The worker links its own task id; this one is for early cancellation only.
         store.rollback()
         logger.warning("[RcaDispatch] Could not store task id for incident %s", sanitize(incident_id))
-    return True
+    return DISPATCHED
 
 
 def dispatch_with_store(store, user_id: str, incident_id: str, request: RcaRequest) -> str:
@@ -445,9 +521,9 @@ def dispatch_with_store(store, user_id: str, incident_id: str, request: RcaReque
         store.queue(incident_id, reason, request)
         store.commit()
         return QUEUED_OUTCOME
-    store.mark_dispatched(incident_id)
+    store.mark_dispatched(incident_id, request)
     store.commit()
-    return DISPATCHED if _start_or_requeue(store, user_id, incident_id, request) else QUEUED_OUTCOME
+    return _start_or_requeue(store, user_id, incident_id, request)
 
 
 def dispatch_alert_rca(
@@ -464,8 +540,9 @@ def dispatch_alert_rca(
     """The one way an alert webhook starts its RCA.
 
     Returns ``dispatched`` (started now), ``queued`` (waiting, with a visible
-    reason; the drain starts it later) or ``missing``. Never raises: a failure
-    leaves the incident queued for retry rather than silently uninvestigated.
+    reason; the drain starts it later), ``missing`` (the incident is not
+    visible) or ``failed`` (a temporary error stopped it before anything was
+    recorded; a caller that can retry its delivery should). Never raises.
     """
     incident_id = str(incident_id)
     request = RcaRequest(
@@ -475,7 +552,6 @@ def dispatch_alert_rca(
         session_title=session_title or "RCA",
         trigger_metadata=dict(trigger_metadata or {"source": source}),
     )
-    outcome = MISSING
     org_id = None
     try:
         with db_pool.get_admin_connection() as conn:
@@ -486,7 +562,7 @@ def dispatch_alert_rca(
                 outcome = dispatch_with_store(SqlStore(cursor, conn, org_id), user_id, incident_id, request)
     except Exception:
         logger.exception("%s Failed to dispatch RCA for incident %s", log_prefix, sanitize(incident_id))
-        return MISSING
+        return FAILED
     if outcome == QUEUED_OUTCOME:
         logger.info("%s RCA for incident %s queued (alert RCA budget)", log_prefix, sanitize(incident_id))
         _notify(user_id, org_id, incident_id, source)
@@ -498,38 +574,56 @@ def dispatch_alert_rca(
 # --- Draining the queue -------------------------------------------------------------
 
 def drain_with_store(store) -> Dict[str, int]:
-    """Start the queued investigations the org's budget allows, one per settled source."""
+    """Start the queued investigations the org's budget allows, one per settled source.
+
+    The budget is checked before the queue is read, so an org at capacity costs
+    one count query a minute. Only the chosen batch is locked and has its
+    requests loaded. A source whose start fails is skipped for the rest of the
+    pass, so it cannot hold back the others.
+    """
     stats = {"dispatched": 0, "grouped": 0}
+    skipped_sources: set = set()
     for _ in range(_MAX_DISPATCHES_PER_PASS):
         store.lock_org()
-        queued = [q for q in store.queued() if q.request is not None]
-        if not queued:
-            store.commit()
-            break
-        now = store.now()
-        by_source: Dict[str, List[QueuedIncident]] = {}
-        for q in queued:
-            by_source.setdefault(q.source_type, []).append(q)
-        ready = [items for items in by_source.values() if is_settled(items, now)]
-        if not ready:
+        if not store.has_queued():
             store.commit()
             break
         reason = budget_refusal(store.usage())
         if reason:
             # Say why they are still waiting; the next pass tries again.
-            store.set_reason([q.id for q in queued], reason)
+            store.set_reason_all(reason)
+            store.commit()
+            break
+        now = store.now()
+        by_source: Dict[str, List[QueuedIncident]] = {}
+        for q in store.queued():
+            if q.source_type not in skipped_sources:
+                by_source.setdefault(q.source_type, []).append(q)
+        ready = [items for items in by_source.values() if is_settled(items, now)]
+        if not ready:
             store.commit()
             break
         items = min(ready, key=lambda xs: min(q.queued_at for q in xs))
-        batch = items[:MAX_GROUP_SIZE]
+        source = items[0].source_type
+        batch = store.load_batch(items[:MAX_GROUP_SIZE])
+        if not batch:
+            # Another drain holds them, or they changed since the read.
+            skipped_sources.add(source)
+            store.commit()
+            continue
         leader = pick_leader(batch)
         followers = [q for q in batch if q.id != leader.id]
-        store.mark_dispatched(leader.id)
+        store.mark_dispatched(leader.id, leader.request)
         if followers:
             store.mark_grouped([q.id for q in followers], leader.id)
         store.commit()
-        prompt = grouped_prompt(leader.request, followers)
-        if _start_or_requeue(store, leader.user_id, leader.id, leader.request, prompt, grouped=bool(followers)):
+        outcome = _start_or_requeue(
+            store, leader.user_id, leader.id, leader.request,
+            prompt=grouped_prompt(leader.request, followers),
+            rail_text=grouped_rail_text(leader.request, followers),
+            grouped=bool(followers),
+        )
+        if outcome == DISPATCHED:
             stats["dispatched"] += 1
             stats["grouped"] += len(followers)
             logger.info(
@@ -538,7 +632,7 @@ def drain_with_store(store) -> Dict[str, int]:
             )
             _notify(leader.user_id, store.org_id, leader.id, leader.source_type)
         else:
-            break
+            skipped_sources.add(source)
     return stats
 
 
@@ -596,7 +690,7 @@ def run_queued_investigation(incident_id: str, requested_by: str, org_id: str) -
     """
     refusal: Optional[RunRefused] = None
     owner_id = request = None
-    started = False
+    outcome = FAILED
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cursor:
             row = None
@@ -617,14 +711,16 @@ def run_queued_investigation(incident_id: str, requested_by: str, org_id: str) -
                     refusal = RunRefused("This incident has no investigation to run", 422)
             store = SqlStore(cursor, conn, org_id)
             if refusal is None:
-                store.mark_dispatched(incident_id)
+                store.mark_dispatched(incident_id, request)
                 store.commit()
-                started = _start_or_requeue(store, owner_id, incident_id, request)
+                outcome = _start_or_requeue(store, owner_id, incident_id, request)
             else:
                 conn.rollback()
     if refusal is not None:
         raise refusal
-    if not started:
+    if outcome == QUEUED_OUTCOME:
         raise RunRefused("Could not start the investigation; it is queued and will be retried", 503)
+    if outcome != DISPATCHED:
+        raise RunRefused("Could not start the investigation; try again shortly", 500)
     logger.info("[RunQueuedRCA] Started incident %s on request", sanitize(incident_id))
     return {"started": True}

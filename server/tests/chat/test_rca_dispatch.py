@@ -34,6 +34,7 @@ class FakeStore:
         self.clock = T0
         self.incidents: dict[str, dict] = {}
         self.attached: dict[str, list[str]] = {}
+        self.queue_reads = 0
 
     # --- test helpers
     def add(self, incident_id, severity="medium", source="sentry"):
@@ -69,15 +70,20 @@ class FakeStore:
         return bool(at and at > self.clock - timedelta(seconds=rd._REDISPATCH_GUARD_SECONDS))
 
     def usage(self):
+        # Same predicates as SqlStore.usage: starts are counted from
+        # rca_dispatched_at; in-flight counts every running RCA on an incident,
+        # alert-driven or not (a chat-triggered RCA costs the same).
         now = self.clock
         dispatched = [i for i in self.incidents.values() if i["dispatched_at"]]
         return rd.BudgetUsage(
             started_in_window=sum(i["dispatched_at"] > now - timedelta(seconds=rd.WINDOW_SECONDS) for i in dispatched),
             started_in_hour=sum(i["dispatched_at"] > now - timedelta(hours=1) for i in dispatched),
             in_flight=sum(
-                i["aurora_status"] in ("running", "summarizing")
-                or (i["aurora_status"] == "idle" and i["dispatched_at"] > now - timedelta(minutes=30))
-                for i in dispatched
+                bool(i["aurora_status"] in ("running", "summarizing")
+                     or (i["aurora_status"] == "idle" and i["dispatched_at"]
+                         and i["dispatched_at"] > now - timedelta(minutes=30)))
+                for i in self.incidents.values()
+                if i["status"] != "merged"
             ),
         )
 
@@ -93,11 +99,14 @@ class FakeStore:
     def refresh_request(self, incident_id, request):
         self.incidents[incident_id]["request"] = request
 
-    def mark_dispatched(self, incident_id):
-        self.incidents[incident_id].update(
-            aurora_status="idle", dispatched_at=self.clock, reason=None, queued_at=None, leader=None,
-            request=None,
-        )
+    def mark_dispatched(self, incident_id, request=None):
+        inc = self.incidents[incident_id]
+        inc.update(aurora_status="idle", dispatched_at=self.clock, reason=None, queued_at=None,
+                   leader=None, task=None)
+        inc["request"] = request or inc["request"]
+
+    def release_dispatch(self, incident_id):
+        self.incidents[incident_id]["dispatched_at"] = None
 
     def mark_grouped(self, follower_ids, leader_id):
         for f in follower_ids:
@@ -116,20 +125,30 @@ class FakeStore:
             rd.QueuedIncident(
                 id=i, user_id=USER, source_type=inc["source"], title=inc["title"],
                 service=inc["service"], severity=inc["severity"], queued_at=inc["queued_at"],
-                request=inc["request"],
+                request=None,
             )
             for i, inc in self.incidents.items()
             if inc["aurora_status"] == rd.QUEUED and inc["status"] == "investigating" and inc["request"]
         ]
+        self.queue_reads += 1
         return sorted(rows, key=lambda q: (q.queued_at, q.id))
 
-    def set_reason(self, incident_ids, reason):
-        for i in incident_ids:
-            if self.incidents[i]["aurora_status"] == rd.QUEUED:
-                self.incidents[i]["reason"] = reason
+    def load_batch(self, batch):
+        loaded = []
+        for q in batch:
+            inc = self.incidents[q.id]
+            if inc["aurora_status"] == rd.QUEUED and inc["request"]:
+                q.request = inc["request"]
+                loaded.append(q)
+        return sorted(loaded, key=lambda q: (q.queued_at, q.id))
+
+    def set_reason_all(self, reason):
+        for inc in self.incidents.values():
+            if inc["aurora_status"] == rd.QUEUED:
+                inc["reason"] = reason
 
     def set_task(self, incident_id, task_id):
-        self.incidents[incident_id]["task"] = task_id
+        self.incidents[incident_id].update(task=task_id, request=None)
 
 
 @pytest.fixture
@@ -142,8 +161,11 @@ def started(monkeypatch, store):
     """Starting an RCA puts it on a worker, which marks the incident running."""
     calls = []
 
-    def _start(user_id, incident_id, request, prompt=None):
-        calls.append(SimpleNamespace(incident_id=incident_id, prompt=prompt or request.prompt))
+    def _start(user_id, incident_id, request, prompt=None, rail_text=None):
+        calls.append(SimpleNamespace(
+            incident_id=incident_id, prompt=prompt or request.prompt,
+            rail_text=rail_text if rail_text is not None else request.rail_text,
+        ))
         store.incidents[incident_id]["aurora_status"] = "running"
         return f"task-{incident_id}"
 
@@ -352,12 +374,26 @@ def test_housekeeping_runs_do_not_spend_the_alert_budget(monkeypatch, store, sta
 def test_a_prediscovery_run_does_not_consume_the_alert_rca_budget(monkeypatch, store, started):
     import importlib
 
+    import importlib.util
+
+    import celery_config
+
+    # A fresh copy of the module, loaded with a task decorator that keeps the
+    # function body: in CI, Celery is stubbed and @celery_app.task would
+    # replace run_prediscovery with a MagicMock.
+    def _keep_body(*_a, **_k):
+        def deco(fn):
+            bound_self = SimpleNamespace(request=SimpleNamespace(id="task-1"))
+            return SimpleNamespace(run=lambda *args, **kw: fn(bound_self, *args, **kw))
+        return deco
+
+    monkeypatch.setattr(celery_config.celery_app, "task", _keep_body)
+    source = importlib.import_module("chat.background.prediscovery_task")
+    spec = importlib.util.spec_from_file_location("prediscovery_task_under_test", source.__file__)
+    pre = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(pre)
+
     # sys.modules entries, the ones prediscovery's local imports resolve to.
-    pre = importlib.import_module("chat.background.prediscovery_task")
-    if isinstance(pre.run_prediscovery, MagicMock):
-        # Without Celery installed, conftest stubs it and @celery_app.task
-        # returns a MagicMock in place of the task, so there is no body to run.
-        pytest.skip("needs the real Celery task decorator")
     task_mod = importlib.import_module("chat.background.task")
     liveness = importlib.import_module("chat.background.liveness")
     prompt_builder = importlib.import_module("chat.background.rca_prompt_builder")
@@ -387,6 +423,119 @@ def test_a_prediscovery_run_does_not_consume_the_alert_rca_budget(monkeypatch, s
     assert store.usage() == before
     # The alert budget is untouched: a full window of alerts still starts at once.
     assert [_alert(store, f"inc-{n}") for n in range(rd.MAX_PER_WINDOW)] == [rd.DISPATCHED] * rd.MAX_PER_WINDOW
+
+
+# --- Review fixes ---------------------------------------------------------------------
+
+def _fill_window_then_queue(store, *ids, **kw):
+    for n in range(rd.MAX_PER_WINDOW):
+        _alert(store, f"inc-{n}")
+    for incident_id in ids:
+        _alert(store, incident_id, **kw)
+    _finish_old_rcas(store, minutes=0)
+    store.clock = T0 + timedelta(minutes=10)
+
+
+def test_a_grouped_run_puts_the_follower_titles_through_the_input_rail(store, started):
+    _fill_window_then_queue(store, "a", "b")
+    rd.drain_with_store(store)
+    assert "Issue a" in started[-1].rail_text
+    assert "Issue b" in started[-1].rail_text
+
+
+def test_a_source_that_fails_to_start_does_not_hold_back_the_others(monkeypatch, store, started):
+    _fill_window_then_queue(store, "s1", "s2")
+    store.add("d1", source="datadog")
+    store.queue("d1", rd.REASON_BURST, _request("d1"))
+    store.incidents["d1"]["queued_at"] = T0 + timedelta(minutes=1)
+    ok = rd.start_rca
+
+    def _sentry_broken(user_id, incident_id, request, prompt=None, rail_text=None):
+        if store.incidents[incident_id]["source"] == "sentry":
+            raise RuntimeError("broker down")
+        return ok(user_id, incident_id, request, prompt, rail_text)
+
+    monkeypatch.setattr(rd, "start_rca", _sentry_broken)
+    assert rd.drain_with_store(store)["dispatched"] == 1
+    assert store.incidents["d1"]["aurora_status"] == "running"
+    assert sorted(store.by_status(rd.QUEUED)) == ["s1", "s2"]
+
+
+def test_a_start_that_is_never_published_releases_its_budget(monkeypatch, store, started):
+    monkeypatch.setattr(rd, "start_rca", MagicMock(side_effect=RuntimeError("broker down")))
+    assert _alert(store, "inc-1") == rd.QUEUED_OUTCOME
+    assert store.incidents["inc-1"]["dispatched_at"] is None
+    assert store.usage().started_in_window == 0
+
+
+def test_a_failed_requeue_reports_failed_and_keeps_the_request_for_the_sweep(monkeypatch, store, started):
+    monkeypatch.setattr(rd, "start_rca", MagicMock(side_effect=RuntimeError("broker down")))
+    monkeypatch.setattr(store, "queue", MagicMock(side_effect=RuntimeError("db down")))
+    assert _alert(store, "inc-1") == rd.FAILED
+    assert store.incidents["inc-1"]["request"] is not None
+
+
+def test_a_published_start_clears_the_stored_request(store, started):
+    assert _alert(store, "inc-1") == rd.DISPATCHED
+    assert store.incidents["inc-1"]["request"] is None
+    assert store.incidents["inc-1"]["task"] == "task-inc-1"
+
+
+def test_an_org_at_capacity_is_not_read_into_memory(store, started):
+    _fill_window_then_queue(store, "a", "b")
+    for inc in store.incidents.values():
+        if inc["dispatched_at"]:
+            inc["aurora_status"] = "running"
+    store.add("x")
+    store.incidents["x"].update(aurora_status="running")
+    reads = store.queue_reads
+    assert rd.drain_with_store(store)["dispatched"] == 0
+    assert store.queue_reads == reads
+    assert store.incidents["a"]["reason"] == rd.REASON_CONCURRENCY
+
+
+def test_a_running_chat_triggered_rca_counts_as_in_flight(store):
+    # Not an alert dispatch (no rca_dispatched_at), but it costs the same.
+    store.add("chat-rca")
+    store.incidents["chat-rca"]["aurora_status"] = "running"
+    assert store.usage() == rd.BudgetUsage(0, 0, 1)
+
+
+def test_the_sql_budget_counts_running_rcas_without_a_dispatch_timestamp():
+    cursor = MagicMock()
+    cursor.fetchone.return_value = (0, 0, 0)
+    rd.SqlStore(cursor, MagicMock(), ORG).usage()
+    sql = " ".join(cursor.execute.call_args[0][0].split())
+    # In flight: any running RCA on an incident, whatever started it...
+    assert "(aurora_status IN ('running', 'summarizing') AND updated_at >" in sql
+    assert "OR aurora_status IN ('running', 'summarizing'))" in sql
+    # ...while the rate counts only alert dispatches.
+    assert "COUNT(*) FILTER (WHERE rca_dispatched_at > LOCALTIMESTAMP - make_interval(secs => %s))" in sql
+
+
+def test_a_refused_publish_fails_the_session_it_created(monkeypatch):
+    import importlib
+
+    task_mod = importlib.import_module("chat.background.task")
+    failed = []
+    monkeypatch.setattr(task_mod, "create_background_chat_session", lambda **_k: "sess-1")
+    monkeypatch.setattr(task_mod, "run_background_chat",
+                        SimpleNamespace(delay=MagicMock(side_effect=RuntimeError("broker down"))))
+    monkeypatch.setattr(task_mod, "_update_session_status",
+                        lambda sid, status, user_id: failed.append((sid, status)))
+    with pytest.raises(RuntimeError):
+        rd.start_rca(USER, "inc-1", _request("inc-1"))
+    assert failed == [("sess-1", "failed")]
+
+
+def test_a_temporary_error_is_reported_as_failed_not_missing(monkeypatch):
+    pool = MagicMock()
+    pool.get_admin_connection.side_effect = RuntimeError("pool exhausted")
+    monkeypatch.setattr(rd, "db_pool", pool)
+    outcome = rd.dispatch_alert_rca(
+        user_id=USER, incident_id="inc-1", source="sentry", prompt="p", rail_text="r",
+    )
+    assert outcome == rd.FAILED
 
 
 # --- The stale sweep ------------------------------------------------------------------
@@ -472,6 +621,17 @@ def test_the_never_started_sweep_still_fails_a_dispatched_rca_that_was_lost(monk
     })
     assert _errored(cursor) == ["lost-inc"]
     assert reported == ["lost-inc"]
+
+
+def test_the_sweep_requeues_a_reserved_start_that_was_never_published(monkeypatch):
+    # The dispatcher reserved it, then its worker died before publishing.
+    cursor, reported = _sweep(monkeypatch, {
+        "WHERE i.status = 'investigating' AND i.updated_at < %s": [("reserved-inc", "idle", None, None, True)],
+    })
+    assert _errored(cursor) == []
+    assert reported == []
+    requeue = next(e for e in cursor.executed if "rca_queue_reason = 'dispatch_failed'" in e[0])
+    assert requeue[1] == ("reserved-inc",)
 
 
 def test_grouped_incidents_are_analyzed_when_their_investigation_ends(monkeypatch):

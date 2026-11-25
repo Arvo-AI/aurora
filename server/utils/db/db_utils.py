@@ -838,12 +838,6 @@ def initialize_tables():
                      
                      CREATE INDEX IF NOT EXISTS idx_incidents_user_id ON incidents(user_id, started_at DESC);
                      CREATE INDEX IF NOT EXISTS idx_incidents_status ON incidents(status);
-                     CREATE INDEX IF NOT EXISTS idx_incidents_rca_queue
-                         ON incidents(org_id, rca_queued_at) WHERE aurora_status = 'queued';
-                     CREATE INDEX IF NOT EXISTS idx_incidents_rca_dispatched
-                         ON incidents(org_id, rca_dispatched_at) WHERE rca_dispatched_at IS NOT NULL;
-                     CREATE INDEX IF NOT EXISTS idx_incidents_rca_group_leader
-                         ON incidents(rca_group_leader_id) WHERE rca_group_leader_id IS NOT NULL;
                      CREATE INDEX IF NOT EXISTS idx_incidents_source ON incidents(source_type, source_alert_id);
                      CREATE INDEX IF NOT EXISTS idx_incidents_merged ON incidents(merged_into_incident_id) WHERE merged_into_incident_id IS NOT NULL;
                  """,
@@ -2149,12 +2143,6 @@ def initialize_tables():
                     ADD COLUMN IF NOT EXISTS rca_queued_at TIMESTAMP,
                     ADD COLUMN IF NOT EXISTS rca_queued_request JSONB,
                     ADD COLUMN IF NOT EXISTS rca_group_leader_id UUID REFERENCES incidents(id) ON DELETE SET NULL;
-                    CREATE INDEX IF NOT EXISTS idx_incidents_rca_queue
-                        ON incidents(org_id, rca_queued_at) WHERE aurora_status = 'queued';
-                    CREATE INDEX IF NOT EXISTS idx_incidents_rca_dispatched
-                        ON incidents(org_id, rca_dispatched_at) WHERE rca_dispatched_at IS NOT NULL;
-                    CREATE INDEX IF NOT EXISTS idx_incidents_rca_group_leader
-                        ON incidents(rca_group_leader_id) WHERE rca_group_leader_id IS NOT NULL;
                 """)
                 conn.commit()
             except Exception as e:
@@ -2238,6 +2226,30 @@ def initialize_tables():
             for table_name, create_script in create_tables.items():
                 cursor.execute(create_script)
                 logging.info(f"Table '{table_name}' initialized successfully.")
+
+            # RCA queue columns and their indexes, once the incidents table exists.
+            # The columns are added again here because the pre-creation migration
+            # above may have rolled back (e.g. a lock timeout on a busy table);
+            # the indexes are built only after the columns are known to exist.
+            try:
+                cursor.execute("""
+                    ALTER TABLE incidents
+                    ADD COLUMN IF NOT EXISTS rca_dispatched_at TIMESTAMP,
+                    ADD COLUMN IF NOT EXISTS rca_queue_reason VARCHAR(20),
+                    ADD COLUMN IF NOT EXISTS rca_queued_at TIMESTAMP,
+                    ADD COLUMN IF NOT EXISTS rca_queued_request JSONB,
+                    ADD COLUMN IF NOT EXISTS rca_group_leader_id UUID REFERENCES incidents(id) ON DELETE SET NULL;
+                    CREATE INDEX IF NOT EXISTS idx_incidents_rca_queue
+                        ON incidents(org_id, rca_queued_at) WHERE aurora_status = 'queued';
+                    CREATE INDEX IF NOT EXISTS idx_incidents_rca_dispatched
+                        ON incidents(org_id, rca_dispatched_at) WHERE rca_dispatched_at IS NOT NULL;
+                    CREATE INDEX IF NOT EXISTS idx_incidents_rca_group_leader
+                        ON incidents(rca_group_leader_id) WHERE rca_group_leader_id IS NOT NULL;
+                """)
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error completing RCA queue columns on incidents: {e}")
+                conn.rollback()
 
             # Existing installs predate team_id. The CREATE above includes it,
             # so this only rewrites the primary key on a table that already existed.

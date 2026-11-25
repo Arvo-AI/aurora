@@ -259,7 +259,7 @@ def trigger_delayed_rca(
         extract_runbook_url,
         fetch_runbook_content,
     )
-    from chat.background.rca_dispatch import dispatch_alert_rca
+    from chat.background.rca_dispatch import FAILED as RCA_FAILED, dispatch_alert_rca
 
     logger.info(
         "[PAGERDUTY][RCA-DELAYED] Starting delayed RCA check for incident %s (db_id=%s)",
@@ -377,7 +377,7 @@ def trigger_delayed_rca(
                 conn.commit()
 
                 # Start now if the org has budget, otherwise queue on the incident
-                dispatch_alert_rca(
+                outcome = dispatch_alert_rca(
                     user_id=user_id,
                     incident_id=incident_db_id,
                     source="pagerduty",
@@ -392,6 +392,10 @@ def trigger_delayed_rca(
                     session_title=f"RCA: {incident_title}",
                     log_prefix="[PAGERDUTY][RCA-DELAYED]",
                 )
+                if outcome == RCA_FAILED:
+                    # Nothing was started or queued (a temporary DB error). This
+                    # task is keyed on the incident, so retrying it is safe.
+                    raise RuntimeError("RCA dispatch failed; retrying")
 
     except Exception as exc:
         logger.exception(

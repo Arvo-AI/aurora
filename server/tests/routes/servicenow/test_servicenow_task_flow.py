@@ -370,6 +370,7 @@ def test_a_failed_dispatch_goes_through_the_celery_retry(monkeypatch, tasks, poo
 def _dispatch_stub(dispatch):
     mod = ModuleType("chat.background.rca_dispatch")
     mod.MISSING = "missing"  # type: ignore[attr-defined]
+    mod.FAILED = "failed"  # type: ignore[attr-defined]
     mod.dispatch_alert_rca = dispatch  # type: ignore[attr-defined]
     return mod
 
@@ -405,8 +406,9 @@ def test_dispatch_commits_the_staged_state_then_hands_the_rca_to_the_dispatcher(
     assert conn.rollbacks == 0
 
 
-def test_dispatch_raises_for_a_retry_when_the_dispatcher_could_not_start_or_queue(monkeypatch, tasks):
-    monkeypatch.setitem(sys.modules, "chat.background.rca_dispatch", _dispatch_stub(lambda **kw: "missing"))
+@pytest.mark.parametrize("outcome", ["missing", "failed"])
+def test_dispatch_raises_for_a_retry_when_the_dispatcher_could_not_start_or_queue(monkeypatch, tasks, outcome):
+    monkeypatch.setitem(sys.modules, "chat.background.rca_dispatch", _dispatch_stub(lambda **kw: outcome))
     cursor = _Cursor()
     conn = _Conn(cursor)
 
