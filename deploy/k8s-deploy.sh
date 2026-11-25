@@ -181,7 +181,7 @@ fi
 
 echo ""
 info "LLM provider"
-prompt LLM_PROVIDER "Provider (openrouter, openai, anthropic, google)" "openrouter"
+prompt LLM_PROVIDER "Provider (openrouter, requesty, openai, anthropic, google)" "openrouter"
 prompt LLM_API_KEY "API key for $LLM_PROVIDER"
 
 # ─── Validate inputs ─────────────────────────────────────────────────────────
@@ -208,8 +208,8 @@ if [[ -n "${STORAGE_BUCKET:-}" && -n "${STORAGE_ACCESS_KEY:-}" && -n "${STORAGE_
 fi
 
 case "$LLM_PROVIDER" in
-  openrouter|openai|anthropic|google) ok "LLM provider '$LLM_PROVIDER' is valid" ;;
-  *) warn "Unknown LLM provider '$LLM_PROVIDER' — expected: openrouter, openai, anthropic, or google"; VALIDATION_FAILED=true ;;
+  openrouter|requesty|openai|anthropic|google) ok "LLM provider '$LLM_PROVIDER' is valid" ;;
+  *) warn "Unknown LLM provider '$LLM_PROVIDER' — expected: openrouter, requesty, openai, anthropic, or google"; VALIDATION_FAILED=true ;;
 esac
 
 if [[ -z "$LLM_API_KEY" || ${#LLM_API_KEY} -lt 10 ]]; then
@@ -325,11 +325,12 @@ yq -i ".secrets.app.SEARXNG_SECRET = \"$SEARXNG_SECRET\"" "$VALUES_FILE"
 # LLM
 LLM_KEY_FIELD="OPENROUTER_API_KEY"
 case "$LLM_PROVIDER" in
+  requesty) LLM_KEY_FIELD="REQUESTY_API_KEY" ;;
   openai) LLM_KEY_FIELD="OPENAI_API_KEY" ;;
   anthropic) LLM_KEY_FIELD="ANTHROPIC_API_KEY" ;;
   google) LLM_KEY_FIELD="GOOGLE_AI_API_KEY" ;;
 esac
-yq -i ".config.LLM_PROVIDER_MODE = \"$(if [[ "$LLM_PROVIDER" == "openrouter" ]]; then echo openrouter; else echo direct; fi)\"" "$VALUES_FILE"
+yq -i ".config.LLM_PROVIDER_MODE = \"$(if [[ "$LLM_PROVIDER" == "openrouter" || "$LLM_PROVIDER" == "requesty" ]]; then echo "$LLM_PROVIDER"; else echo direct; fi)\"" "$VALUES_FILE"
 yq -i ".secrets.llm.${LLM_KEY_FIELD} = \"$LLM_API_KEY\"" "$VALUES_FILE"
 
 ok "Values file generated: $VALUES_FILE"
