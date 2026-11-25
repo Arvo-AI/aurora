@@ -33,7 +33,7 @@ A report counts for nothing in a check's record. A check is credited by
 incidents; a report reaches the record only by becoming one.
 """
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from services.detection import STATE_RETIRED
 from services.detection.chat_reader import KIND_PROBLEM, MAX_KNOWN_ASSETS, Report
@@ -79,6 +79,8 @@ RUN_NOW_COOLDOWN_SECONDS = 300
 VERIFICATION_TIMEOUT_HOURS = 2
 RETENTION_DAYS = 30
 CHANNEL_CLAIM_SECONDS = 300
+# Threads a channel remembers as having a new reply, until they are read.
+MAX_NOTED_THREADS = 30
 
 
 def _hold(cursor, what: str) -> None:
@@ -190,9 +192,33 @@ def list_channels(cursor, org_id: str, team_id: Optional[str], company: str) -> 
 
 # ---- reading turns --------------------------------------------------------
 
+class Turn(NamedTuple):
+    """One channel taken to read now. *claim* is what advance and read_failed must be
+    given back; *threads* are the threads with a reply the history page may not show."""
+    channel_id: str
+    last_ts: Optional[str]
+    level: str
+    claim: Any
+    threads: Dict[str, str]
+
+
+def reads_to_claim(cursor, org_id: str, limit: int) -> int:
+    """How many channels this turn may take: what is left of the day's reads, less the
+    channels other turns hold and have not read yet. Holds the org's turns apart until
+    the caller commits, so two of them cannot both spend the same allowance."""
+    _hold(cursor, "detection_chat_reads:%s" % org_id)
+    cursor.execute(
+        "SELECT COUNT(*) FROM detection_chat_cursors "
+        "WHERE org_id = %s AND claimed_at > NOW() - %s * INTERVAL '1 second'",
+        (org_id, CHANNEL_CLAIM_SECONDS),
+    )
+    held = cursor.fetchone()[0]
+    return max(0, min(limit, reads_left_today(cursor, org_id) - held))
+
+
 def claim_channels(cursor, org_id: str, team_id: str, company: str,
                    limit: int) -> List[Tuple[str, Optional[str], str]]:
-    """Take up to *limit* channels to read now: [(channel_id, last_ts or None, level)].
+    """Take up to *limit* channels to read now, as Turns.
 
     Only channels of the workspace the token belongs to, that Aurora is in, and
     whose level is not off. A private channel is off until someone sets it:
@@ -224,24 +250,35 @@ def claim_channels(cursor, org_id: str, team_id: str, company: str,
            FROM readable r
            WHERE c.org_id = %s AND c.channel_id = r.channel_id
              AND c.channel_id IN (SELECT channel_id FROM taken)
-           RETURNING c.channel_id, c.last_ts, r.level""",
+           RETURNING c.channel_id, c.last_ts, r.level, c.claimed_at, c.threads""",
         params + (org_id, CHANNEL_CLAIM_SECONDS, limit, org_id),
     )
-    return [(row[0], row[1], row[2]) for row in cursor.fetchall()]
+    return [Turn(row[0], row[1], row[2], row[3], dict(row[4] or {})) for row in cursor.fetchall()]
 
 
-def advance(cursor, org_id: str, channel_id: str, last_ts: str) -> None:
-    """The channel was read up to *last_ts*."""
+def advance(cursor, org_id: str, channel_id: str, last_ts: str, claim: Any) -> None:
+    """The channel was read up to *last_ts*, by the turn holding *claim*.
+
+    A turn that outlived its claim changes nothing: another has the channel by
+    then, and its cursor is the newer one. Threads noted as active are dropped
+    once read past, or after a day.
+    """
     cursor.execute(
         """UPDATE detection_chat_cursors
            SET last_ts = %s, updated_at = NOW(), claimed_at = NULL, pending_since = NULL,
-               failed_attempts = 0
-           WHERE org_id = %s AND channel_id = %s""",
-        (last_ts, org_id, channel_id),
+               failed_attempts = 0,
+               threads = COALESCE((
+                   SELECT jsonb_object_agg(noted.key, noted.value)
+                   FROM jsonb_each_text(threads) AS noted
+                   WHERE noted.value::float8 > %s::float8
+                     AND noted.value::float8 > EXTRACT(EPOCH FROM NOW()) - 86400
+               ), '{}'::jsonb)
+           WHERE org_id = %s AND channel_id = %s AND claimed_at = %s""",
+        (last_ts, last_ts, org_id, channel_id, claim),
     )
 
 
-def read_failed(cursor, org_id: str, channel_id: str, newest_ts: str) -> bool:
+def read_failed(cursor, org_id: str, channel_id: str, newest_ts: str, claim: Any) -> bool:
     """The channel's new messages could not be read. True when they are now given up on.
 
     They are tried again on the channel's next turn, MAX_FAILED_READS times.
@@ -251,24 +288,51 @@ def read_failed(cursor, org_id: str, channel_id: str, newest_ts: str) -> bool:
     """
     cursor.execute(
         """UPDATE detection_chat_cursors
-           SET failed_attempts = failed_attempts + 1, updated_at = NOW(), claimed_at = NULL
-           WHERE org_id = %s AND channel_id = %s RETURNING failed_attempts""",
-        (org_id, channel_id),
+           SET failed_attempts = failed_attempts + 1, updated_at = NOW()
+           WHERE org_id = %s AND channel_id = %s AND claimed_at = %s RETURNING failed_attempts""",
+        (org_id, channel_id, claim),
     )
     row = cursor.fetchone()
-    if row is None or row[0] < MAX_FAILED_READS:
+    if row is None:
         return False
-    advance(cursor, org_id, channel_id, newest_ts)
+    if row[0] < MAX_FAILED_READS:
+        cursor.execute(
+            "UPDATE detection_chat_cursors SET claimed_at = NULL WHERE org_id = %s AND channel_id = %s",
+            (org_id, channel_id),
+        )
+        return False
+    advance(cursor, org_id, channel_id, newest_ts, claim)
     return True
 
 
-def note_activity(cursor, org_id: str, channel_id: str) -> None:
-    """A message just arrived in *channel_id* (a Slack event): read it on the next turn."""
+def note_activity(cursor, org_id: str, channel_id: str, thread_ts: Optional[str] = None,
+                  ts: Optional[str] = None) -> None:
+    """A message just arrived in *channel_id* (a Slack event): read it on the next turn.
+
+    A reply in a thread is noted with its thread: the thread's first message can
+    be further back than the history the next reading takes, and the reply
+    would not be found from there. At most MAX_NOTED_THREADS a channel.
+    """
     cursor.execute(
         """UPDATE detection_chat_cursors SET pending_since = COALESCE(pending_since, NOW())
            WHERE org_id = %s AND channel_id = %s""",
         (org_id, channel_id),
     )
+    if not thread_ts or not ts or thread_ts == ts or not (_is_ts(thread_ts) and _is_ts(ts)):
+        return
+    cursor.execute(
+        """UPDATE detection_chat_cursors SET threads = jsonb_set(threads, ARRAY[%s], to_jsonb(%s::text))
+           WHERE org_id = %s AND channel_id = %s
+             AND (threads ? %s OR (SELECT COUNT(*) FROM jsonb_object_keys(threads)) < %s)""",
+        (thread_ts, ts, org_id, channel_id, thread_ts, MAX_NOTED_THREADS),
+    )
+
+
+def _is_ts(value: str) -> bool:
+    try:
+        return float(value) > 0
+    except (TypeError, ValueError):
+        return False
 
 
 # ---- reads ----------------------------------------------------------------

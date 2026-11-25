@@ -128,6 +128,8 @@ def _hold_to_evidence(user_id: str, org_id: str, session_id: str, finding: dict)
             "not_shown": missing,
         })
     finding["reply"] = ""
+    # Withheld means silent: no pointer to another channel goes out in its place.
+    finding["same_as"] = ""
     finding["summary"] = (finding["summary"] + _WITHHELD)[:_SUMMARY_MAX_CHARS + len(_WITHHELD)]
     return None
 

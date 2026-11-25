@@ -377,21 +377,23 @@ def _replay_before_saving(user_id: str, definition: dict, origin: dict) -> Optio
     incident_id = replay.incident_id_from(origin["ref"])
     if not incident_id:
         return None
-    with _connection(user_id, "replay") as (cursor, _conn, org_id):
+    with _connection(user_id, "replay") as (cursor, conn, org_id):
         incident_at = replay.incident_time(cursor, org_id, incident_id)
         if incident_at is None:
             return None
-        tried, refused_before = replay.attempts(cursor, org_id, incident_id)
-        if tried >= replay.MAX_ATTEMPTS_PER_INCIDENT:
+        # Taken before the replay runs, and counted whatever happens next: a refused
+        # save is exactly the attempt to count.
+        attempt_id = replay.reserve_attempt(cursor, org_id, incident_id, definition["name"])
+        if attempt_id is None:
             # Out of replays for this incident: admitted silent, proves itself forward.
             return None
         end = replay.replay_end(incident_at, definition["window_seconds"])
         quiet = replay.quiet_ends(cursor, org_id, end, definition["window_seconds"])
+        conn.commit()
     result = replay.replay_origin(definition, user_id, end, quiet)
-    # Written whatever happens next: a refused save is exactly the attempt to count.
     with _connection(user_id, "replay") as (cursor, conn, org_id):
-        replay.record_attempt(cursor, org_id, incident_id, definition["name"],
-                              bool(replay.refusal(result)))
+        refused_before = replay.close_attempt(cursor, org_id, incident_id, attempt_id,
+                                              bool(replay.refusal(result)))
         conn.commit()
     return _Replayed(result, result.as_record(incident_id, end), incident_id, incident_at,
                      creditable=not refused_before)

@@ -2736,6 +2736,7 @@ def create_background_chat_session(
     trigger_metadata: Optional[Dict[str, Any]] = None,
     incident_id: Optional[str] = None,
     question: Optional[str] = None,
+    org_id: Optional[str] = None,
 ) -> str:
     """Create a new chat session for a background chat.
     
@@ -2747,6 +2748,8 @@ def create_background_chat_session(
         title: Title for the chat session
         trigger_metadata: Optional metadata about the trigger source
         incident_id: Optional incident ID to link this chat session to
+        org_id: The org this session is for. When given and the user is no longer
+            in it, no session is created and ValueError is raised.
     
     Returns:
         The created session ID
@@ -2759,11 +2762,16 @@ def create_background_chat_session(
                 # No RLS needed — users not RLS-protected
                 cursor.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
                 row = cursor.fetchone()
+                expected_org_id = org_id
                 org_id = row[0] if row and row[0] else None
 
                 if not org_id:
                     logger.warning("No org_id found for user %s in background task session creation", user_id)
                     raise ValueError(f"Missing org_id for user {user_id}")
+                if expected_org_id and str(org_id) != str(expected_org_id):
+                    # The caller gathered what this session will hold in one org. A user
+                    # who has since moved to another must not carry it there.
+                    raise ValueError(f"User {user_id} is no longer in the org this session is for")
                 
                 if not set_rls_context(cursor, conn, user_id, log_prefix="[BackgroundChat:session]"):
                     raise ValueError(f"Failed to set RLS context for user {user_id}")

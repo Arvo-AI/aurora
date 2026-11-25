@@ -1771,6 +1771,7 @@ def initialize_tables():
                         failed_attempts INTEGER NOT NULL DEFAULT 0,
                         claimed_at TIMESTAMPTZ,
                         updated_at TIMESTAMPTZ,
+                        threads JSONB NOT NULL DEFAULT '{}'::jsonb,
                         PRIMARY KEY (org_id, channel_id)
                     );
                 """,
@@ -2088,7 +2089,8 @@ def initialize_tables():
                     ADD COLUMN IF NOT EXISTS level VARCHAR(8),
                     ADD COLUMN IF NOT EXISTS pending_since TIMESTAMPTZ,
                     ADD COLUMN IF NOT EXISTS failed_attempts INTEGER NOT NULL DEFAULT 0,
-                    ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ;
+                    ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ,
+                    ADD COLUMN IF NOT EXISTS threads JSONB NOT NULL DEFAULT '{}'::jsonb;
                 """)
                 conn.commit()
             except Exception as e:

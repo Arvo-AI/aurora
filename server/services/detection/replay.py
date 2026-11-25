@@ -192,24 +192,41 @@ def replay_origin(check: Dict[str, Any], user_id: str, end: datetime,
     return ReplayResult(over_incident.status == STATUS_FAIL, quiet_runs, quiet_fails)
 
 
-def attempts(cursor, org_id: str, incident_id: str) -> tuple:
-    """(replays tried for this incident in the last day, whether any was ever refused)."""
+def reserve_attempt(cursor, org_id: str, incident_id: str, check_name: str) -> Optional[str]:
+    """Take one of the incident's replays for the day. Returns the attempt's id, or None
+    when there is none left. The caller commits before it replays.
+
+    Counted and written under one lock, before the replay runs: two saves for
+    the same incident cannot both take the last one.
+    """
+    cursor.execute("SELECT pg_advisory_xact_lock(hashtext(%s))",
+                   ("detection_replay:%s:%s" % (org_id, incident_id),))
     cursor.execute(
-        """SELECT COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '1 day'),
-                  COALESCE(BOOL_OR(refused), FALSE)
-           FROM detection_replay_attempts WHERE org_id = %s AND incident_id = %s""",
+        """SELECT COUNT(*) FROM detection_replay_attempts
+           WHERE org_id = %s AND incident_id = %s AND created_at >= NOW() - INTERVAL '1 day'""",
         (org_id, incident_id),
     )
-    tried, refused = cursor.fetchone()
-    return tried or 0, bool(refused)
-
-
-def record_attempt(cursor, org_id: str, incident_id: str, check_name: str, refused: bool) -> None:
+    if cursor.fetchone()[0] >= MAX_ATTEMPTS_PER_INCIDENT:
+        return None
     cursor.execute(
         """INSERT INTO detection_replay_attempts (org_id, incident_id, check_name, refused)
-           VALUES (%s, %s, %s, %s)""",
-        (org_id, incident_id, check_name, refused),
+           VALUES (%s, %s, %s, FALSE) RETURNING id""",
+        (org_id, incident_id, check_name),
     )
+    return str(cursor.fetchone()[0])
+
+
+def close_attempt(cursor, org_id: str, incident_id: str, attempt_id: str, refused: bool) -> bool:
+    """Write how the replay went. Returns whether any other check written for this incident
+    was ever refused, read now so that one refused while this replay ran is seen."""
+    cursor.execute("UPDATE detection_replay_attempts SET refused = %s WHERE id = %s",
+                   (refused, attempt_id))
+    cursor.execute(
+        """SELECT COALESCE(BOOL_OR(refused), FALSE) FROM detection_replay_attempts
+           WHERE org_id = %s AND incident_id = %s AND id <> %s""",
+        (org_id, incident_id, attempt_id),
+    )
+    return bool(cursor.fetchone()[0])
 
 
 def refusal(result: ReplayResult) -> str:

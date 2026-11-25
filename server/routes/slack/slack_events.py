@@ -120,7 +120,8 @@ def _note_channel_message(event: dict, team_id: str | None) -> None:
         with db_pool.get_admin_connection() as conn, conn.cursor() as cursor:
             org_id = set_rls_context(cursor, conn, user_id, log_prefix="[SlackEvents:message]")
             if org_id:
-                chat_signals.note_activity(cursor, org_id, event['channel'])
+                chat_signals.note_activity(cursor, org_id, event['channel'],
+                                            event.get('thread_ts'), event.get('ts'))
                 conn.commit()
     except Exception:
         logger.exception("Failed to note a channel message for the chat reader")
