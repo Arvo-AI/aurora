@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.26] - 2026-11-23
+
+### Added
+- GitHub Enterprise: Aurora works with GitHub Enterprise Cloud (`*.ghe.com`)
+  and GitHub Enterprise Server. Set `NEXT_PUBLIC_GITHUB_APP_SLUG` to the App's
+  full URL (for example `https://acme.ghe.com/apps/acme/aurora`) and the install
+  link, OAuth, API calls, links and the GitHub MCP server all use that host.
+  The API base is derived from it; `GITHUB_API_URL` overrides it when needed.
+  A bare slug keeps working on github.com as before.
+
+### Changed
+- GitHub: `NEXT_PUBLIC_GITHUB_APP_SLUG` and `GITHUB_API_URL` must be `https://`
+  URLs without credentials; other values are ignored with a warning. A value
+  that is neither a slug nor a URL (an App URL without `https://`) disables
+  the install link instead of building a broken one.
+- GitHub connections are tied to the host that issued them: after repointing a
+  deployment to another GitHub host, users reconnect GitHub. Stored OAuth
+  tokens, linked GitHub identities (new `users.github_host` column, added at
+  startup) and PR closes from Aurora never cross hosts.
+- GitHub Enterprise installations show the account's initial instead of an
+  avatar, since enterprise hosts only serve avatars to signed-in users.
+
 ## [1.5.25] - 2026-11-16
 
 ### Changed

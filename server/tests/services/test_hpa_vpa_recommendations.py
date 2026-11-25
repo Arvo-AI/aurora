@@ -426,3 +426,30 @@ def test_dismiss_raises_rather_than_silently_truncating_a_short_row():
 
     with pytest.raises(ValueError):
         dismiss_recommendation(cur, "rec-1", "org-1", "U123")
+
+
+
+def test_pr_from_another_github_host_is_never_closed(monkeypatch):
+    """A PR opened on github.com must not be closed by number on an enterprise
+    host the deployment was repointed to: that is someone else's PR."""
+    calls = []
+    monkeypatch.setitem(
+        _CLOSERS, "github", lambda *args, **_kwargs: calls.append(args) or {"success": True}
+    )
+    monkeypatch.setenv("NEXT_PUBLIC_GITHUB_APP_SLUG", "https://acme.ghe.com/apps/acme/aurora")
+    result = close_pull_request(
+        "user-1", "github", "owner/repo", 5, pr_url="https://github.com/owner/repo/pull/5"
+    )
+    assert "Close it on GitHub manually" in result["error"]
+    # No recorded link: the host cannot be confirmed, so no close either.
+    for missing in (None, ""):
+        assert "error" in close_pull_request("user-1", "github", "owner/repo", 5, pr_url=missing)
+    assert calls == []
+
+    ok = close_pull_request(
+        "user-1", "github", "owner/repo", 5, pr_url="https://acme.ghe.com/owner/repo/pull/5"
+    )
+    assert ok == {"success": True}
+    assert len(calls) == 1
+
+

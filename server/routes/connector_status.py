@@ -33,6 +33,7 @@ _LOG_PREFIX = "[ConnectorStatus]"
 
 from utils.splunk_config import SPLUNK_SSL_VERIFY
 from utils.elastic_config import ELASTIC_SSL_VERIFY
+from connectors.github_connector.hosts import github_oauth_token
 
 connector_status_bp = Blueprint("connector_status", __name__)
 
@@ -459,7 +460,7 @@ def _check_github(
     if is_oauth_token_honored():
         try:
             creds = get_token_data(user_id, "github")
-            if creds and creds.get("access_token"):
+            if github_oauth_token(creds):
                 return {"connected": True}
         except Exception as exc:
             logger.debug("[STATUS] github OAuth check failed: %s", exc)

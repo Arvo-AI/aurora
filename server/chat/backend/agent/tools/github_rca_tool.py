@@ -18,6 +18,7 @@ from utils.auth.github_auth_router import (
     get_auth_for_user_repo,
     make_auth_header,
 )
+from connectors.github_connector.hosts import github_api_url
 
 logger = logging.getLogger(__name__)
 
@@ -189,7 +190,7 @@ def _call_github_api(
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
-    url = f"https://api.github.com/repos/{owner}/{repo}{path}"
+    url = f"{github_api_url()}/repos/{owner}/{repo}{path}"
 
     try:
         resp = requests.get(url, headers=headers, params=params or {}, timeout=timeout)
