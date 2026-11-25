@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.27] - 2026-11-25
+
+### Added
+- Detection checks: Aurora can save read-only commands with a healthy
+  condition and run them by itself on a schedule, with no model call per run.
+  A check Aurora wrote starts silent and has to earn the right to open an
+  incident from its own record; a check a person asked for, or vouched for on
+  the new Checks page, does not have to wait. Checks that stop being useful are
+  reviewed and retired. On by default; `DETECTION_CHECKS_ENABLED=false` turns
+  the whole feature off (no runs, no agent tools, no page).
+- Detection checks can read a time span of logs or metrics (`{from}`/`{to}`),
+  are replayed over the incident they were written for before they are saved,
+  and are replayed again weekly while that incident's data lasts.
+- A check that has been failing for two hours without having earned an
+  incident may be mentioned once in the incidents channel, on a weekly budget
+  per channel, with buttons to say it is not a problem or to stop the check.
+- Dynamic alerting for Slack: one slider in Settings (Organization), from Off
+  to Speaks freely, for how much Aurora does in channels without being asked.
+  It starts at Off for every organization and only an admin can move it. Above
+  Off, Aurora reads the public channels it is in, looks into problems people
+  mention, and from "Speaks when sure" replies in the thread. A reply is posted
+  only when a second model finds every statement in it in the output of the
+  commands the investigation ran. One channel is set apart by telling Aurora
+  ("be quieter in #payments"); private channels are read only when named.
+  `DETECTION_CHAT_INTAKE_ENABLED=false` removes the option for the install.
+
+### Changed
+- The gap audit and postmortem prompts may save a detection check. Built-in
+  actions whose instructions nobody edited now follow the shipped text.
+- Scheduled runs of a saved check skip the command gate's conversation judge
+  for that exact command only; every other gate still runs on each execution.
+
 ## [1.5.26] - 2026-11-23
 
 ### Added
