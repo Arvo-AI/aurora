@@ -354,6 +354,10 @@ def test_a_prediscovery_run_does_not_consume_the_alert_rca_budget(monkeypatch, s
 
     # sys.modules entries, the ones prediscovery's local imports resolve to.
     pre = importlib.import_module("chat.background.prediscovery_task")
+    if isinstance(pre.run_prediscovery, MagicMock):
+        # Without Celery installed, conftest stubs it and @celery_app.task
+        # returns a MagicMock in place of the task, so there is no body to run.
+        pytest.skip("needs the real Celery task decorator")
     task_mod = importlib.import_module("chat.background.task")
     liveness = importlib.import_module("chat.background.liveness")
     prompt_builder = importlib.import_module("chat.background.rca_prompt_builder")
