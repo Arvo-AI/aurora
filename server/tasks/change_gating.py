@@ -476,6 +476,29 @@ def _run_bitbucket_investigation(
         adapter.close()
 
 
+def _base_is_reviewable(
+    pr: dict[str, Any],
+    is_open_pr_head: Callable[[str], bool],
+    *,
+    stacks_supported: bool = True,
+) -> bool:
+    """Whether a PR's base makes it one Aurora reviews.
+
+    Either the repo's default branch, or the head branch of another open PR:
+    a stacked PR, whose own diff is against that branch. Any other base
+    (release and backport branches) is left alone. ``is_open_pr_head`` is
+    only called for a base that is not the default branch.
+    """
+    base = pr.get("base") or {}
+    base_ref = base.get("ref")
+    default_branch = (base.get("repo") or {}).get("default_branch")
+    if not base_ref or not default_branch:
+        return False
+    if base_ref == default_branch:
+        return True
+    return stacks_supported and bool(is_open_pr_head(base_ref))
+
+
 def _run_investigation_core(
     task,
     start: float,
@@ -592,8 +615,13 @@ def _run_investigation_core(
         return _skip("draft")
     if pr.get("state") != "open":
         return _skip("not_open")
-    default_branch = ((pr.get("base") or {}).get("repo") or {}).get("default_branch")
-    if not default_branch or ((pr.get("base") or {}).get("ref")) != default_branch:
+    if not _base_is_reviewable(
+        pr,
+        lambda ref: _gh(
+            "stacked_base", lambda: adapter.has_open_pull_request_with_head(ref)
+        ),
+        stacks_supported=hasattr(adapter, "has_open_pull_request_with_head"),
+    ):
         return _skip("non_default_base")
 
     # ------------------------------------------------------------------

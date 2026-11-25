@@ -3,8 +3,9 @@
 Pins the enqueue contract of ``_maybe_enqueue_change_gating`` (called from
 ``_handle_pull_request_event`` in ``tasks/github_webhook_tasks.py``):
 ``investigate_pr.delay`` fires ONLY when a ``pull_request`` delivery passes
-the full filter chain — gated action, non-draft, default-branch base,
-installation present + not suspended, repo enrolled, Redis dedupe won.
+the full filter chain — gated action, non-draft, installation present +
+not suspended, repo enrolled, Redis dedupe won, and a base that is the
+default branch or the head of another open PR (a stacked PR).
 Every branch must still mark the delivery processed.
 
 Also pins the background-mode self-block of the Spinnaker
@@ -127,6 +128,7 @@ def gating_env(monkeypatch):
         "enrolled": True,
         "linked_users": [_USER_ID],
         "repo_counts": (3, 3),
+        "stacked": False,  # is the PR's base the head of another open PR?
     }
     import utils.auth.stateless_auth as stateless_auth
     import utils.cache.redis_client as redis_client_mod
@@ -155,11 +157,16 @@ def gating_env(monkeypatch):
     update_status = MagicMock()
     monkeypatch.setattr(webhook_tasks, "_update_delivery_status", update_status)
 
+    # The GitHub lookup behind the stacked-PR rule: no network in tests.
+    stacked_lookup = MagicMock(side_effect=lambda *_a: state["stacked"])
+    monkeypatch.setattr(webhook_tasks, "_base_is_open_pr_head", stacked_lookup)
+
     return SimpleNamespace(
         state=state,
         redis=redis_mock,
         investigate_pr=investigate_pr,
         update_status=update_status,
+        stacked_lookup=stacked_lookup,
     )
 
 
@@ -168,6 +175,7 @@ _MATRIX = [
     ("wrong_action", {"action": "closed"}, {}, True, False),
     ("draft", {"draft": True}, {}, True, False),
     ("non_default_base", {"base_ref": "develop"}, {}, True, False),
+    ("stacked_base", {"base_ref": "feature/part-1"}, {"stacked": True}, True, True),
     ("missing_installation", {"with_installation": False}, {}, True, False),
     ("suspended", {}, {"suspended": True}, True, False),
     ("not_enrolled", {}, {"enrolled": False}, True, False),
@@ -264,6 +272,144 @@ class TestPullRequestChangeGatingFilterMatrix:
         gating_env.redis.delete.assert_called_once_with(
             f"change_gating:seen:{_REPO}:{_PR_NUMBER}:{_HEAD_SHA}"
         )
+
+
+class TestStackedBase:
+    """A PR based on another open PR's branch is reviewed; any other base
+    off the default branch is still skipped."""
+
+    _SEEN_KEY = f"change_gating:seen:{_REPO}:{_PR_NUMBER}:{_HEAD_SHA}"
+
+    def test_default_branch_pr_never_asks_github(self, gating_env):
+        webhook_tasks._handle_pull_request_event(_payload(), "opened", _DELIVERY_ID)
+
+        gating_env.stacked_lookup.assert_not_called()
+        gating_env.investigate_pr.delay.assert_called_once()
+
+    def test_lookup_gets_the_installation_repo_and_base(self, gating_env):
+        gating_env.state["stacked"] = True
+        payload = _payload(base_ref="feature/part-1")
+
+        webhook_tasks._handle_pull_request_event(payload, "opened", _DELIVERY_ID)
+
+        gating_env.stacked_lookup.assert_called_once_with(
+            _INSTALLATION_ID, _REPO, "feature/part-1"
+        )
+        gating_env.investigate_pr.delay.assert_called_once()
+
+    def test_unstacked_base_frees_the_dedupe_key(self, gating_env):
+        """The skip happens after the seen-key was claimed, so the key must be
+        released: the same head is reviewed if its base later becomes a PR."""
+        payload = _payload(base_ref="release/1.2")
+
+        webhook_tasks._handle_pull_request_event(payload, "opened", _DELIVERY_ID)
+
+        gating_env.investigate_pr.delay.assert_not_called()
+        gating_env.redis.delete.assert_called_once_with(self._SEEN_KEY)
+
+    def test_repo_not_enrolled_never_asks_github(self, gating_env):
+        gating_env.state["enrolled"] = False
+        payload = _payload(base_ref="feature/part-1")
+
+        webhook_tasks._handle_pull_request_event(payload, "opened", _DELIVERY_ID)
+
+        gating_env.stacked_lookup.assert_not_called()
+        gating_env.investigate_pr.delay.assert_not_called()
+
+    def test_missing_default_branch_is_skipped_without_a_lookup(self, gating_env):
+        payload = _payload(base_ref="feature/part-1")
+        payload["repository"].pop("default_branch")
+
+        webhook_tasks._handle_pull_request_event(payload, "opened", _DELIVERY_ID)
+
+        gating_env.stacked_lookup.assert_not_called()
+        gating_env.investigate_pr.delay.assert_not_called()
+
+
+class TestBaseIsOpenPrHead:
+    """The lookup itself: one adapter call, closed afterwards, and a GitHub
+    failure defers to investigate_pr instead of dropping the review."""
+
+    @pytest.fixture
+    def adapter(self, monkeypatch):
+        import services.change_gating.github_adapter as github_adapter
+
+        instance = MagicMock()
+        cls = MagicMock(return_value=instance)
+        monkeypatch.setattr(github_adapter, "GitHubPRAdapter", cls)
+        return SimpleNamespace(cls=cls, instance=instance)
+
+    @pytest.mark.parametrize("answer", [True, False])
+    def test_returns_the_adapter_answer_and_closes(self, adapter, answer):
+        adapter.instance.has_open_pull_request_with_head.return_value = answer
+
+        result = webhook_tasks._base_is_open_pr_head(
+            _INSTALLATION_ID, _REPO, "feature/part-1"
+        )
+
+        assert result is answer
+        adapter.cls.assert_called_once_with(_INSTALLATION_ID, _REPO)
+        adapter.instance.has_open_pull_request_with_head.assert_called_once_with(
+            "feature/part-1"
+        )
+        adapter.instance.close.assert_called_once_with()
+
+    def test_github_failure_defers_to_the_task(self, adapter):
+        adapter.instance.has_open_pull_request_with_head.side_effect = RuntimeError(
+            "502"
+        )
+
+        assert webhook_tasks._base_is_open_pr_head(
+            _INSTALLATION_ID, _REPO, "feature/part-1"
+        ) is True
+        adapter.instance.close.assert_called_once_with()
+
+
+class TestBaseIsReviewable:
+    """investigate_pr's own check of the PR it fetched (the base can change
+    while the task is queued)."""
+
+    @staticmethod
+    def _pr(base_ref="main", default_branch="main"):
+        return {"base": {"ref": base_ref, "repo": {"default_branch": default_branch}}}
+
+    def test_default_branch_base_needs_no_lookup(self):
+        from tasks.change_gating import _base_is_reviewable
+
+        lookup = MagicMock()
+        assert _base_is_reviewable(self._pr(), lookup) is True
+        lookup.assert_not_called()
+
+    @pytest.mark.parametrize("stacked", [True, False])
+    def test_other_base_follows_the_lookup(self, stacked):
+        from tasks.change_gating import _base_is_reviewable
+
+        lookup = MagicMock(return_value=stacked)
+        assert _base_is_reviewable(self._pr(base_ref="feature/part-1"), lookup) is stacked
+        lookup.assert_called_once_with("feature/part-1")
+
+    def test_provider_without_stack_lookup_keeps_the_old_rule(self):
+        from tasks.change_gating import _base_is_reviewable
+
+        lookup = MagicMock(return_value=True)
+        pr = self._pr(base_ref="feature/part-1")
+        assert _base_is_reviewable(pr, lookup, stacks_supported=False) is False
+        lookup.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "pr",
+        [
+            {},
+            {"base": {"ref": "main"}},
+            {"base": {"repo": {"default_branch": "main"}}},
+        ],
+    )
+    def test_missing_fields_are_not_reviewable(self, pr):
+        from tasks.change_gating import _base_is_reviewable
+
+        lookup = MagicMock(return_value=True)
+        assert _base_is_reviewable(pr, lookup) is False
+        lookup.assert_not_called()
 
 
 class TestReposAddedAfterInstall:
