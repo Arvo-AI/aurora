@@ -438,24 +438,26 @@ def _start_verifications(user_id: str, org_id: str, team_id: str, company: str) 
         conn.commit()
 
     for report in reports:
-        # The session is tied to the report before the look can run: a look that
-        # concluded first would be told it is not investigating this report.
-        session_id = None
-        try:
-            session_id = _open_session(investigator, org_id, report)
-        except Exception:
-            logger.exception("%s Could not start an investigation for report %s",
-                             _LOG, sanitize(report["id"]))
-        started = bool(session_id) and _tie(user_id, org_id, report["id"], session_id)
-        if started:
-            try:
-                _run(investigator, session_id, report)
-            except Exception:
-                started = False
-                logger.exception("%s Could not queue the investigation for report %s",
-                                 _LOG, sanitize(report["id"]))
-        if not started:
+        if not _start_one(user_id, org_id, investigator, report):
             _tie(user_id, org_id, report["id"], None)
+
+
+def _start_one(user_id: str, org_id: str, investigator: str, report: Dict[str, Any]) -> bool:
+    """Start the look into one report. False when it could not be started.
+
+    The session is tied to the report before the look can run: a look that
+    concluded first would be told it is not investigating this report.
+    """
+    try:
+        session_id = _open_session(investigator, org_id, report)
+        if not session_id or not _tie(user_id, org_id, report["id"], session_id):
+            return False
+        _run(investigator, session_id, report)
+        return True
+    except Exception:
+        logger.exception("%s Could not start an investigation for report %s",
+                         _LOG, sanitize(report["id"]))
+        return False
 
 
 def _tie(user_id: str, org_id: str, report_id: str, session_id: Optional[str]) -> bool:

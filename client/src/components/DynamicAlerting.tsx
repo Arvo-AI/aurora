@@ -232,6 +232,16 @@ export default function DynamicAlerting() {
     }
   };
 
+  // Sends *first*, then whatever was chosen meanwhile, until nothing is waiting.
+  // A stop chosen while the answer is being read back is sent too.
+  const drain = async (first: number): Promise<boolean> => {
+    wanted.current = null;
+    const ok = await send(first);
+    if (wanted.current === null) await mutate();
+    const waiting = wanted.current;
+    return waiting === null ? ok : drain(waiting);
+  };
+
   const save = async (next: number) => {
     if (next === saved && !sending.current) return;
     setChosen(next);
@@ -239,14 +249,7 @@ export default function DynamicAlerting() {
     wanted.current = next;
     if (sending.current) return;
     sending.current = true;
-    let ok = true;
-    // A stop chosen while the answer is being read back is sent too.
-    while (wanted.current !== null) {
-      const now = wanted.current;
-      wanted.current = null;
-      ok = await send(now);
-      if (wanted.current === null) await mutate();
-    }
+    const ok = await drain(next);
     sending.current = false;
     setFailed(!ok);
     setChosen(null);
