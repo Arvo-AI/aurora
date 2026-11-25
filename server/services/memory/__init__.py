@@ -48,7 +48,9 @@ PLATFORM_MEMORY_IDENTITIES: Dict[str, PlatformMemoryIdentity] = {
         platform="slack",
         category="context",
         title="Slack",
-        policy_sources=frozenset({"slack"}),
+        # detection_chat_report: a look into something said in a channel, which
+        # may end in an unasked reply there (services/detection/chat_intake.py).
+        policy_sources=frozenset({"slack", "detection_chat_report"}),
     ),
     "teams": PlatformMemoryIdentity(
         platform="teams",

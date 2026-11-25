@@ -2152,6 +2152,28 @@ Once you identify which account has the issue, pass account_id (e.g. 'account') 
         except Exception as e:
             logging.warning(f"Failed to add detection check tools: {e}")
 
+    # The answer tool of a chat-report investigation. Only background sessions
+    # get it, and it only works inside the session started for that report.
+    try:
+        from services.detection import chat_intake_enabled as _chat_intake_enabled
+        if getattr(state_context, 'is_background', False) and _chat_intake_enabled():
+            from chat.backend.agent.tools.detection_report_tool import (
+                conclude_chat_report,
+                ConcludeChatReportArgs,
+            )
+            tools.append(StructuredTool.from_function(
+                func=with_completion_notification(with_user_context(conclude_chat_report)),
+                name="conclude_chat_report",
+                description=(
+                    "Only for a look Aurora started from something said in chat: record what you "
+                    "found, and what to say in the thread if a reply is allowed. A real problem "
+                    "opens an incident."
+                ),
+                args_schema=ConcludeChatReportArgs,
+            ))
+    except Exception as e:
+        logging.warning(f"Failed to add the chat report tool: {e}")
+
     # Introspection tools — incident/infra/actions/metrics self-audit (always available)
     if user_id:
         try:

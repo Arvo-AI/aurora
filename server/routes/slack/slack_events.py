@@ -105,6 +105,27 @@ def _handle_member_joined(event: dict, team_id: str | None) -> None:
         logger.warning("Error handling member_joined_channel", exc_info=True)
 
 
+def _note_channel_message(event: dict, team_id: str | None) -> None:
+    """Tell the chat reader a public channel has something new. Never raises."""
+    try:
+        from services.detection import chat_intake_enabled, chat_signals
+
+        if not chat_intake_enabled() or not team_id or event.get('channel_type') != 'channel':
+            return
+        if event.get('bot_id') or not event.get('channel'):
+            return
+        user_id = get_user_id_from_slack_team(team_id)
+        if not user_id:
+            return
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cursor:
+            org_id = set_rls_context(cursor, conn, user_id, log_prefix="[SlackEvents:message]")
+            if org_id:
+                chat_signals.note_activity(cursor, org_id, event['channel'])
+                conn.commit()
+    except Exception:
+        logger.exception("Failed to note a channel message for the chat reader")
+
+
 def process_event_callback(data: dict) -> None:
     """Process a Slack ``event_callback`` payload.
 
@@ -121,6 +142,13 @@ def process_event_callback(data: dict) -> None:
 
         event = data.get('event', {})
         event_type = event.get('type')
+
+        # A message in a channel (only delivered when the app subscribes to
+        # message.channels): nothing is read here, the channel is just moved
+        # to the front of the queue for the chat reader.
+        if event_type == 'message':
+            _note_channel_message(event, data.get('team_id'))
+            return
 
         # Handle app_mention events (when someone @mentions Aurora)
         if event_type == 'app_mention':
@@ -434,6 +462,16 @@ def process_interaction(payload: dict) -> dict:
             # Handle "More details" button
             if action_id.startswith('suggestion_details_'):
                 return _handle_suggestion_details(
+                    payload=payload,
+                    action=action,
+                    slack_user_id=slack_user_id,
+                    team_id=team_id,
+                    channel_id=channel_id
+                )
+
+            # The buttons on a reply Aurora posted without being asked
+            if action_id.startswith(_AURORA_SPEAK_PREFIX):
+                return _handle_aurora_speak(
                     payload=payload,
                     action=action,
                     slack_user_id=slack_user_id,
@@ -1098,6 +1136,95 @@ def _handle_detection_nudge(payload: dict, action: dict, slack_user_id: str, tea
     except Exception:
         logger.exception("Error handling a worth-a-look answer")
         return {"text": ""}
+
+
+# Every button on a reply Aurora posted unasked (services/detection/chat_voice.py).
+_AURORA_SPEAK_PREFIX = "aurora_speak_"
+
+
+def _speak_action(cursor, conn, workspace: tuple, channel_id: str, action_id: str):
+    """Move the channel one step, in Aurora's Slack memory. Returns (level now, louder) or
+    (None, louder) when there is no further step or the channel is not one Aurora is in."""
+    from services.detection import chat_memory, chat_signals, chat_voice
+
+    workspace_user_id, org_id, team_id = workspace
+    louder = action_id == chat_voice.ACTION_LOUDER
+    slider = chat_signals.company_level(org_id)
+    chat_memory.sync(cursor, org_id)
+    channel = chat_signals.channel_level(cursor, org_id, team_id, channel_id, slider)
+    level = chat_voice.stepped(channel["level"], louder) if channel else None
+    # With the slider at off nothing is read, whatever a channel's line says.
+    if level is None or slider == chat_signals.LEVEL_OFF:
+        return None, louder
+    if not chat_memory.set_channel(cursor, org_id, workspace_user_id, channel_id, level):
+        return None, louder
+    conn.commit()
+    return level, louder
+
+
+def _speak_clicker(slack_user_id: str, team_id: str, channel_id: str):
+    """(client, the org's Slack user, org_id) for someone allowed to answer, else (None, None, None).
+
+    Anyone who is a full member of the workspace may answer, with or without
+    an Aurora account: the channel is theirs, and turning Aurora down in it
+    should not need a login. Guests and people from other workspaces may not.
+    """
+    sender = describe_slack_sender(slack_user_id, team_id)
+    workspace_user_id, org_id = sender["workspace_user_id"], sender["org_id"]
+    client = get_slack_client_for_user(workspace_user_id) if workspace_user_id else None
+    if not client or not org_id:
+        return None, None, None
+    # Membership is the whole test. Having an Aurora account or a Slack token does not make a
+    # guest a member of the workspace.
+    if not sender["member"]:
+        _send_ephemeral(client, channel_id, slack_user_id,
+                        "Only members of this workspace can change what Aurora does here.")
+        return None, None, None
+    return client, workspace_user_id, org_id
+
+
+def _speak_answer(client, payload: dict, channel_id: str, slack_user_id: str, level, louder: bool) -> None:
+    """Tell the channel what changed, in the thread, or the person that nothing did."""
+    from services.detection import chat_voice
+
+    if level is None:
+        _send_ephemeral(client, channel_id, slack_user_id,
+                        "This is as much as I do here." if louder else "I could not change that here.")
+        return
+    message = payload.get("message") or {}
+    client.send_message(
+        channel=channel_id, text=chat_voice.level_set_note(level, slack_user_id, louder),
+        thread_ts=message.get("thread_ts") or message.get("ts"),
+    )
+
+
+def _handle_aurora_speak(payload: dict, action: dict, slack_user_id: str, team_id: str, channel_id: str) -> dict:
+    """Handle "Be quieter here" / "Speak up more here" on a reply Aurora posted unasked.
+
+    Returns an empty body always: a non-empty one would replace the reply.
+    """
+    from services.detection import chat_intake_enabled
+
+    try:
+        if not chat_intake_enabled() or not channel_id:
+            return {"text": ""}
+        client, workspace_user_id, org_id = _speak_clicker(slack_user_id, team_id, channel_id)
+        if client is None:
+            return {"text": ""}
+        from services.detection import chat_memory
+
+        chat_memory.ensure_section(workspace_user_id, org_id)
+        with db_pool.get_admin_connection() as conn, conn.cursor() as cursor:
+            if not set_rls_context(cursor, conn, workspace_user_id, org_id=org_id,
+                                   log_prefix="[SlackEvents:aurora_speak]"):
+                return {"text": ""}
+            level, louder = _speak_action(
+                cursor, conn, (workspace_user_id, org_id, team_id), channel_id, action.get("action_id", ""),
+            )
+        _speak_answer(client, payload, channel_id, slack_user_id, level, louder)
+    except Exception:
+        logger.exception("Error handling a button on one of Aurora's unasked replies")
+    return {"text": ""}
 
 
 def _handle_hpa_vpa_dismiss(payload: dict, action: dict, slack_user_id: str, team_id: str, channel_id: str) -> dict:

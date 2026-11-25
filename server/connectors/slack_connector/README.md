@@ -33,6 +33,7 @@ OAuth 2.0 authentication for Slack workspaces.
      running and reachable for the URL to verify.)
    - Under **Subscribe to bot events**, add:
      - `app_mention` — required so Aurora replies when @mentioned
+     - `message.channels` — optional. Used when an org has Dynamic alerting on (the slider in Settings): Aurora then reads a public channel as soon as someone posts, instead of on its next turn of polling. Without it, reading still works by polling, about a minute later.
      - `member_joined_channel` — enables *instant* activation of channels
        Aurora is added to (e.g. incident.io-created channels). Without it,
        the connector page still reconciles membership every time it loads,

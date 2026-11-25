@@ -1716,6 +1716,79 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_detection_check_fires_pattern
                         ON detection_check_fires(org_id, pattern) WHERE outcome IS NOT NULL;
                 """,
+                # Problem reports Aurora read in chat (services/detection/chat_signals.py).
+                # claim is the one-line statement Aurora read out of the conversation;
+                # the messages and their authors are not stored. said_at is when the
+                # first of them was said. status says how the report ended.
+                "detection_chat_signals": """
+                    CREATE TABLE IF NOT EXISTS detection_chat_signals (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        org_id VARCHAR(255) NOT NULL,
+                        source VARCHAR(20) NOT NULL DEFAULT 'slack',
+                        channel_id VARCHAR(64) NOT NULL,
+                        message_ts VARCHAR(64) NOT NULL,
+                        thread_ts VARCHAR(64),
+                        message_count INTEGER NOT NULL DEFAULT 1,
+                        said_at TIMESTAMPTZ NOT NULL,
+                        kind VARCHAR(16) NOT NULL DEFAULT 'problem',
+                        asset VARCHAR(512),
+                        claim TEXT NOT NULL,
+                        status VARCHAR(16) NOT NULL DEFAULT 'new',
+                        status_detail TEXT,
+                        severity VARCHAR(16),
+                        merged_into UUID,
+                        session_id VARCHAR(64),
+                        confirmed_by VARCHAR(255),
+                        verify_started_at TIMESTAMPTZ,
+                        incident_id UUID,
+                        reply TEXT,
+                        reply_ts VARCHAR(64),
+                        replied_at TIMESTAMPTZ,
+                        pointed_at TIMESTAMPTZ,
+                        related_to UUID,
+                        reply_checks INTEGER NOT NULL DEFAULT 0,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    );
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_detection_chat_signals_message
+                        ON detection_chat_signals(org_id, channel_id, message_ts);
+                    CREATE INDEX IF NOT EXISTS idx_detection_chat_signals_asset
+                        ON detection_chat_signals(org_id, lower(asset), said_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_detection_chat_signals_status
+                        ON detection_chat_signals(org_id, status, said_at);
+                """,
+                # One row per channel Aurora reads or has been given a level for:
+                # the level its line in the Slack memory gives it (NULL = the
+                # slider's), how far it has been read, and whether a message just
+                # arrived. last_ts is NULL until the channel's first turn.
+                "detection_chat_cursors": """
+                    CREATE TABLE IF NOT EXISTS detection_chat_cursors (
+                        org_id VARCHAR(255) NOT NULL,
+                        channel_id VARCHAR(64) NOT NULL,
+                        last_ts VARCHAR(64),
+                        level VARCHAR(8),
+                        pending_since TIMESTAMPTZ,
+                        failed_attempts INTEGER NOT NULL DEFAULT 0,
+                        claimed_at TIMESTAMPTZ,
+                        updated_at TIMESTAMPTZ,
+                        PRIMARY KEY (org_id, channel_id)
+                    );
+                """,
+                # One row per model call over a channel: what was read, and what the
+                # per-org daily limit counts.
+                "detection_chat_reads": """
+                    CREATE TABLE IF NOT EXISTS detection_chat_reads (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        org_id VARCHAR(255) NOT NULL,
+                        channel_id VARCHAR(64) NOT NULL,
+                        messages INTEGER NOT NULL DEFAULT 0,
+                        reports INTEGER NOT NULL DEFAULT 0,
+                        ok BOOLEAN NOT NULL DEFAULT TRUE,
+                        read_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_detection_chat_reads_org
+                        ON detection_chat_reads(org_id, read_at DESC);
+                """,
                 # One row while Aurora cannot run checks against a provider, so the
                 # "I have lost access" message is sent once per outage, not per check.
                 # One row per replay tried for an incident (services/detection/replay.py):
@@ -1923,6 +1996,9 @@ def initialize_tables():
             rls_tables.append("detection_check_runs")
             rls_tables.append("detection_check_fires")
             rls_tables.append("detection_access_alerts")
+            rls_tables.append("detection_chat_signals")
+            rls_tables.append("detection_chat_cursors")
+            rls_tables.append("detection_chat_reads")
             rls_tables.append("detection_replay_attempts")
 
 
@@ -1980,6 +2056,43 @@ def initialize_tables():
                 conn.commit()
             except Exception as e:
                 logging.warning(f"Error adding replay columns to detection tables: {e}")
+                conn.rollback()
+
+            # Migration: the chat tables as they are now (services/detection/
+            # chat_signals.py), for a database that ran an earlier shape of them.
+            # CREATE TABLE below then finds the columns its indexes name.
+            try:
+                cursor.execute("""
+                    ALTER TABLE detection_chat_signals
+                    ADD COLUMN IF NOT EXISTS message_count INTEGER NOT NULL DEFAULT 1,
+                    ADD COLUMN IF NOT EXISTS status VARCHAR(16) NOT NULL DEFAULT 'new',
+                    ADD COLUMN IF NOT EXISTS status_detail TEXT,
+                    ADD COLUMN IF NOT EXISTS severity VARCHAR(16),
+                    ADD COLUMN IF NOT EXISTS merged_into UUID,
+                    ADD COLUMN IF NOT EXISTS session_id VARCHAR(64),
+                    ADD COLUMN IF NOT EXISTS confirmed_by VARCHAR(255),
+                    ADD COLUMN IF NOT EXISTS verify_started_at TIMESTAMPTZ,
+                    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    ADD COLUMN IF NOT EXISTS thread_ts VARCHAR(64),
+                    ADD COLUMN IF NOT EXISTS kind VARCHAR(16) NOT NULL DEFAULT 'problem',
+                    ADD COLUMN IF NOT EXISTS reply TEXT,
+                    ADD COLUMN IF NOT EXISTS reply_ts VARCHAR(64),
+                    ADD COLUMN IF NOT EXISTS replied_at TIMESTAMPTZ,
+                    ADD COLUMN IF NOT EXISTS pointed_at TIMESTAMPTZ,
+                    ADD COLUMN IF NOT EXISTS related_to UUID,
+                    ADD COLUMN IF NOT EXISTS reply_checks INTEGER NOT NULL DEFAULT 0;
+                    ALTER TABLE detection_chat_cursors
+                    ALTER COLUMN last_ts DROP NOT NULL,
+                    ALTER COLUMN updated_at DROP NOT NULL,
+                    ALTER COLUMN updated_at DROP DEFAULT,
+                    ADD COLUMN IF NOT EXISTS level VARCHAR(8),
+                    ADD COLUMN IF NOT EXISTS pending_since TIMESTAMPTZ,
+                    ADD COLUMN IF NOT EXISTS failed_attempts INTEGER NOT NULL DEFAULT 0,
+                    ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ;
+                """)
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error updating the detection chat tables: {e}")
                 conn.rollback()
 
             # Migration: Add rca_celery_task_id column to incidents table if it doesn't exist
