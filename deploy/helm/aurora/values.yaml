@@ -365,6 +365,11 @@ config:
   # Stop an investigation that makes no progress for this long, in seconds.
   # Minimum 120; "0" turns the check off.
   INVESTIGATION_STALL_SECONDS: "600"
+  # Tool-output context budgets. Values must be positive integers and the
+  # pass-through limit must remain smaller than the summarization-input limit.
+  TOOL_OUTPUT_PASS_THROUGH_CHARS: "40000"
+  TOOL_OUTPUT_MAX_SUMMARIZATION_INPUT_CHARS: "400000"
+  TOOL_CONTEXT_SUMMARIZATION_THRESHOLD_TOKENS: "10000"
 
   # --- AI Safety Guardrails ---
   # Input rail + signature matcher + LLM safety judge. All three activate with
