@@ -73,6 +73,7 @@ import requests
 
 from utils.auth.github_app_jwt import mint_app_jwt
 from utils.auth.log_redact import redact_token
+from connectors.github_connector.hosts import github_api_url
 
 logger = logging.getLogger(__name__)
 
@@ -201,7 +202,7 @@ def _mint_token(installation_id: int) -> tuple[str, int]:
     """
 
     jwt_token = mint_app_jwt()
-    url = f"https://api.github.com/app/installations/{installation_id}/access_tokens"
+    url = f"{github_api_url()}/app/installations/{installation_id}/access_tokens"
     headers = {
         "Authorization": f"Bearer {jwt_token}",
         "Accept": "application/vnd.github+json",

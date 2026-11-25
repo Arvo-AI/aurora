@@ -33,6 +33,7 @@ from utils.auth.github_auth_mode import (
 )
 from utils.auth.rbac_decorators import require_permission
 from utils.log_sanitizer import sanitize
+from connectors.github_connector.hosts import github_api_url, github_web_url
 
 logger = logging.getLogger(__name__)
 
@@ -142,7 +143,7 @@ def github_login(user_id):
         "scope": "repo,user",
         "state": signed_state,
     }
-    oauth_url = f"https://github.com/login/oauth/authorize?{urlencode(params)}"
+    oauth_url = f"{github_web_url()}/login/oauth/authorize?{urlencode(params)}"
 
     return jsonify(
         {
@@ -207,7 +208,7 @@ def github_callback():
 
     try:
         token_response = requests.post(
-            "https://github.com/login/oauth/access_token",
+            f"{github_web_url()}/login/oauth/access_token",
             json={
                 "client_id": client_id,
                 "client_secret": client_secret,
@@ -255,7 +256,7 @@ def github_callback():
 
     try:
         user_response = requests.get(
-            "https://api.github.com/user",
+            f"{github_api_url()}/user",
             headers={"Authorization": f"token {access_token}"},
             timeout=GITHUB_TIMEOUT,
         )
@@ -306,7 +307,7 @@ def github_callback():
                 "access_token": access_token,
                 "username": github_username,
                 "user_id": github_user_id,
-                "api_url": "https://api.github.com",
+                "api_url": github_api_url(),
             },
             "github",
             schedule_prediscovery=True,

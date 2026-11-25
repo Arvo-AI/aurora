@@ -24,13 +24,10 @@ import requests
 from services.change_gating.markers import has_aurora_marker
 from utils.auth.github_app_token import get_installation_token
 from utils.auth.log_redact import redact_token
+from connectors.github_connector.hosts import github_api_url
 
 logger = logging.getLogger(__name__)
 
-# Matches the rest of the codebase (utils/auth/github_app_token.py,
-# tools/github_rca_tool.py, routes/github/github_app.py): the GitHub API
-# base is hardcoded — there is no env-overridable base URL pattern.
-GITHUB_API_BASE = "https://api.github.com"
 
 _TIMEOUT_SECONDS = 30
 _PER_PAGE = 100
@@ -102,7 +99,7 @@ class GitHubPRAdapter:
         }
 
     def _url(self, path: str) -> str:
-        return f"{GITHUB_API_BASE}/repos/{self.repo_full_name}{path}"
+        return f"{github_api_url()}/repos/{self.repo_full_name}{path}"
 
     def _raise_for_status(self, response, path: str) -> None:
         """Log status + URL path (never the token) and raise on 4xx/5xx."""

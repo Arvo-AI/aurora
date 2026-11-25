@@ -24,6 +24,7 @@ from typing import Any, Optional
 
 import requests
 
+from connectors.github_connector.hosts import github_api_url, is_on_current_host
 from utils.auth.stateless_auth import set_rls_context
 from utils.db.connection_pool import db_pool
 from utils.log_sanitizer import sanitize
@@ -645,7 +646,7 @@ def _close_github_pr(user_id: str, repo_full_name: str, pr_number: int, timeout:
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
-    url = f"https://api.github.com/repos/{repo_full_name}/pulls/{int(pr_number)}"
+    url = f"{github_api_url()}/repos/{repo_full_name}/pulls/{int(pr_number)}"
 
     try:
         resp = requests.patch(url, headers=headers, json={"state": "closed"}, timeout=timeout)
@@ -704,7 +705,8 @@ def supported_vcs_providers() -> frozenset:
 
 
 def close_pull_request(
-    user_id: str, vcs_provider: str, repo_full_name: str, pr_number: int, timeout: int = 30
+    user_id: str, vcs_provider: str, repo_full_name: str, pr_number: int, timeout: int = 30,
+    pr_url: str | None = None,
 ) -> dict:
     """Close an open PR/MR on the provider that hosts it.
 
@@ -735,6 +737,14 @@ def close_pull_request(
         return {"error": f"Cannot close PR: PR number '{pr_number}' is not an integer"}
     if pr_number <= 0:
         return {"error": f"Cannot close PR: PR number {pr_number} is not positive"}
+    # The PR was opened on whatever GitHub host was configured then. If the
+    # deployment now points at another host, the same owner/repo#number there
+    # is someone else's PR: refuse rather than close it.
+    # Without a recorded URL there is no way to tell which host the PR is on,
+    # so a GitHub close is refused rather than guessed.
+    if provider == "github" and not (pr_url and is_on_current_host(pr_url)):
+        return {"error": ("Cannot close PR: it was not recorded on the GitHub host configured "
+                          "now (or its link is missing). Close it on GitHub manually.")}
 
     logger.info(
         "[HpaVpaRecs] Closing %s PR #%s in %s for user=%s",

@@ -789,10 +789,13 @@ export default function GitHubProviderIntegration() {
     return `${count} selected repositor${count === 1 ? 'y' : 'ies'}`;
   };
 
+  // The installations list carries these for the configured GitHub host
+  // (github.com or GitHub Enterprise); other responses fall back to github.com.
   const installationManageUrl = (installation: GitHubInstallation): string =>
-    installation.account_type === 'Organization'
-      ? `https://github.com/organizations/${installation.account_login}/settings/installations/${installation.installation_id}`
-      : `https://github.com/settings/installations/${installation.installation_id}`;
+    installation.manage_url
+      || (installation.account_type === 'Organization'
+        ? `https://github.com/organizations/${installation.account_login}/settings/installations/${installation.installation_id}`
+        : `https://github.com/settings/installations/${installation.installation_id}`);
 
   const activeInstallation: GitHubInstallation | null = (() => {
     if (installations.length === 0) return null;
@@ -1004,15 +1007,25 @@ export default function GitHubProviderIntegration() {
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex items-start gap-3 min-w-0 flex-1">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={`https://github.com/${installation.account_login}.png?size=40`}
-                          alt={`${installation.account_login} avatar`}
-                          width={40}
-                          height={40}
-                          loading="lazy"
-                          className="rounded-full flex-shrink-0 bg-muted"
-                        />
+                        {installation.avatar_url ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={installation.avatar_url}
+                            alt={`${installation.account_login} avatar`}
+                            width={40}
+                            height={40}
+                            loading="lazy"
+                            className="rounded-full flex-shrink-0 bg-muted"
+                          />
+                        ) : (
+                          // Enterprise hosts don't serve avatars without a session.
+                          <div
+                            aria-hidden="true"
+                            className="h-10 w-10 rounded-full flex-shrink-0 bg-muted flex items-center justify-center text-sm font-medium text-muted-foreground"
+                          >
+                            {(installation.account_login || "?").charAt(0).toUpperCase()}
+                          </div>
+                        )}
                         <div className="min-w-0 flex-1 space-y-1">
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="text-sm font-medium truncate">{installation.account_login}</span>

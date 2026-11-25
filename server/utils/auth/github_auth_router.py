@@ -61,6 +61,7 @@ from utils.auth.stateless_auth import (
 )
 from utils.db.connection_pool import db_pool
 from utils.log_sanitizer import sanitize
+from connectors.github_connector.hosts import github_oauth_token
 
 logger = logging.getLogger(__name__)
 
@@ -172,7 +173,7 @@ def _try_oauth_fallback(user_id: str) -> AuthResult | None:
             exc_info=True,
         )
         return None
-    token = (creds or {}).get("access_token")
+    token = github_oauth_token(creds)
     if not token:
         return None
     return AuthResult(method="oauth", token=token, installation_id=None)
@@ -459,7 +460,7 @@ def is_github_connected(user_id: str) -> bool:
     if is_oauth_token_honored():
         try:
             creds = get_credentials_from_db(user_id, "github")
-            if creds and creds.get("access_token"):
+            if github_oauth_token(creds):
                 return True
         except Exception:
             logger.warning(
