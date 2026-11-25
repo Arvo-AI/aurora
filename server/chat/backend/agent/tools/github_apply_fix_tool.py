@@ -16,6 +16,7 @@ from .github_mcp_utils import (
     build_error_response,
     build_success_response,
 )
+from connectors.github_connector.hosts import github_web_url
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +109,7 @@ def _create_pr(owner: str, repo: str, title: str, body: str,
 
     # Construct URL if not provided but we have a number
     if not pr_url and pr_number:
-        pr_url = f"https://github.com/{owner}/{repo}/pull/{pr_number}"
+        pr_url = f"{github_web_url()}/{owner}/{repo}/pull/{pr_number}"
 
     # If no URL and no number, log the full response for debugging
     if not pr_url and not pr_number:

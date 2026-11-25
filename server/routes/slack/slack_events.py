@@ -1201,6 +1201,7 @@ def _handle_hpa_vpa_dismiss(payload: dict, action: dict, slack_user_id: str, tea
             dismissed.get("repo_full_name") or "",
             pr_number,
             timeout=_GITHUB_CLOSE_TIMEOUT,
+            pr_url=dismissed.get("pr_url"),
         ) if pr_number else {"error": "No PR recorded for this recommendation"}
 
         status_line, keep_pr_link = _dismissal_status_line(

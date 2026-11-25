@@ -3,6 +3,7 @@ import json
 from typing import Dict, Any, Optional
 from pydantic import BaseModel, Field
 from pathlib import Path
+from connectors.github_connector.hosts import github_web_url
 
 logger = logging.getLogger(__name__)
 
@@ -175,7 +176,7 @@ def github_commit(
                                 "status": "success",
                                 "message": f"Successfully committed {len(terraform_files)} Terraform files to {repo}/{branch} in terraform/ folder",
                                 "commit_sha": commit_sha,
-                                "commit_url": f"https://github.com/{repo}/commit/{commit_sha}",
+                                "commit_url": f"{github_web_url()}/{repo}/commit/{commit_sha}",
                                 "files_committed": [f["path"] for f in terraform_files],
                                 "commit_message": commit_message,
                                 "repository": repo,
