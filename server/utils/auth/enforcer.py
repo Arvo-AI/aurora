@@ -49,6 +49,7 @@ _DEFAULT_POLICIES = [
     ("viewer", "*", "user_preferences", "write"),
     ("viewer", "*", "rca_emails", "read"),
     ("viewer", "*", "actions", "read"),
+    ("viewer", "*", "detection_checks", "read"),
 
     # --- editor permissions (mutating operations) ---
     ("editor", "*", "connectors", "write"),
@@ -62,6 +63,7 @@ _DEFAULT_POLICIES = [
     ("editor", "*", "notification_settings", "write"),
     ("editor", "*", "graph", "write"),
     ("editor", "*", "actions", "write"),
+    ("editor", "*", "detection_checks", "write"),
 
     # --- admin-only permissions ---
     ("admin", "*", "users", "manage"),

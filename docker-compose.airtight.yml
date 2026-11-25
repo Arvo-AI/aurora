@@ -133,6 +133,7 @@ x-common-env: &common-env
 
   # Root-cause recurrence detection (dedup layer 1): off | shadow | live
   RECURRENCE_DETECTION_MODE: ${RECURRENCE_DETECTION_MODE:-live}
+  DETECTION_CHECKS_ENABLED: ${DETECTION_CHECKS_ENABLED:-true}
   RECURRENCE_AGENT_TIMEOUT_SECONDS: ${RECURRENCE_AGENT_TIMEOUT_SECONDS:-120}
   RECURRENCE_AGENT_MODEL: ${RECURRENCE_AGENT_MODEL}
 
@@ -297,7 +298,7 @@ services:
       celery -A celery_config worker
         --loglevel=info
         --concurrency=${CELERY_CONCURRENCY:-4}
-        -Q high,celery
+        -Q high,celery,detection
     environment:
       <<: *common-env
       # GitHub App private key (wins over the secrets backend when set): only services that sign App JWTs get it.

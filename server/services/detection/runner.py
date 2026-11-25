@@ -1,0 +1,320 @@
+"""Run detection checks on a schedule, with no model in the loop.
+
+Scheduled actions (services/actions) always start an agent chat session. A check
+is a saved command, so it runs here as plain code: the tick claims what is due,
+one task per check executes it, and the result is folded into the check's record.
+
+Three slower tasks keep the store honest: grading decides which fires were real
+and moves checks between silent and proven, the access task says so when Aurora
+can no longer run its checks, and consolidation retires what earns nothing.
+
+A silent check's failure is a row in the database. Only a proven check's
+failure opens a case.
+"""
+
+import logging
+import time
+from contextlib import contextmanager
+
+from celery_config import celery_app
+from services.detection import STATE_PROVEN, STATUS_ERROR, checks_enabled
+from services.detection.assertion import Verdict
+from services.detection import access, cases, consolidation, record
+from services.detection.execution import judge
+from services.detection.store import (
+    REVIEW_BATCH,
+    claim_due_checks,
+    fires_awaiting_a_case,
+    get_check_for_case,
+    get_runnable_check,
+    link_fire_to_case,
+    orgs_review_is_due,
+    record_result,
+    reserve_case,
+)
+from utils.auth.stateless_auth import set_rls_context
+from utils.db.connection_pool import db_pool
+from utils.log_sanitizer import sanitize
+
+logger = logging.getLogger(__name__)
+
+# Ceiling on checks started per org per tick, so a large store that all comes
+# due at once spreads over the following ticks instead of flooding the workers.
+MAX_CHECKS_PER_ORG_PER_TICK = 20
+# Cases retried per org per tick. The RCA path has its own rate limit; this
+# only bounds how often it is asked.
+MAX_CASE_RETRIES_PER_ORG_PER_TICK = 3
+_LOG = "[DetectionRunner]"
+
+
+def _org_representatives():
+    """[(user_id, org_id)], one user per org. `users` is not RLS-protected."""
+    with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT DISTINCT ON (org_id) id, org_id "
+            "FROM users WHERE org_id IS NOT NULL "
+            "ORDER BY org_id, id"
+        )
+        return cur.fetchall()
+
+
+@contextmanager
+def _org_cursor(user_id: str, org_id: str):
+    """Yield (cursor, conn) scoped to *org_id*, or (None, None) when it cannot be.
+
+    *org_id* is pinned rather than resolved from the user, so work for a check
+    whose creator has left the org is still recorded.
+    """
+    with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+        if set_rls_context(cur, conn, user_id, org_id=org_id, log_prefix=_LOG):
+            yield cur, conn
+        else:
+            yield None, None
+
+
+def _for_each_org(work, what: str) -> None:
+    """Run work(cursor, conn, user_id, org_id) per org; one org failing skips only itself."""
+    try:
+        representatives = _org_representatives()
+    except Exception:
+        logger.exception("%s Failed to list orgs for %s", _LOG, what)
+        return
+    for user_id, org_id in representatives:
+        try:
+            with _org_cursor(user_id, org_id) as (cur, conn):
+                if cur is not None:
+                    work(cur, conn, user_id, org_id)
+        except Exception:
+            logger.exception("%s %s failed for org %s", _LOG, what, sanitize(org_id))
+
+
+@celery_app.task(name="services.detection.runner.run_due_checks")
+def run_due_checks():
+    """Claim every due check and queue one run each; retry cases that did not open."""
+    if not checks_enabled():
+        return
+
+    claimed, awaiting = [], []
+
+    def _claim(cur, conn, _user_id, org_id):
+        due = claim_due_checks(cur, org_id, MAX_CHECKS_PER_ORG_PER_TICK)
+        conn.commit()
+        claimed.extend((check_id, org_id, created_by, claim) for check_id, created_by, claim in due)
+        awaiting.extend(
+            (fire_id, check_id, org_id, created_by, observed)
+            for fire_id, check_id, observed, created_by
+            in fires_awaiting_a_case(cur, org_id, MAX_CASE_RETRIES_PER_ORG_PER_TICK)
+        )
+
+    _for_each_org(_claim, "claiming due checks")
+
+    for check_id, org_id, created_by, claim in claimed:
+        try:
+            run_check.delay(check_id, org_id, created_by, claim)
+        except Exception:
+            # The claim expires by itself, so the check is picked up again later.
+            logger.exception("%s Failed to queue check %s", _LOG, sanitize(check_id))
+
+    for fire_id, check_id, org_id, created_by, observed in awaiting:
+        _open_or_join_case(fire_id, check_id, org_id, created_by, observed)
+
+
+def _open_or_join_case(fire_id: str, check_id: str, org_id: str, user_id: str, observed: str) -> None:
+    """Give a proven check's fire its case: join a fresh one on the asset, or open one."""
+    try:
+        with _org_cursor(user_id, org_id) as (cur, conn):
+            if cur is None:
+                return
+            # The incident is created as *user_id*. A creator who has moved to
+            # another org would carry this org's command and output with them,
+            # so the case waits until the check has an owner here. Read from
+            # the table, not the membership cache; open_case then has the
+            # incident refused if it would land anywhere but this org.
+            cur.execute("SELECT org_id FROM users WHERE id = %s", (user_id,))
+            owner = cur.fetchone()
+            if owner is None or owner[0] != org_id:
+                logger.warning("%s Check %s has no owner in its org; case not opened",
+                               _LOG, sanitize(check_id))
+                return
+            check = get_check_for_case(cur, check_id)
+            if check is None or check["state"] != STATE_PROVEN:
+                return
+            # Re-checked under the write: the fire may have cleared or been given
+            # a case since the tick selected it, and another worker may hold it.
+            reserved = reserve_case(cur, fire_id)
+            existing = cases.find_open_case(cur, org_id, check["asset"]) if reserved else None
+            if existing:
+                link_fire_to_case(cur, fire_id, existing, opened=False)
+            conn.commit()
+            if not reserved or existing:
+                return
+
+        incident_id = cases.open_case(check, observed, user_id, org_id=org_id, fire_id=fire_id)
+        if not incident_id:
+            return
+        with _org_cursor(user_id, org_id) as (cur, conn):
+            if cur is None:
+                return
+            link_fire_to_case(cur, fire_id, incident_id, opened=True)
+            conn.commit()
+    except Exception:
+        logger.exception("%s Failed to open a case for check %s", _LOG, sanitize(check_id))
+
+
+@celery_app.task(name="services.detection.runner.run_check")
+def run_check(check_id: str, org_id: str, user_id: str, claim: str | None = None):
+    """Execute one claimed check, record the result, and open a case if it earned one."""
+    # Checked here too: runs queued before the switch was turned off must not
+    # execute commands after it.
+    if not checks_enabled():
+        return
+    started = time.monotonic()
+    try:
+        with _org_cursor(user_id, org_id) as (cur, _conn):
+            check = get_runnable_check(cur, check_id) if cur is not None else None
+            owner_org = None
+            if check is not None:
+                cur.execute("SELECT org_id FROM users WHERE id = %s", (check["created_by"],))
+                owner = cur.fetchone()
+                owner_org = owner[0] if owner else None
+        if check is None:
+            return
+
+        # The owner as of this read, from the same row as the definition: a
+        # revision saved while the run was queued changes both together.
+        user_id = check["created_by"]
+        if owner_org != org_id:
+            # Credentials and command policy are resolved from the user's
+            # current org. An owner who has moved would run this org's check
+            # with another org's access and write the output back here.
+            # ran=False: nothing was executed, so it counts as a run that could not happen.
+            verdict = Verdict(STATUS_ERROR, detail="the check's owner is no longer in this organization",
+                              ran=False)
+        else:
+            verdict = judge(check, user_id, check_id)
+        duration_ms = int((time.monotonic() - started) * 1000)
+
+        with _org_cursor(user_id, org_id) as (cur, conn):
+            if cur is None:
+                return
+            recorded = record_result(
+                cur, check_id, org_id, verdict, duration_ms,
+                revision=check["revision"], claim=claim,
+            )
+            conn.commit()
+    except Exception:
+        logger.exception("%s Failed to run check %s", _LOG, sanitize(check_id))
+        return
+
+    if recorded.fire_id and recorded.state == STATE_PROVEN:
+        _open_or_join_case(recorded.fire_id, check_id, org_id, user_id, verdict.observed)
+
+
+@celery_app.task(name="services.detection.runner.grade_fires")
+def grade_fires():
+    """Decide which fires were real, and move checks between silent and proven."""
+    if not checks_enabled():
+        return
+
+    def _grade(cur, conn, _user_id, org_id):
+        hits, false_fires = record.grade_fires(cur, org_id)
+        conn.commit()
+        if hits or false_fires:
+            logger.info("%s Graded fires for org %s: %d hit(s), %d false",
+                        _LOG, sanitize(org_id), hits, false_fires)
+
+    _for_each_org(_grade, "grading fires")
+
+
+@celery_app.task(name="services.detection.runner.watch_access")
+def watch_access():
+    """Tell the installer, once per outage, when Aurora cannot run its checks."""
+    if not checks_enabled():
+        return
+
+    def _watch(cur, conn, user_id, org_id):
+        access.resolve_recovered(cur, org_id)
+        conn.commit()
+        for provider, checks, detail in access.providers_gone_blind(cur, org_id):
+            # Claim first and commit: two workers must not both send the message.
+            claim = access.open_alert(cur, org_id, provider, detail)
+            conn.commit()
+            if not claim:
+                continue
+            if access.tell_installer(user_id, provider, checks, detail):
+                access.mark_delivered(cur, org_id, provider, claim)
+            else:
+                # Not delivered (no Slack, send failed): let a later pass try again.
+                access.release_alert(cur, org_id, provider, claim)
+            conn.commit()
+
+    _for_each_org(_watch, "watching access")
+
+
+@celery_app.task(name="services.detection.runner.consolidate_checks")
+def consolidate_checks():
+    """Retire duplicates, checks that were only ever wrong, and the weakest past the ceiling."""
+    if not checks_enabled():
+        return
+
+    def _consolidate(cur, conn, _user_id, org_id):
+        retired = consolidation.consolidate(cur, org_id)
+        conn.commit()
+        if any(retired.values()):
+            logger.info("%s Consolidated org %s: %s", _LOG, sanitize(org_id), retired)
+
+    _for_each_org(_consolidate, "consolidating checks")
+
+
+@celery_app.task(name="services.detection.runner.review_checks")
+def review_checks():
+    """Hand checks that stopped working to the agent, for orgs that have any.
+
+    The work is the built-in "Check Review" action, so it shows up with the
+    other actions, its instructions can be edited and it can be turned off. It
+    is started from here rather than on a schedule so an org with nothing to
+    review costs no model call.
+    """
+    if not checks_enabled():
+        return
+    from services.actions.check_review_action import SYSTEM_KEY
+
+    waiting = []
+
+    def _find(cur, _conn, _user_id, org_id):
+        if not orgs_review_is_due(cur, org_id):
+            return
+        cur.execute(
+            """SELECT a.id, a.created_by FROM actions a
+               WHERE a.org_id = %s AND a.system_key = %s AND a.enabled
+                 AND NOT EXISTS (SELECT 1 FROM action_runs r WHERE r.action_id = a.id
+                                 AND r.status IN ('pending', 'running'))""",
+            (org_id, SYSTEM_KEY),
+        )
+        row = cur.fetchone()
+        if row:
+            waiting.append((str(row[0]), row[1], org_id))
+
+    _for_each_org(_find, "finding checks to review")
+
+    from services.actions.executor import dispatch_action
+
+    for action_id, owner, org_id in waiting:
+        try:
+            with _org_cursor(owner, org_id) as (cur, conn):
+                if cur is None:
+                    continue
+                # Two overlapping passes would both see no active run and both
+                # start one. The lock is held until this pass has created its
+                # run, and the second pass then finds it.
+                cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", ("detection-review:%s" % action_id,))
+                cur.execute(
+                    "SELECT 1 FROM action_runs WHERE action_id = %s AND status IN ('pending', 'running')",
+                    (action_id,),
+                )
+                if cur.fetchone() is None:
+                    dispatch_action(action_id=action_id, user_id=owner,
+                                    trigger_context={"source": "detection_review", "batch": REVIEW_BATCH})
+                conn.commit()
+        except Exception:
+            logger.exception("%s Could not start the check review for org %s", _LOG, sanitize(org_id))

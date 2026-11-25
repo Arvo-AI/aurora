@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
-import { ChevronLeft, Settings, LogOut, User, Zap, Plug, Gauge, SquarePen, Workflow } from "lucide-react"
+import { ChevronLeft, Settings, LogOut, User, Zap, Plug, Gauge, Radar, SquarePen, Workflow } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import ChatHistory from "@/components/ChatHistory"
@@ -16,6 +16,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+import { useDetectionEnabled } from "@/hooks/useDetectionEnabled"
 
 interface NavigationProps {
   isChatExpanded?: boolean;
@@ -45,6 +46,7 @@ export default function Navigation({
   onSettingsClick,
 }: NavigationProps) {
   const pathname = usePathname()
+  const detectionEnabled = useDetectionEnabled()
   const router = useRouter()
   const { user } = useUser()
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false)
@@ -205,6 +207,24 @@ export default function Navigation({
               </div>
             </Link>
           </li>
+
+          {/* Checks Navigation Item */}
+          {detectionEnabled && <li>
+            <Link
+              href="/checks"
+              className={cn(
+                "w-full flex items-center justify-between px-2.5 py-1.5 rounded-md hover:bg-primary/10 transition-colors text-sm border border-transparent hover:border-border/50",
+                pathname?.startsWith("/checks")
+                  ? "bg-card rounded-lg border border-border shadow-sm"
+                  : "text-muted-foreground"
+              )}
+            >
+              <div className="flex items-center">
+                <Radar size={16} />
+                <span className="ml-2">Checks</span>
+              </div>
+            </Link>
+          </li>}
 
           {/* Monitor Navigation Item */}
           <li>

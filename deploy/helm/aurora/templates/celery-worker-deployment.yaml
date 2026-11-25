@@ -50,7 +50,7 @@ spec:
           image: {{ include "aurora.image" (dict "image" "server" "global" $) | quote }}
           imagePullPolicy: IfNotPresent
           # tini reaps Celery's orphaned grandchildren; exec keeps Celery as its child.
-          command: ["tini", "--", "sh", "-c", "exec celery -A celery_config worker --loglevel=info --concurrency=${CELERY_CONCURRENCY:-4} --queues=high,celery --pidfile=/tmp/celery-worker.pid"]
+          command: ["tini", "--", "sh", "-c", "exec celery -A celery_config worker --loglevel=info --concurrency=${CELERY_CONCURRENCY:-4} --queues=high,celery,detection --pidfile=/tmp/celery-worker.pid"]
           securityContext:
             {{- include "aurora.containerSecurityContext" (dict "service" "celeryWorker" "global" $ "defaults" (dict)) | nindent 12 }}
           envFrom:
