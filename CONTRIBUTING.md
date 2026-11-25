@@ -86,7 +86,7 @@ Aurora is a natural-language interface for managing cloud infrastructure. Before
    Check the vault-init container logs for the root token:
 
    ```bash
-   docker logs vault-init 2>&1 | grep "Root Token:"
+   docker logs aurora-vault-init 2>&1 | grep "Root Token:"
    ```
 
    Copy the root token value and add it to your .env file:

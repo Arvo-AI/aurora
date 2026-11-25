@@ -23,7 +23,7 @@ make prod-prebuilt   # or: make prod-local to build from source
 ### 2. Get the Root Token
 
 ```bash
-docker logs vault-init 2>&1 | grep "Root Token:"
+docker logs aurora-vault-init 2>&1 | grep "Root Token:"
 ```
 
 Output:
@@ -120,7 +120,7 @@ If your deployment requires AWS Secrets Manager instead of Vault (e.g., EKS envi
 The `vault-init` container should auto-unseal. If not:
 
 ```bash
-docker restart vault-init
+docker restart aurora-vault-init
 ```
 
 ### "Permission denied"

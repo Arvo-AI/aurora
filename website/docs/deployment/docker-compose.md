@@ -70,7 +70,7 @@ After first startup, get the Vault token:
 
 ```bash
 # Get root token
-docker logs vault-init 2>&1 | grep "Root Token:"
+docker logs aurora-vault-init 2>&1 | grep "Root Token:"
 
 # Add to .env
 echo "VAULT_TOKEN=hvs.xxxxx" >> .env
@@ -245,7 +245,7 @@ Vault requires manual unsealing after container restarts:
 
 ```bash
 # Get unseal key from vault-init logs
-docker logs vault-init 2>&1 | grep "Unseal Key"
+docker logs aurora-vault-init 2>&1 | grep "Unseal Key"
 
 # Unseal Vault
 docker exec -it aurora-vault-1 vault operator unseal <UNSEAL_KEY>

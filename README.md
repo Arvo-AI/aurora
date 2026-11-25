@@ -1,5 +1,7 @@
 <div align="center">
 
+**English** | [简体中文](README.zh-CN.md)
+
 <img src=".github/assets/aurora-banner.gif" alt="Aurora — The open-source AI agent that investigates your incidents for you" width="100%" />
 
 <a href="https://github.com/Arvo-AI/aurora/stargazers"><img src="https://img.shields.io/github/stars/Arvo-AI/aurora?style=for-the-badge&logo=github&color=181717" alt="Stars" /></a>&nbsp;
@@ -14,6 +16,24 @@
 <a href="https://aurora-ai.net">Try Aurora Live</a>&nbsp;&nbsp;&bull;&nbsp;&nbsp;<a href="#quick-start">Quick Start</a>&nbsp;&nbsp;&bull;&nbsp;&nbsp;<a href="https://arvo-ai.github.io/aurora/">Documentation</a>&nbsp;&nbsp;&bull;&nbsp;&nbsp;<a href="#integrations">Integrations</a>&nbsp;&nbsp;&bull;&nbsp;&nbsp;<a href="https://www.aurorasre.ai">Website</a>&nbsp;&nbsp;&bull;&nbsp;&nbsp;<a href="CHANGELOG.md">Changelog</a>
 
 </div>
+
+<br />
+
+**Aurora is an open-source AI SRE agent: an alert comes in, Aurora investigates across your cloud, Kubernetes and observability tools, and hands you the root cause analysis.**
+
+A ready-to-run agent, not a framework to build one. Self-hosted, Apache 2.0, bring your own LLM.
+
+- **Proof, not promises:** [Benchmark](https://www.aurorasre.ai/benchmark) on 19 injected Kubernetes faults, reproducible with [Aurora Lab](https://github.com/Arvo-AI/aurora-lab), losses included
+- **Talk to us:** [Discord](https://discord.com/invite/ccbN4FwHxM)
+- **Like it?** [Star the repo](https://github.com/Arvo-AI/aurora/stargazers) so other SREs can find it
+
+```bash
+git clone https://github.com/Arvo-AI/aurora.git && cd aurora && make init
+# add one LLM key to .env: OPENROUTER_API_KEY, OPENAI_API_KEY or ANTHROPIC_API_KEY
+make prod-prebuilt       # then open http://localhost:3000
+```
+
+Needs Docker. See [Quick Start](#quick-start) for the one-time Vault token step and other options.
 
 ---
 
@@ -167,7 +187,7 @@ Open **http://localhost:3000**. The first user to register becomes admin.
 
 ```bash
 # Get the auto-generated root token
-docker logs vault-init 2>&1 | grep "Root Token:"
+docker logs aurora-vault-init 2>&1 | grep "Root Token:"
 
 # Add it to .env
 echo "VAULT_TOKEN=hvs.your-token-here" >> .env

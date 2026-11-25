@@ -121,7 +121,7 @@ On first startup, Vault auto-initializes and generates a root token. You need to
 ### Get the Root Token
 
 ```bash
-docker logs vault-init 2>&1 | grep "Root Token:"
+docker logs aurora-vault-init 2>&1 | grep "Root Token:"
 ```
 
 You'll see output like:
