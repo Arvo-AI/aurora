@@ -41,9 +41,9 @@ export function isInvestigating(incident: Incident): boolean {
   return incident.auroraStatus === 'running' || incident.auroraStatus === 'summarizing';
 }
 
-/** The RCA has not run: waiting for the org's budget, or covered by another incident's. */
+/** The RCA has not run yet: it is waiting for the org's investigation budget. */
 export function isNotInvestigatedYet(incident: Incident): boolean {
-  return incident.auroraStatus === 'queued' || incident.auroraStatus === 'grouped';
+  return incident.auroraStatus === 'queued';
 }
 
 export function isStalled(incident: Incident, now: number): boolean {

@@ -55,8 +55,7 @@ export default function IncidentGroupRow({ group, expanded, onToggle }: Readonly
   const now = Date.now();
   const isActive = group.section === 'investigating';
   const stalled = isGroupStalled(group, now);
-  // Nothing in the group is being investigated: its alerts wait for the org's
-  // budget, or are covered by another incident's investigation.
+  // Nothing in the group is being investigated: it waits for the org's budget.
   const waiting = isNotInvestigatedYet(anchor) && !group.investigating;
   // Severity is typed as a closed union but the API can still send 'unknown'.
   const severity: string = anchor.alert.severity;
@@ -138,7 +137,7 @@ export default function IncidentGroupRow({ group, expanded, onToggle }: Readonly
                 {waiting && (
                   <span className="flex items-center gap-1">
                     <Clock className="h-3 w-3" />
-                    {anchor.auroraStatus === 'grouped' ? 'Covered by another investigation' : 'Not investigated yet'}
+                    Not investigated yet
                   </span>
                 )}
                 {!stalled && !waiting && (isActive || group.investigating) && (

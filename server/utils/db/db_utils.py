@@ -822,7 +822,6 @@ def initialize_tables():
                          rca_queue_reason VARCHAR(20),
                          rca_queued_at TIMESTAMP,
                          rca_queued_request JSONB,
-                         rca_group_leader_id UUID REFERENCES incidents(id) ON DELETE SET NULL,
                          started_at TIMESTAMP NOT NULL,
                          analyzed_at TIMESTAMP,
                          slack_message_ts VARCHAR(50),
@@ -2133,7 +2132,7 @@ def initialize_tables():
                 conn.rollback()
 
             # Migration: alert RCAs over the org's budget wait on the incident
-            # (aurora_status 'queued' / 'grouped') instead of being dropped; see
+            # (aurora_status 'queued') instead of being dropped; see
             # chat/background/rca_dispatch.py.
             try:
                 cursor.execute("""
@@ -2141,8 +2140,7 @@ def initialize_tables():
                     ADD COLUMN IF NOT EXISTS rca_dispatched_at TIMESTAMP,
                     ADD COLUMN IF NOT EXISTS rca_queue_reason VARCHAR(20),
                     ADD COLUMN IF NOT EXISTS rca_queued_at TIMESTAMP,
-                    ADD COLUMN IF NOT EXISTS rca_queued_request JSONB,
-                    ADD COLUMN IF NOT EXISTS rca_group_leader_id UUID REFERENCES incidents(id) ON DELETE SET NULL;
+                    ADD COLUMN IF NOT EXISTS rca_queued_request JSONB;
                 """)
                 conn.commit()
             except Exception as e:
@@ -2237,14 +2235,11 @@ def initialize_tables():
                     ADD COLUMN IF NOT EXISTS rca_dispatched_at TIMESTAMP,
                     ADD COLUMN IF NOT EXISTS rca_queue_reason VARCHAR(20),
                     ADD COLUMN IF NOT EXISTS rca_queued_at TIMESTAMP,
-                    ADD COLUMN IF NOT EXISTS rca_queued_request JSONB,
-                    ADD COLUMN IF NOT EXISTS rca_group_leader_id UUID REFERENCES incidents(id) ON DELETE SET NULL;
+                    ADD COLUMN IF NOT EXISTS rca_queued_request JSONB;
                     CREATE INDEX IF NOT EXISTS idx_incidents_rca_queue
                         ON incidents(org_id, rca_queued_at) WHERE aurora_status = 'queued';
                     CREATE INDEX IF NOT EXISTS idx_incidents_rca_dispatched
                         ON incidents(org_id, rca_dispatched_at) WHERE rca_dispatched_at IS NOT NULL;
-                    CREATE INDEX IF NOT EXISTS idx_incidents_rca_group_leader
-                        ON incidents(rca_group_leader_id) WHERE rca_group_leader_id IS NOT NULL;
                 """)
                 conn.commit()
             except Exception as e:

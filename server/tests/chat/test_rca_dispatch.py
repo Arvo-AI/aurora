@@ -1,14 +1,13 @@
-"""Alert RCAs over the org's budget are queued and grouped, never dropped.
+"""Alert RCAs over the org's budget are queued, never dropped.
 
-* A burst of 34 alerts leaves no incident in error: each is investigated,
-  grouped into another investigation, or queued with a reason, and the queue
-  drains until every one is covered.
+* A burst of 34 alerts leaves no incident in error: each is investigated or
+  queued with a reason, and the queue drains until every one has had its own RCA.
 * An org under the limit is dispatched at once, as before.
-* A burst still arriving is not drained; a settled one becomes one investigation.
-* A failed start is queued for retry, with its group.
+* The queue drains most severe first, then oldest first.
+* A failed start is queued for retry and does not hold back the others.
 * Housekeeping runs (prediscovery, actions) do not spend the alert budget.
-* The stale sweep skips queued and grouped incidents but still fails a
-  dispatched one that was lost.
+* The stale sweep skips queued incidents but still fails a dispatched one
+  that was lost, and requeues a reserved start that was never published.
 """
 
 from __future__ import annotations
@@ -33,16 +32,14 @@ class FakeStore:
         self.org_id = ORG
         self.clock = T0
         self.incidents: dict[str, dict] = {}
-        self.attached: dict[str, list[str]] = {}
         self.queue_reads = 0
 
     # --- test helpers
     def add(self, incident_id, severity="medium", source="sentry"):
         self.incidents[incident_id] = {
             "aurora_status": "idle", "status": "investigating", "source": source,
-            "severity": severity, "title": f"Issue {incident_id}", "service": "api",
-            "dispatched_at": None, "queued_at": None, "reason": None,
-            "request": None, "leader": None, "task": None,
+            "severity": severity, "dispatched_at": None, "queued_at": None, "reason": None,
+            "request": None, "task": None,
         }
 
     def by_status(self, status):
@@ -54,9 +51,6 @@ class FakeStore:
 
     def rollback(self):
         pass
-
-    def now(self):
-        return self.clock
 
     def lock_org(self):
         pass
@@ -92,7 +86,7 @@ class FakeStore:
 
     def queue(self, incident_id, reason, request):
         inc = self.incidents[incident_id]
-        inc.update(aurora_status=rd.QUEUED, reason=reason, leader=None)
+        inc.update(aurora_status=rd.QUEUED, reason=reason)
         inc["queued_at"] = inc["queued_at"] or self.clock
         inc["request"] = request or inc["request"]
 
@@ -101,46 +95,24 @@ class FakeStore:
 
     def mark_dispatched(self, incident_id, request=None):
         inc = self.incidents[incident_id]
-        inc.update(aurora_status="idle", dispatched_at=self.clock, reason=None, queued_at=None,
-                   leader=None, task=None)
+        inc.update(aurora_status="idle", dispatched_at=self.clock, reason=None, queued_at=None, task=None)
         inc["request"] = request or inc["request"]
 
     def release_dispatch(self, incident_id):
         self.incidents[incident_id]["dispatched_at"] = None
 
-    def mark_grouped(self, follower_ids, leader_id):
-        for f in follower_ids:
-            self.incidents[f].update(aurora_status=rd.GROUPED, reason=rd.REASON_BURST, leader=leader_id)
-        self.attached.setdefault(leader_id, []).extend(follower_ids)
-
-    def requeue_group(self, leader_id):
-        for inc in self.incidents.values():
-            if inc["leader"] == leader_id and inc["aurora_status"] == rd.GROUPED:
-                inc.update(aurora_status=rd.QUEUED, reason=rd.REASON_DISPATCH_FAILED, leader=None)
-                inc["queued_at"] = inc["queued_at"] or self.clock
-        self.attached.pop(leader_id, None)
-
-    def queued(self):
+    def next_queued(self, skip_ids):
+        self.queue_reads += 1
         rows = [
             rd.QueuedIncident(
-                id=i, user_id=USER, source_type=inc["source"], title=inc["title"],
-                service=inc["service"], severity=inc["severity"], queued_at=inc["queued_at"],
-                request=None,
+                id=i, user_id=USER, source_type=inc["source"], severity=inc["severity"],
+                queued_at=inc["queued_at"], request=inc["request"],
             )
             for i, inc in self.incidents.items()
-            if inc["aurora_status"] == rd.QUEUED and inc["status"] == "investigating" and inc["request"]
+            if inc["aurora_status"] == rd.QUEUED and inc["status"] == "investigating"
+            and inc["request"] and i not in skip_ids
         ]
-        self.queue_reads += 1
-        return sorted(rows, key=lambda q: (q.queued_at, q.id))
-
-    def load_batch(self, batch):
-        loaded = []
-        for q in batch:
-            inc = self.incidents[q.id]
-            if inc["aurora_status"] == rd.QUEUED and inc["request"]:
-                q.request = inc["request"]
-                loaded.append(q)
-        return sorted(loaded, key=lambda q: (q.queued_at, q.id))
+        return min(rows, key=rd.drain_order) if rows else None
 
     def set_reason_all(self, reason):
         for inc in self.incidents.values():
@@ -161,11 +133,8 @@ def started(monkeypatch, store):
     """Starting an RCA puts it on a worker, which marks the incident running."""
     calls = []
 
-    def _start(user_id, incident_id, request, prompt=None, rail_text=None):
-        calls.append(SimpleNamespace(
-            incident_id=incident_id, prompt=prompt or request.prompt,
-            rail_text=rail_text if rail_text is not None else request.rail_text,
-        ))
+    def _start(user_id, incident_id, request):
+        calls.append(SimpleNamespace(incident_id=incident_id, prompt=request.prompt))
         store.incidents[incident_id]["aurora_status"] = "running"
         return f"task-{incident_id}"
 
@@ -193,17 +162,20 @@ def _finish_old_rcas(store, minutes=10):
             inc["status"] = "analyzed"
 
 
-def _covered(store, incident_id):
-    inc = store.incidents[incident_id]
-    if inc["aurora_status"] == rd.GROUPED:
-        return store.incidents[inc["leader"]]["dispatched_at"] is not None
-    return inc["dispatched_at"] is not None
+def _fill_window_then_queue(store, *ids, **kw):
+    """Spend the 5-minute window, queue *ids*, then let the window and the RCAs end."""
+    for n in range(rd.MAX_PER_WINDOW):
+        _alert(store, f"inc-{n}")
+    for incident_id in ids:
+        _alert(store, incident_id, **kw)
+    _finish_old_rcas(store, minutes=0)
+    store.clock = T0 + timedelta(minutes=10)
 
 
 # --- The burst ----------------------------------------------------------------------
 
-def test_a_burst_of_34_alerts_leaves_none_in_error_and_every_one_is_covered(store, started):
-    # 34 distinct issues over 15 minutes, as a new org connecting Sentry saw.
+def test_a_burst_of_34_alerts_leaves_none_in_error_and_each_gets_its_own_rca(store, started):
+    # 34 distinct issues over 15 minutes, as a new org connecting an error tracker saw.
     ids = [f"inc-{n:02d}" for n in range(34)]
     for n, incident_id in enumerate(ids):
         store.clock = T0 + timedelta(seconds=n * 26)
@@ -216,20 +188,34 @@ def test_a_burst_of_34_alerts_leaves_none_in_error_and_every_one_is_covered(stor
 
     assert store.by_status("error") == []
     for incident_id in ids:
-        status = store.incidents[incident_id]["aurora_status"]
-        assert status in ("running", rd.GROUPED, rd.QUEUED)
+        assert store.incidents[incident_id]["aurora_status"] in ("running", rd.QUEUED)
 
     # The drain keeps running every minute; investigations finish.
-    for minute in range(1, 120):
+    for minute in range(1, 180):
         store.clock = T0 + timedelta(minutes=15 + minute)
         _finish_old_rcas(store)
         rd.drain_with_store(store)
 
     assert store.by_status(rd.QUEUED) == []
     assert store.by_status("error") == []
-    assert all(_covered(store, i) for i in ids)
-    # Grouping collapsed the burst: far fewer investigations than alerts.
-    assert len(started) < 15, len(started)
+    assert all(store.incidents[i]["dispatched_at"] is not None for i in ids)
+    # One RCA per incident, none twice.
+    assert sorted(c.incident_id for c in started) == ids
+
+
+def test_the_burst_never_runs_more_than_the_concurrency_cap(store, started):
+    peak = 0
+    for n in range(34):
+        store.clock = T0 + timedelta(seconds=n * 26)
+        _alert(store, f"inc-{n:02d}")
+        rd.drain_with_store(store)
+        peak = max(peak, store.usage().in_flight)
+    for minute in range(1, 180):
+        store.clock = T0 + timedelta(minutes=15 + minute)
+        _finish_old_rcas(store, minutes=20)
+        rd.drain_with_store(store)
+        peak = max(peak, store.usage().in_flight)
+    assert peak <= rd.MAX_CONCURRENT
 
 
 def test_the_first_alerts_of_a_burst_still_start_at_once(store, started):
@@ -247,56 +233,40 @@ def test_an_org_under_the_limit_is_dispatched_at_once(store, started):
     assert store.by_status(rd.QUEUED) == []
 
 
-def test_a_new_alert_joins_alerts_already_waiting(store, started):
+def test_a_new_alert_takes_its_turn_behind_alerts_already_waiting(store, started):
     for n in range(rd.MAX_PER_WINDOW + 1):
         _alert(store, f"inc-{n}")
     store.clock = T0 + timedelta(minutes=6)  # the window reopened
     assert _alert(store, "late") == rd.QUEUED_OUTCOME
-    assert store.incidents["late"]["reason"] == rd.REASON_BURST
+    assert store.incidents["late"]["reason"] == rd.REASON_WAITING
 
 
-def test_a_burst_still_arriving_is_not_drained(store, started):
-    for n in range(rd.MAX_PER_WINDOW + 3):
-        _alert(store, f"inc-{n}")
-    _finish_old_rcas(store, minutes=0)
-    store.clock = T0 + timedelta(seconds=rd.SETTLE_SECONDS - 1)
-    assert rd.drain_with_store(store) == {"dispatched": 0, "grouped": 0}
+def test_the_queue_drains_most_severe_first_then_oldest(store, started):
+    _fill_window_then_queue(store)
+    for incident_id, severity, minute in [
+        ("low-old", "low", 1), ("high-new", "high", 4), ("crit", "critical", 5), ("high-old", "high", 2),
+    ]:
+        store.add(incident_id, severity=severity)
+        store.queue(incident_id, rd.REASON_RATE, _request(incident_id))
+        store.incidents[incident_id]["queued_at"] = T0 + timedelta(minutes=minute)
+
+    rd.drain_with_store(store)
+
+    assert [c.incident_id for c in started[rd.MAX_PER_WINDOW:]] == ["crit", "high-old", "high-new", "low-old"]
 
 
-def test_a_settled_burst_becomes_one_investigation_led_by_the_most_severe_alert(store, started):
-    for n in range(rd.MAX_PER_WINDOW):
-        _alert(store, f"inc-{n}")
-    _alert(store, "low", severity="low")
-    _alert(store, "crit", severity="critical")
-    _alert(store, "med", severity="medium")
-    _finish_old_rcas(store, minutes=0)
-    store.clock = T0 + timedelta(minutes=10)
-
-    assert rd.drain_with_store(store) == {"dispatched": 1, "grouped": 2}
-    assert started[-1].incident_id == "crit"
-    assert store.attached["crit"] == ["low", "med"]
-    assert store.incidents["low"]["leader"] == "crit"
-    assert "Related alerts in the same burst" in started[-1].prompt
-    assert "Issue low" in started[-1].prompt
-
-
-def test_the_grouped_prompt_is_bounded_however_large_the_burst():
-    leader = _request("lead")
-    followers = [
-        rd.QueuedIncident(id=f"f{n}", user_id=USER, source_type="sentry", title="x" * 1000,
-                          service=None, severity=None, queued_at=T0, request=None)
-        for n in range(200)
-    ]
-    prompt = rd.grouped_prompt(leader, followers)
-    assert len(prompt) < 6000
-    assert "...and 175 more" in prompt
+def test_each_queued_incident_runs_its_own_prompt(store, started):
+    _fill_window_then_queue(store, "a", "b")
+    rd.drain_with_store(store)
+    assert {c.incident_id: c.prompt for c in started[rd.MAX_PER_WINDOW:]} == {
+        "a": "Investigate a", "b": "Investigate b",
+    }
 
 
 def test_a_drain_over_budget_says_why_the_alerts_still_wait(store, started):
     for n in range(rd.MAX_PER_WINDOW + 2):
         _alert(store, f"inc-{n}")
-    store.clock = T0 + timedelta(minutes=10)  # settled, but 5 are still running
-    store.incidents["inc-0"]["aurora_status"] = "running"
+    store.clock = T0 + timedelta(minutes=10)  # the window reopened, but 5 are still running
     for n in range(rd.MAX_CONCURRENT - rd.MAX_PER_WINDOW):
         store.add(f"extra-{n}")
         store.incidents[f"extra-{n}"].update(aurora_status="running", dispatched_at=T0)
@@ -305,23 +275,31 @@ def test_a_drain_over_budget_says_why_the_alerts_still_wait(store, started):
     assert store.incidents[f"inc-{rd.MAX_PER_WINDOW}"]["reason"] == rd.REASON_CONCURRENCY
 
 
-def test_a_failed_start_is_queued_for_retry_with_its_group(monkeypatch, store, started):
-    for n in range(rd.MAX_PER_WINDOW):
-        _alert(store, f"inc-{n}")
-    _alert(store, "a")
-    _alert(store, "b")
-    _finish_old_rcas(store, minutes=0)
-    store.clock = T0 + timedelta(minutes=10)
-
-    def _broken(*_a, **_k):
-        raise RuntimeError("broker down")
-
-    monkeypatch.setattr(rd, "start_rca", _broken)
+def test_a_failed_start_is_queued_for_retry(monkeypatch, store, started):
+    _fill_window_then_queue(store, "a")
+    monkeypatch.setattr(rd, "start_rca", MagicMock(side_effect=RuntimeError("broker down")))
     rd.drain_with_store(store)
-
-    assert sorted(store.by_status(rd.QUEUED)) == ["a", "b"]
+    assert store.by_status(rd.QUEUED) == ["a"]
     assert store.incidents["a"]["reason"] == rd.REASON_DISPATCH_FAILED
-    assert "a" not in store.attached
+
+
+def test_an_incident_that_fails_to_start_does_not_hold_back_the_others(monkeypatch, store, started):
+    _fill_window_then_queue(store)
+    store.add("broken", severity="critical")
+    store.queue("broken", rd.REASON_RATE, _request("broken"))
+    store.add("fine", severity="low")
+    store.queue("fine", rd.REASON_RATE, _request("fine"))
+    ok = rd.start_rca
+
+    def _broken_one(user_id, incident_id, request):
+        if incident_id == "broken":
+            raise RuntimeError("broker down")
+        return ok(user_id, incident_id, request)
+
+    monkeypatch.setattr(rd, "start_rca", _broken_one)
+    assert rd.drain_with_store(store)["dispatched"] == 1
+    assert store.incidents["fine"]["aurora_status"] == "running"
+    assert store.by_status(rd.QUEUED) == ["broken"]
 
 
 def test_a_queued_alert_that_fires_again_keeps_its_place(store, started):
@@ -373,7 +351,6 @@ def test_housekeeping_runs_do_not_spend_the_alert_budget(monkeypatch, store, sta
 
 def test_a_prediscovery_run_does_not_consume_the_alert_rca_budget(monkeypatch, store, started):
     import importlib
-
     import importlib.util
 
     import celery_config
@@ -425,41 +402,7 @@ def test_a_prediscovery_run_does_not_consume_the_alert_rca_budget(monkeypatch, s
     assert [_alert(store, f"inc-{n}") for n in range(rd.MAX_PER_WINDOW)] == [rd.DISPATCHED] * rd.MAX_PER_WINDOW
 
 
-# --- Review fixes ---------------------------------------------------------------------
-
-def _fill_window_then_queue(store, *ids, **kw):
-    for n in range(rd.MAX_PER_WINDOW):
-        _alert(store, f"inc-{n}")
-    for incident_id in ids:
-        _alert(store, incident_id, **kw)
-    _finish_old_rcas(store, minutes=0)
-    store.clock = T0 + timedelta(minutes=10)
-
-
-def test_a_grouped_run_puts_the_follower_titles_through_the_input_rail(store, started):
-    _fill_window_then_queue(store, "a", "b")
-    rd.drain_with_store(store)
-    assert "Issue a" in started[-1].rail_text
-    assert "Issue b" in started[-1].rail_text
-
-
-def test_a_source_that_fails_to_start_does_not_hold_back_the_others(monkeypatch, store, started):
-    _fill_window_then_queue(store, "s1", "s2")
-    store.add("d1", source="datadog")
-    store.queue("d1", rd.REASON_BURST, _request("d1"))
-    store.incidents["d1"]["queued_at"] = T0 + timedelta(minutes=1)
-    ok = rd.start_rca
-
-    def _sentry_broken(user_id, incident_id, request, prompt=None, rail_text=None):
-        if store.incidents[incident_id]["source"] == "sentry":
-            raise RuntimeError("broker down")
-        return ok(user_id, incident_id, request, prompt, rail_text)
-
-    monkeypatch.setattr(rd, "start_rca", _sentry_broken)
-    assert rd.drain_with_store(store)["dispatched"] == 1
-    assert store.incidents["d1"]["aurora_status"] == "running"
-    assert sorted(store.by_status(rd.QUEUED)) == ["s1", "s2"]
-
+# --- Failure handling -----------------------------------------------------------------
 
 def test_a_start_that_is_never_published_releases_its_budget(monkeypatch, store, started):
     monkeypatch.setattr(rd, "start_rca", MagicMock(side_effect=RuntimeError("broker down")))
@@ -483,11 +426,11 @@ def test_a_published_start_clears_the_stored_request(store, started):
 
 def test_an_org_at_capacity_is_not_read_into_memory(store, started):
     _fill_window_then_queue(store, "a", "b")
-    for inc in store.incidents.values():
-        if inc["dispatched_at"]:
-            inc["aurora_status"] = "running"
     store.add("x")
-    store.incidents["x"].update(aurora_status="running")
+    store.incidents["x"].update(aurora_status="running", dispatched_at=store.clock)
+    for n in range(rd.MAX_CONCURRENT - 1):
+        store.add(f"run-{n}")
+        store.incidents[f"run-{n}"]["aurora_status"] = "running"
     reads = store.queue_reads
     assert rd.drain_with_store(store)["dispatched"] == 0
     assert store.queue_reads == reads
@@ -511,6 +454,17 @@ def test_the_sql_budget_counts_running_rcas_without_a_dispatch_timestamp():
     assert "OR aurora_status IN ('running', 'summarizing'))" in sql
     # ...while the rate counts only alert dispatches.
     assert "COUNT(*) FILTER (WHERE rca_dispatched_at > LOCALTIMESTAMP - make_interval(secs => %s))" in sql
+
+
+def test_the_sql_drain_takes_the_most_severe_then_oldest_incident():
+    cursor = MagicMock()
+    cursor.fetchone.return_value = None
+    rd.SqlStore(cursor, MagicMock(), ORG).next_queued(["skip-me"])
+    sql, params = cursor.execute.call_args[0]
+    sql = " ".join(sql.split())
+    assert "WHEN 'critical' THEN 0" in sql
+    assert "END, rca_queued_at, id LIMIT 1 FOR UPDATE SKIP LOCKED" in sql
+    assert params == (ORG, rd.QUEUED, ["skip-me"])
 
 
 def test_a_refused_publish_fails_the_session_it_created(monkeypatch):
@@ -556,7 +510,7 @@ class _SweepCursor:
         self.executed.append((self._last, params))
 
     def _rows(self):
-        if "LOCALTIMESTAMP" in self._last and self._last.startswith("SELECT LOCALTIMESTAMP"):
+        if self._last.startswith("SELECT LOCALTIMESTAMP"):
             return [(DB_NOW,)]
         if "SELECT DISTINCT id FROM users" in self._last:
             return [("u1",)]
@@ -600,23 +554,23 @@ def _errored(cursor):
     return [p[0] for sql, p in cursor.executed if sql.startswith("UPDATE incidents SET aurora_status = 'error'")]
 
 
-def test_the_never_started_sweep_skips_queued_and_grouped_incidents(monkeypatch):
+NEVER_STARTED = "WHERE i.status = 'investigating' AND i.updated_at < %s"
+
+
+def test_the_never_started_sweep_skips_queued_incidents(monkeypatch):
     cursor, reported = _sweep(monkeypatch, {
-        # Even if a queued or grouped row were returned, it is not failed.
-        "WHERE i.status = 'investigating' AND i.updated_at < %s": [
-            ("queued-inc", "queued", None, None),
-            ("grouped-inc", "grouped", None, None),
-        ],
+        # Even if a queued row were returned, it is not failed.
+        NEVER_STARTED: [("queued-inc", "queued", None, None)],
     })
-    sql = next(s for s, _ in cursor.executed if "WHERE i.status = 'investigating' AND i.updated_at < %s" in s)
-    assert "NOT IN ('queued', 'grouped')" in sql
+    sql = next(s for s, _ in cursor.executed if NEVER_STARTED in s)
+    assert "COALESCE(i.aurora_status, 'idle') != 'queued'" in sql
     assert _errored(cursor) == []
     assert reported == []
 
 
 def test_the_never_started_sweep_still_fails_a_dispatched_rca_that_was_lost(monkeypatch):
     cursor, reported = _sweep(monkeypatch, {
-        "WHERE i.status = 'investigating' AND i.updated_at < %s": [("lost-inc", "idle", None, None)],
+        NEVER_STARTED: [("lost-inc", "idle", None, None)],
         "UPDATE incidents SET aurora_status = 'error'": [("lost-inc",)],
     })
     assert _errored(cursor) == ["lost-inc"]
@@ -626,18 +580,9 @@ def test_the_never_started_sweep_still_fails_a_dispatched_rca_that_was_lost(monk
 def test_the_sweep_requeues_a_reserved_start_that_was_never_published(monkeypatch):
     # The dispatcher reserved it, then its worker died before publishing.
     cursor, reported = _sweep(monkeypatch, {
-        "WHERE i.status = 'investigating' AND i.updated_at < %s": [("reserved-inc", "idle", None, None, True)],
+        NEVER_STARTED: [("reserved-inc", "idle", None, None, True)],
     })
     assert _errored(cursor) == []
     assert reported == []
     requeue = next(e for e in cursor.executed if "rca_queue_reason = 'dispatch_failed'" in e[0])
     assert requeue[1] == ("reserved-inc",)
-
-
-def test_grouped_incidents_are_analyzed_when_their_investigation_ends(monkeypatch):
-    cursor, _ = _sweep(monkeypatch, {})
-    sql = next(s for s, _ in cursor.executed if s.startswith("UPDATE incidents f SET status = 'analyzed'"))
-    assert "l.aurora_status IN ('complete', 'error')" in sql
-    assert "f.aurora_status = 'grouped'" in sql
-    requeue = next(s for s, _ in cursor.executed if "rca_group_leader_id IS NULL" in s)
-    assert "SET aurora_status = 'queued'" in requeue

@@ -2887,7 +2887,7 @@ def _is_task_dead(task_id: str, last_activity, threshold, cursor=None, incident_
 _DEAD_WORKER_MINUTES = 5
 _NEVER_STARTED_MINUTES = 20
 # Alert RCAs deliberately held back (rca_dispatch.py): never started, never lost.
-_NOT_YET_INVESTIGATED = ('queued', 'grouped')
+_NOT_YET_INVESTIGATED = ('queued',)
 
 
 def _db_now(cursor) -> datetime:
@@ -3232,9 +3232,8 @@ def _sweep_stale_background_chats() -> Dict[str, Any]:
                         )
 
                     # --- 3. Stuck investigating (RCA done or orphaned, no active session) ---
-                    # An incident deliberately waiting for budget (queued) or
-                    # covered by another investigation (grouped) was never
-                    # started, so it cannot have been lost: it is skipped here.
+                    # An incident deliberately waiting for budget (queued) was
+                    # never started, so it cannot have been lost: it is skipped here.
                     cursor.execute("""
                         SELECT i.id, i.aurora_status,
                                CASE WHEN i.rca_run_task_id IS NOT NULL THEN i.aurora_chat_session_id END,
@@ -3243,7 +3242,7 @@ def _sweep_stale_background_chats() -> Dict[str, Any]:
                                 AND i.rca_run_task_id IS NULL AND i.rca_queued_request IS NOT NULL) AS unpublished
                         FROM incidents i
                         WHERE i.status = 'investigating' AND i.updated_at < %s AND i.user_id = %s
-                          AND COALESCE(i.aurora_status, 'idle') NOT IN ('queued', 'grouped')
+                          AND COALESCE(i.aurora_status, 'idle') != 'queued'
                           AND NOT EXISTS (
                               SELECT 1 FROM chat_sessions cs
                               WHERE cs.id::text = i.aurora_chat_session_id::text
@@ -3287,26 +3286,6 @@ def _sweep_stale_background_chats() -> Dict[str, Any]:
                                 uid, str(inc_id), rca_session_id,
                                 "Investigation became orphaned and was cleaned up", rca_run_task_id,
                             )
-
-                    # --- 3b. Grouped alerts follow the investigation covering them ---
-                    # Once it ends they are analyzed (never 'error': they were not
-                    # run). One whose leader is gone waits in the queue again.
-                    cursor.execute("""
-                        UPDATE incidents f
-                        SET status = 'analyzed', analyzed_at = COALESCE(f.analyzed_at, NOW()), updated_at = NOW()
-                        FROM incidents l
-                        WHERE f.rca_group_leader_id = l.id AND f.aurora_status = 'grouped'
-                          AND f.status = 'investigating' AND f.user_id = %s
-                          AND (l.aurora_status IN ('complete', 'error') OR l.status IN ('analyzed', 'resolved', 'merged'))
-                    """, (uid,))
-                    cursor.execute("""
-                        UPDATE incidents
-                        SET aurora_status = 'queued', rca_queue_reason = 'burst',
-                            rca_queued_at = COALESCE(rca_queued_at, NOW()), updated_at = NOW()
-                        WHERE aurora_status = 'grouped' AND rca_group_leader_id IS NULL
-                          AND status = 'investigating' AND user_id = %s
-                    """, (uid,))
-                    conn.commit()
 
                     # --- 4. Stale rca_findings: cascade from any incident already
                     # marked aurora_status='error' (immediate, catches sections 1-3

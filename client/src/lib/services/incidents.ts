@@ -24,9 +24,8 @@ export function getSourceIconBgColor(source: string): string {
 
 export type IncidentStatus = 'investigating' | 'analyzed' | 'merged' | 'resolved';
 // 'queued': an alert RCA waiting for the org's investigation budget.
-// 'grouped': covered by another incident's investigation of the same burst.
-export type AuroraStatus = 'idle' | 'queued' | 'grouped' | 'running' | 'summarizing' | 'complete' | 'error';
-export type QueueReason = 'rate_limited' | 'concurrency' | 'hourly_limit' | 'burst' | 'dispatch_failed';
+export type AuroraStatus = 'idle' | 'queued' | 'running' | 'summarizing' | 'complete' | 'error';
+export type QueueReason = 'rate_limited' | 'concurrency' | 'hourly_limit' | 'waiting_turn' | 'dispatch_failed';
 export type SuggestionRisk = 'safe' | 'low' | 'medium' | 'high';
 export type SuggestionType = 'diagnostic' | 'mitigation' | 'remediate' | 'prevent' | 'communication' | 'fix';
 
@@ -269,10 +268,8 @@ export interface Incident {
   // Set when the RCA stopped before it finished (time limit, stall, error); it can be continued.
   unfinishedReason?: 'time_limit' | 'stalled' | 'error' | 'interrupted' | null;
   continuationsLeft?: number;
-  // Set while the RCA has not run yet (auroraStatus 'queued' or 'grouped').
+  // Set while the RCA has not run yet (auroraStatus 'queued').
   queueReason?: QueueReason | null;
-  groupedIntoIncidentId?: string | null;
-  groupedIntoTitle?: string;
   tokenUsage?: {
     requestCount: number;
     totalInputTokens: number;
@@ -323,8 +320,6 @@ export const incidentsService = {
         recurrenceOf: inc.recurrenceOf ?? null,
         occurrenceTotal: inc.occurrenceTotal,
         queueReason: inc.queueReason ?? null,
-        groupedIntoIncidentId: inc.groupedIntoIncidentId ?? null,
-        groupedIntoTitle: inc.groupedIntoTitle,
         postMortem: inc.postMortem ?? undefined,
         startedAt: inc.startedAt,
         analyzedAt: inc.analyzedAt,
@@ -432,8 +427,6 @@ export const incidentsService = {
         unfinishedReason: inc.unfinishedReason ?? null,
         continuationsLeft: inc.continuationsLeft ?? 0,
         queueReason: inc.queueReason ?? null,
-        groupedIntoIncidentId: inc.groupedIntoIncidentId ?? null,
-        groupedIntoTitle: inc.groupedIntoTitle,
         tokenUsage: inc.tokenUsage || null,
       };
     } catch (error) {
@@ -516,7 +509,6 @@ export const incidentsService = {
       case 'complete': return 'Analysis Complete';
       case 'error': return 'Analysis Error';
       case 'queued': return 'Not Investigated Yet';
-      case 'grouped': return 'Covered by Another Investigation';
       default: return '';
     }
   },

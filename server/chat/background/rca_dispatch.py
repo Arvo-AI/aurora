@@ -3,11 +3,13 @@
 Every webhook that creates an incident hands its RCA to ``dispatch_alert_rca``.
 It starts the investigation now when the org has budget for it, and otherwise
 queues it on the incident (``aurora_status = 'queued'``) with the reason and the
-prompt it would have run. A periodic drain starts queued investigations when
-budget frees up, and collapses a burst of queued alerts from one source into a
-single investigation: the most severe alert leads, the others are attached to it
-as related alerts and marked ``grouped``. Nothing is lost: a queued incident is
-shown as "Not investigated yet" with a reason, and can be started by hand.
+prompt it would have run. A periodic drain starts queued investigations, one
+RCA per incident, most severe first and then oldest first, as budget frees up.
+Nothing is lost: a queued incident is shown as "Not investigated yet" with a
+reason, and can be started by hand.
+
+Related alerts are folded into one incident at ingest by the alert correlator
+(services/correlation), before they get here, so the queue does not group.
 
 The budget is per org and covers alert-driven RCAs only. Housekeeping runs
 (actions, team routing, prediscovery, chat-triggered RCAs) keep their own
@@ -19,7 +21,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from celery_config import celery_app
@@ -43,38 +45,29 @@ _DISPATCH_PICKUP_MINUTES = 30
 # A running RCA is bounded by the investigation time limit; anything older is
 # a leftover the sweep will fail, not load.
 _RUNNING_MAX_HOURS = 3
-
-# --- Bursts ---------------------------------------------------------------------
-# A source's queue is drained once no new alert joined it for SETTLE_SECONDS,
-# or once its oldest alert has waited MAX_WAIT_SECONDS, so a burst still
-# arriving is not split into many investigations.
-SETTLE_SECONDS = 120
-MAX_WAIT_SECONDS = 600
-# Alerts one grouped investigation covers; the rest wait for the next one.
-MAX_GROUP_SIZE = 50
-# Related alerts are listed by title only, capped, so a burst costs a bounded
-# number of prompt tokens however large it is.
-_MAX_LISTED_ALERTS = 25
-_MAX_LISTED_TITLE_CHARS = 150
 # A delivery retried this soon after its RCA was started does not start another.
 _REDISPATCH_GUARD_SECONDS = 120
 # Bound on investigations one drain pass starts per org.
 _MAX_DISPATCHES_PER_PASS = 10
 
 QUEUED = "queued"
-GROUPED = "grouped"
-NOT_YET_INVESTIGATED = (QUEUED, GROUPED)
 
 # Why an incident is not investigated yet. Codes are stored in
 # incidents.rca_queue_reason and mapped to copy by the client.
 REASON_RATE = "rate_limited"
 REASON_CONCURRENCY = "concurrency"
 REASON_HOURLY = "hourly_limit"
-REASON_BURST = "burst"
+# Others were already waiting: this one takes its turn behind them.
+REASON_WAITING = "waiting_turn"
 REASON_DISPATCH_FAILED = "dispatch_failed"
-QUEUE_REASONS = frozenset({REASON_RATE, REASON_CONCURRENCY, REASON_HOURLY, REASON_BURST, REASON_DISPATCH_FAILED})
+QUEUE_REASONS = frozenset({REASON_RATE, REASON_CONCURRENCY, REASON_HOURLY, REASON_WAITING, REASON_DISPATCH_FAILED})
 
+# Drain order: most severe first, then oldest. Mirrors _SEVERITY_ORDER_SQL.
 _SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+_SEVERITY_ORDER_SQL = (
+    "CASE lower(COALESCE(severity, '')) WHEN 'critical' THEN 0 WHEN 'high' THEN 1 "
+    "WHEN 'medium' THEN 2 WHEN 'low' THEN 3 WHEN 'info' THEN 4 ELSE 5 END"
+)
 
 DISPATCHED = "dispatched"
 QUEUED_OUTCOME = "queued"
@@ -121,11 +114,9 @@ class QueuedIncident:
     id: str
     user_id: str
     source_type: str
-    title: str
-    service: Optional[str]
     severity: Optional[str]
     queued_at: datetime
-    request: Optional[RcaRequest]
+    request: RcaRequest
 
 
 @dataclass
@@ -146,55 +137,9 @@ def budget_refusal(usage: BudgetUsage) -> Optional[str]:
     return None
 
 
-def pick_leader(batch: List[QueuedIncident]) -> QueuedIncident:
-    """The alert a grouped investigation starts from: most severe, then oldest."""
-    return min(
-        batch,
-        key=lambda q: (_SEVERITY_RANK.get((q.severity or "").lower(), 5), q.queued_at),
-    )
-
-
-def grouped_prompt(leader: RcaRequest, followers: List[QueuedIncident]) -> str:
-    """The leader's prompt plus a bounded list of the alerts it also covers."""
-    if not followers:
-        return leader.prompt
-    lines = []
-    for q in followers[:_MAX_LISTED_ALERTS]:
-        title = " ".join((q.title or "untitled alert").split())[:_MAX_LISTED_TITLE_CHARS]
-        lines.append(f"- {title}" + (f" (service: {q.service})" if q.service else ""))
-    more = len(followers) - len(lines)
-    if more > 0:
-        lines.append(f"- ...and {more} more")
-    return (
-        f"{leader.prompt}\n\n"
-        f"## Related alerts in the same burst\n"
-        f"{len(followers)} other alert(s) from {leader.source or 'the same source'} arrived "
-        "within minutes of this one and are covered by this investigation instead of "
-        "each getting their own. Check whether they share this alert's root cause, and "
-        "say so in your conclusions:\n" + "\n".join(lines)
-    )
-
-
-def grouped_rail_text(leader: RcaRequest, followers: List[QueuedIncident]) -> Optional[str]:
-    """The input-rail text of a grouped run: the leader's, plus every alert text it adds.
-
-    The follower titles and services enter the prompt, so they go through the
-    same rail check a standalone alert's title does.
-    """
-    if not followers:
-        return leader.rail_text
-    lines = []
-    for q in followers[:_MAX_LISTED_ALERTS]:
-        title = " ".join((q.title or "untitled alert").split())[:_MAX_LISTED_TITLE_CHARS]
-        lines.append(title + (f" (service: {q.service})" if q.service else ""))
-    return "\n".join([leader.rail_text or "", *lines]).strip()
-
-
-def is_settled(items: List[QueuedIncident], now: datetime) -> bool:
-    """A source's queue may be drained: the burst stopped, or waited long enough."""
-    oldest = min(q.queued_at for q in items)
-    newest = max(q.queued_at for q in items)
-    return (now - newest) >= timedelta(seconds=SETTLE_SECONDS) or (now - oldest) >= timedelta(seconds=MAX_WAIT_SECONDS)
+def drain_order(q: QueuedIncident):
+    """Sort key for the queue: most severe first, then oldest."""
+    return (_SEVERITY_RANK.get((q.severity or "").lower(), 5), q.queued_at, q.id)
 
 
 # --- Storage --------------------------------------------------------------------
@@ -212,11 +157,6 @@ class SqlStore:
 
     def rollback(self) -> None:
         self.conn.rollback()
-
-    def now(self) -> datetime:
-        # The clock rca_queued_at and rca_dispatched_at are written with.
-        self.cursor.execute("SELECT LOCALTIMESTAMP")
-        return self.cursor.fetchone()[0]
 
     def lock_org(self) -> None:
         """Serialize budget decisions for the org until the transaction ends."""
@@ -280,7 +220,7 @@ class SqlStore:
             SET aurora_status = %s, rca_queue_reason = %s,
                 rca_queued_at = COALESCE(rca_queued_at, LOCALTIMESTAMP),
                 rca_queued_request = COALESCE(%s::jsonb, rca_queued_request),
-                rca_group_leader_id = NULL, updated_at = LOCALTIMESTAMP
+                updated_at = LOCALTIMESTAMP
             WHERE id = %s
             """,
             (QUEUED, reason, request.to_json() if request else None, incident_id),
@@ -305,7 +245,7 @@ class SqlStore:
             """
             UPDATE incidents
             SET aurora_status = 'idle', rca_dispatched_at = LOCALTIMESTAMP,
-                rca_queue_reason = NULL, rca_queued_at = NULL, rca_group_leader_id = NULL,
+                rca_queue_reason = NULL, rca_queued_at = NULL,
                 rca_queued_request = COALESCE(%s::jsonb, rca_queued_request),
                 rca_celery_task_id = NULL, updated_at = LOCALTIMESTAMP
             WHERE id = %s
@@ -320,86 +260,35 @@ class SqlStore:
             (incident_id,),
         )
 
-    def mark_grouped(self, follower_ids: List[str], leader_id: str) -> None:
-        # The followers keep their own request, so each can still be run alone.
-        self.cursor.execute(
-            """
-            UPDATE incidents
-            SET aurora_status = %s, rca_queue_reason = %s, rca_group_leader_id = %s,
-                updated_at = LOCALTIMESTAMP
-            WHERE id = ANY(%s::uuid[])
-            """,
-            (GROUPED, REASON_BURST, leader_id, follower_ids),
-        )
-        # Shown on the leader as related alerts, like correlated ones.
-        self.cursor.execute(
-            """
-            INSERT INTO incident_alerts
-                (user_id, org_id, incident_id, source_type, source_alert_id, alert_title,
-                 alert_service, alert_severity, correlation_strategy, correlation_score, alert_metadata)
-            SELECT i.user_id, i.org_id, %s, i.source_type, i.source_alert_id, i.alert_title,
-                   i.alert_service, i.severity, 'burst', 0, i.alert_metadata
-            FROM incidents i
-            WHERE i.id = ANY(%s::uuid[])
-            """,
-            (leader_id, follower_ids),
-        )
+    def next_queued(self, skip_ids: List[str]) -> Optional[QueuedIncident]:
+        """Lock and load the next incident to start: most severe, then oldest.
 
-    def requeue_group(self, leader_id: str) -> None:
-        """A grouped start failed: its followers go back to waiting on their own."""
+        Only that one row is locked and has its request read. *skip_ids* are
+        incidents whose start already failed in this pass.
+        """
         self.cursor.execute(
-            """
-            UPDATE incidents
-            SET aurora_status = %s, rca_queue_reason = %s, rca_group_leader_id = NULL,
-                rca_queued_at = COALESCE(rca_queued_at, LOCALTIMESTAMP), updated_at = LOCALTIMESTAMP
-            WHERE rca_group_leader_id = %s AND aurora_status = %s
-            """,
-            (QUEUED, REASON_DISPATCH_FAILED, leader_id, GROUPED),
-        )
-        self.cursor.execute(
-            "DELETE FROM incident_alerts WHERE incident_id = %s AND correlation_strategy = 'burst'",
-            (leader_id,),
-        )
-
-    def queued(self) -> List[QueuedIncident]:
-        """The org's queue, metadata only: requests are loaded for the chosen batch."""
-        self.cursor.execute(
-            """
-            SELECT id, user_id, source_type, alert_title, alert_service, severity, rca_queued_at
+            f"""
+            SELECT id, user_id, source_type, severity, rca_queued_at, rca_queued_request
             FROM incidents
             WHERE org_id = %s AND aurora_status = %s AND status = 'investigating'
               AND rca_queued_request IS NOT NULL
-            ORDER BY rca_queued_at, id
-            """,
-            (self.org_id, QUEUED),
-        )
-        return [
-            QueuedIncident(
-                id=str(r[0]), user_id=r[1], source_type=r[2] or "", title=r[3] or "",
-                service=r[4], severity=r[5], queued_at=r[6], request=None,
-            )
-            for r in self.cursor.fetchall()
-        ]
-
-    def load_batch(self, batch: List[QueuedIncident]) -> List[QueuedIncident]:
-        """Lock the batch's rows that are still queued and attach their requests."""
-        by_id = {q.id: q for q in batch}
-        self.cursor.execute(
-            """
-            SELECT id, rca_queued_request FROM incidents
-            WHERE id = ANY(%s::uuid[]) AND aurora_status = %s AND status = 'investigating'
+              AND NOT (id = ANY(%s::uuid[]))
+            ORDER BY {_SEVERITY_ORDER_SQL}, rca_queued_at, id
+            LIMIT 1
             FOR UPDATE SKIP LOCKED
             """,
-            (list(by_id), QUEUED),
+            (self.org_id, QUEUED, skip_ids),
         )
-        loaded = []
-        for incident_id, raw in self.cursor.fetchall():
-            q = by_id.get(str(incident_id))
-            request = RcaRequest.from_db(raw)
-            if q is not None and request is not None:
-                q.request = request
-                loaded.append(q)
-        return sorted(loaded, key=lambda q: (q.queued_at, q.id))
+        row = self.cursor.fetchone()
+        if not row:
+            return None
+        request = RcaRequest.from_db(row[5])
+        if request is None:
+            return None
+        return QueuedIncident(
+            id=str(row[0]), user_id=row[1], source_type=row[2] or "", severity=row[3],
+            queued_at=row[4], request=request,
+        )
 
     def set_reason_all(self, reason: str) -> None:
         self.cursor.execute(
@@ -418,8 +307,7 @@ class SqlStore:
 
 # --- Starting an investigation ----------------------------------------------------
 
-def start_rca(user_id: str, incident_id: str, request: RcaRequest, prompt: Optional[str] = None,
-              rail_text: Optional[str] = None) -> str:
+def start_rca(user_id: str, incident_id: str, request: RcaRequest) -> str:
     """Create the RCA's chat session and enqueue it. Returns the Celery task id.
 
     When the broker refuses the task, the session is marked failed before the
@@ -439,10 +327,10 @@ def start_rca(user_id: str, incident_id: str, request: RcaRequest, prompt: Optio
         task = run_background_chat.delay(
             user_id=user_id,
             session_id=session_id,
-            initial_message=prompt or request.prompt,
+            initial_message=request.prompt,
             trigger_metadata=request.trigger_metadata,
             incident_id=incident_id,
-            rail_text=rail_text if rail_text is not None else request.rail_text,
+            rail_text=request.rail_text,
         )
     except Exception:
         try:
@@ -464,26 +352,22 @@ def _notify(user_id: str, org_id: str, incident_id: str, source: str) -> None:
         logger.debug("[RcaDispatch] SSE notify failed for %s", sanitize(incident_id), exc_info=True)
 
 
-def _start_or_requeue(store, user_id: str, incident_id: str, request: RcaRequest,
-                      prompt: Optional[str] = None, rail_text: Optional[str] = None,
-                      grouped: bool = False) -> str:
+def _start_or_requeue(store, user_id: str, incident_id: str, request: RcaRequest) -> str:
     """Start a reserved RCA. Returns DISPATCHED, QUEUED_OUTCOME or FAILED.
 
-    On a failed start the reservation is released and the incident (and its
-    group) goes back in the queue: QUEUED_OUTCOME. If even that write fails,
-    FAILED: the request is still on the row from the reservation, so the stale
-    sweep puts it back in the queue later.
+    On a failed start the reservation is released and the incident goes back
+    in the queue: QUEUED_OUTCOME. If even that write fails, FAILED: the request
+    is still on the row from the reservation, so the stale sweep puts it back
+    in the queue later.
     """
     try:
-        task_id = start_rca(user_id, incident_id, request, prompt, rail_text)
+        task_id = start_rca(user_id, incident_id, request)
     except Exception:
         logger.exception("[RcaDispatch] Could not start RCA for incident %s; queued for retry", sanitize(incident_id))
         try:
             store.rollback()
             store.release_dispatch(incident_id)
             store.queue(incident_id, REASON_DISPATCH_FAILED, request)
-            if grouped:
-                store.requeue_group(incident_id)
             store.commit()
         except Exception:
             store.rollback()
@@ -507,16 +391,16 @@ def dispatch_with_store(store, user_id: str, incident_id: str, request: RcaReque
     if state is None:
         store.rollback()
         return MISSING
-    if state in NOT_YET_INVESTIGATED:
+    if state == QUEUED:
         store.refresh_request(incident_id, request)
         store.commit()
         return QUEUED_OUTCOME
     if store.dispatched_recently(incident_id):
         store.commit()
         return DISPATCHED
-    # Alerts already waiting go first, and a new one joins them so a burst
-    # collapses into one investigation instead of trickling out one by one.
-    reason = REASON_BURST if store.has_queued() else budget_refusal(store.usage())
+    # Alerts already waiting go first: a new one takes its turn behind them, so
+    # the drain can start the most severe one rather than whichever came last.
+    reason = REASON_WAITING if store.has_queued() else budget_refusal(store.usage())
     if reason:
         store.queue(incident_id, reason, request)
         store.commit()
@@ -574,15 +458,15 @@ def dispatch_alert_rca(
 # --- Draining the queue -------------------------------------------------------------
 
 def drain_with_store(store) -> Dict[str, int]:
-    """Start the queued investigations the org's budget allows, one per settled source.
+    """Start queued RCAs, one per incident, while the org's budget allows.
 
     The budget is checked before the queue is read, so an org at capacity costs
-    one count query a minute. Only the chosen batch is locked and has its
-    requests loaded. A source whose start fails is skipped for the rest of the
-    pass, so it cannot hold back the others.
+    one count query a minute. Each start locks and loads only the next incident
+    (most severe, then oldest). An incident whose start fails is skipped for
+    the rest of the pass, so it cannot hold back the others.
     """
-    stats = {"dispatched": 0, "grouped": 0}
-    skipped_sources: set = set()
+    stats = {"dispatched": 0}
+    skipped: List[str] = []
     for _ in range(_MAX_DISPATCHES_PER_PASS):
         store.lock_org()
         if not store.has_queued():
@@ -594,45 +478,18 @@ def drain_with_store(store) -> Dict[str, int]:
             store.set_reason_all(reason)
             store.commit()
             break
-        now = store.now()
-        by_source: Dict[str, List[QueuedIncident]] = {}
-        for q in store.queued():
-            if q.source_type not in skipped_sources:
-                by_source.setdefault(q.source_type, []).append(q)
-        ready = [items for items in by_source.values() if is_settled(items, now)]
-        if not ready:
+        nxt = store.next_queued(skipped)
+        if nxt is None:
             store.commit()
             break
-        items = min(ready, key=lambda xs: min(q.queued_at for q in xs))
-        source = items[0].source_type
-        batch = store.load_batch(items[:MAX_GROUP_SIZE])
-        if not batch:
-            # Another drain holds them, or they changed since the read.
-            skipped_sources.add(source)
-            store.commit()
-            continue
-        leader = pick_leader(batch)
-        followers = [q for q in batch if q.id != leader.id]
-        store.mark_dispatched(leader.id, leader.request)
-        if followers:
-            store.mark_grouped([q.id for q in followers], leader.id)
+        store.mark_dispatched(nxt.id, nxt.request)
         store.commit()
-        outcome = _start_or_requeue(
-            store, leader.user_id, leader.id, leader.request,
-            prompt=grouped_prompt(leader.request, followers),
-            rail_text=grouped_rail_text(leader.request, followers),
-            grouped=bool(followers),
-        )
-        if outcome == DISPATCHED:
+        if _start_or_requeue(store, nxt.user_id, nxt.id, nxt.request) == DISPATCHED:
             stats["dispatched"] += 1
-            stats["grouped"] += len(followers)
-            logger.info(
-                "[RcaDispatch] Started queued RCA for incident %s covering %d grouped alert(s)",
-                sanitize(leader.id), len(followers),
-            )
-            _notify(leader.user_id, store.org_id, leader.id, leader.source_type)
+            logger.info("[RcaDispatch] Started queued RCA for incident %s", sanitize(nxt.id))
+            _notify(nxt.user_id, store.org_id, nxt.id, nxt.source_type)
         else:
-            skipped_sources.add(source)
+            skipped.append(nxt.id)
     return stats
 
 
@@ -647,7 +504,7 @@ def _one_user_per_org(cursor) -> List[str]:
 @celery_app.task(name="chat.background.drain_queued_rcas")
 def drain_queued_rcas() -> Dict[str, int]:
     """Start queued alert RCAs as budget frees up. Runs every minute."""
-    totals = {"dispatched": 0, "grouped": 0}
+    totals = {"dispatched": 0}
     try:
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
@@ -658,15 +515,13 @@ def drain_queued_rcas() -> Dict[str, int]:
                             continue
                         stats = drain_with_store(SqlStore(cursor, conn, org_id))
                         totals["dispatched"] += stats["dispatched"]
-                        totals["grouped"] += stats["grouped"]
                     except Exception:
                         conn.rollback()
                         logger.exception("[RcaDispatch:Drain] Drain failed for one org")
     except Exception:
         logger.exception("[RcaDispatch:Drain] Drain failed")
     if totals["dispatched"]:
-        logger.info("[RcaDispatch:Drain] Started %d queued RCA(s), grouping %d alert(s)",
-                    totals["dispatched"], totals["grouped"])
+        logger.info("[RcaDispatch:Drain] Started %d queued RCA(s)", totals["dispatched"])
     return totals
 
 
@@ -682,7 +537,7 @@ class RunRefused(Exception):
 
 
 def run_queued_investigation(incident_id: str, requested_by: str, org_id: str) -> Dict[str, Any]:
-    """Start a queued or grouped incident's own RCA now, at a person's request.
+    """Start a queued incident's RCA now, at a person's request.
 
     The person chose to spend it, so the budget does not hold it back; it still
     counts against the budget for the alerts that follow. Runs as the incident's
@@ -705,7 +560,7 @@ def run_queued_investigation(incident_id: str, requested_by: str, org_id: str) -
             else:
                 owner_id, aurora_status, raw = row
                 request = RcaRequest.from_db(raw)
-                if aurora_status not in NOT_YET_INVESTIGATED:
+                if aurora_status != QUEUED:
                     refusal = RunRefused("This incident is not waiting for an investigation")
                 elif request is None:
                     refusal = RunRefused("This incident has no investigation to run", 422)

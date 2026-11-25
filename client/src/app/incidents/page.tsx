@@ -70,8 +70,6 @@ const incidentsFetcher = async (key: string, signal: AbortSignal) => {
     recurrenceOf: inc.recurrenceOf ?? null,
     occurrenceTotal: inc.occurrenceTotal,
     queueReason: inc.queueReason ?? null,
-    groupedIntoIncidentId: inc.groupedIntoIncidentId ?? null,
-    groupedIntoTitle: inc.groupedIntoTitle,
   }));
 };
 
