@@ -10,6 +10,7 @@ interface GitHubCommitToolProps {
   repo?: string
   branch?: string
   defaultMessage?: string
+  disabled?: boolean
   onCommit?: (message: string) => Promise<void>
   onPush?: () => Promise<void>
   onClose?: () => void
@@ -19,6 +20,7 @@ export function GitHubCommitTool({
   repo = "user/repository",
   branch = "main",
   defaultMessage = "Update files",
+  disabled = false,
   onCommit,
   onPush,
   onClose,
@@ -28,16 +30,18 @@ export function GitHubCommitTool({
   const [isPushing, setIsPushing] = useState(false)
   const [isCommitted, setIsCommitted] = useState(false)
   const [isPushed, setIsPushed] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   const handleCommit = async () => {
     if (!commitMessage.trim()) return
 
     setIsCommitting(true)
+    setError(null)
     try {
       await onCommit?.(commitMessage)
       setIsCommitted(true)
-    } catch (error) {
-      console.error("Commit failed:", error)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Commit failed")
     } finally {
       setIsCommitting(false)
     }
@@ -83,13 +87,17 @@ export function GitHubCommitTool({
 
       {/* Commit Message Input */}
       <div className="flex-1 min-w-0">
+
         <Input
           value={commitMessage}
           onChange={(e) => setCommitMessage(e.target.value)}
           placeholder="Commit message..."
           className="bg-gray-50 dark:bg-gray-900/50 border-gray-300 dark:border-gray-700/50 text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-500 h-8 text-sm"
-          disabled={isCommitting || isPushing}
+          disabled={disabled || isCommitting || isPushing}
         />
+        {error && (
+          <p className="text-xs text-red-600 dark:text-red-400 mt-1">{error}</p>
+        )}
       </div>
 
       {/* Action Buttons */}
@@ -98,7 +106,7 @@ export function GitHubCommitTool({
           size="sm"
           variant="outline"
           onClick={handleCommit}
-          disabled={!commitMessage.trim() || isCommitting || isPushing || isCommitted}
+          disabled={disabled || !commitMessage.trim() || isCommitting || isPushing || isCommitted}
           className="bg-white dark:bg-gray-900/50 border-gray-300 dark:border-gray-700/50 text-gray-900 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800/50 h-8 px-3"
         >
           {isCommitting ? (
@@ -114,7 +122,7 @@ export function GitHubCommitTool({
         <Button
           size="sm"
           onClick={handlePush}
-          disabled={!isCommitted || isPushing || isPushed}
+          disabled={disabled || !isCommitted || isPushing || isPushed}
           className="bg-blue-600 hover:bg-blue-700 text-white h-8 px-3 shadow-sm"
         >
           {isPushing ? (
