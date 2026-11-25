@@ -125,7 +125,11 @@ async def _synthesis(state: State) -> dict:
             "messages": existing_messages + tool_messages + [AIMessage(content=fallback_text)],
         }
 
-    combined = "\n\n---\n\n".join(finding_bodies)
+    from chat.backend.agent.orchestrator.evidence_synthesis import (
+        combine_findings_with_graphs,
+    )
+
+    combined = combine_findings_with_graphs(finding_bodies, body_by_agent)
 
     try:
         if not ModelConfig.RCA_ORCHESTRATOR_MODEL:
