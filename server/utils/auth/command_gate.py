@@ -60,6 +60,7 @@ import contextvars
 import hashlib
 import logging
 import shlex
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import List, Optional, Union
 
@@ -73,6 +74,16 @@ _guardrails_approved_command: contextvars.ContextVar[Optional[str]] = contextvar
 )
 
 
+# Set while a saved detection check runs (services/detection/execution.py). The
+# LLM judge compares a command with the conversation that asked for it, and a
+# scheduled check has no conversation, so the judge ran when the check was saved
+# instead. Holds one command's hash: only that command skips the judge, and the
+# signature matcher and the org's command policy still run on it every time.
+_saved_check_command: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "_saved_check_command", default=None,
+)
+
+
 def _hash(command: str) -> str:
     return hashlib.sha256(command.encode("utf-8", errors="replace")).hexdigest()
 
@@ -80,6 +91,22 @@ def _hash(command: str) -> str:
 def guardrails_approved_hash() -> Optional[str]:
     """Accessor for ``terminal_run._check_guardrails`` to skip duplicate checks."""
     return _guardrails_approved_command.get()
+
+
+@contextmanager
+def judged_at_save(command: str):
+    """Run the block with the LLM judge skipped for exactly *command*.
+
+    For the detection runner only. The caller must have put *command* through
+    :func:`gate_command` when the check was saved, and must have confirmed it is
+    read-only immediately before entering. Nothing else is relaxed: a command
+    that differs by one byte is judged as usual.
+    """
+    token = _saved_check_command.set(_hash(command))
+    try:
+        yield
+    finally:
+        _saved_check_command.reset(token)
 
 
 def _shell_normalized(command: str) -> Optional[str]:
@@ -397,7 +424,10 @@ def _gate_impl(*, user_id: str, tool_name: str, command: str, cmd_hash: str) -> 
     # would have also fired.
     safety_decision = safety_evaluate(
         command, tool=tool_name, user_id=user_id, session_id=session_id,
-        skip_judge=bool(org_id and _read_only_allow_covers(org_id, command)),
+        skip_judge=(
+            bool(org_id and _read_only_allow_covers(org_id, command))
+            or _saved_check_command.get() == cmd_hash
+        ),
     )
     if not safety_decision.blocked:
         # The matcher just read the command as written. Read it once more as a

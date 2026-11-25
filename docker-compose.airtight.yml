@@ -72,6 +72,7 @@ x-common-env: &common-env
   GITHUB_APP_ID: ${GITHUB_APP_ID}
   GITHUB_APP_CLIENT_ID: ${GITHUB_APP_CLIENT_ID}
   NEXT_PUBLIC_GITHUB_APP_SLUG: ${NEXT_PUBLIC_GITHUB_APP_SLUG}
+  GITHUB_API_URL: ${GITHUB_API_URL:-}
   GITHUB_APP_WEBHOOK_URL: ${GITHUB_APP_WEBHOOK_URL}
   GITHUB_APP_SETUP_URL: ${GITHUB_APP_SETUP_URL}
   # Enable/disable Incident Prevention (PR change-gating). Set to false to turn off entirely.
@@ -132,6 +133,8 @@ x-common-env: &common-env
 
   # Root-cause recurrence detection (dedup layer 1): off | shadow | live
   RECURRENCE_DETECTION_MODE: ${RECURRENCE_DETECTION_MODE:-live}
+  DETECTION_CHECKS_ENABLED: ${DETECTION_CHECKS_ENABLED:-true}
+  DETECTION_CHAT_INTAKE_ENABLED: ${DETECTION_CHAT_INTAKE_ENABLED:-true}
   RECURRENCE_AGENT_TIMEOUT_SECONDS: ${RECURRENCE_AGENT_TIMEOUT_SECONDS:-120}
   RECURRENCE_AGENT_MODEL: ${RECURRENCE_AGENT_MODEL}
 
@@ -296,7 +299,7 @@ services:
       celery -A celery_config worker
         --loglevel=info
         --concurrency=${CELERY_CONCURRENCY:-4}
-        -Q high,celery
+        -Q high,celery,detection
     environment:
       <<: *common-env
       # GitHub App private key (wins over the secrets backend when set): only services that sign App JWTs get it.

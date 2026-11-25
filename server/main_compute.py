@@ -636,6 +636,9 @@ app.register_blueprint(findings_bp)
 from routes.actions import actions_bp
 app.register_blueprint(actions_bp, url_prefix="/api/actions")
 
+from routes.detection import detection_bp
+app.register_blueprint(detection_bp, url_prefix="/api/detection")
+
 from routes.postmortem_routes import postmortem_bp
 app.register_blueprint(postmortem_bp)
 

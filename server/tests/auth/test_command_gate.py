@@ -321,3 +321,81 @@ def test_overlap_sentence_does_not_double_an_existing_period():
     text = _policy_reason("Blocked.", "health-report")
     assert "Blocked. It also matches" in text
     assert "Blocked.. It also matches" not in text
+
+
+# ---------------------------------------------------------------------------
+# judged_at_save: scheduled detection checks skip the judge for one command
+# ---------------------------------------------------------------------------
+
+
+def _first_judge_decision(monkeypatch, command):
+    """Gate *command* and return whether the first safety pass skipped the judge."""
+    from types import SimpleNamespace
+    from utils.auth.command_policy import CommandVerdict
+
+    seen = []
+
+    def _safety(_command, **kwargs):
+        seen.append(kwargs["skip_judge"])
+        return SimpleNamespace(blocked=False)
+
+    monkeypatch.setattr("utils.security.command_safety.evaluate_command", _safety)
+    monkeypatch.setattr("utils.auth.stateless_auth.get_org_id_for_user", lambda _uid: "org-1")
+    monkeypatch.setattr("utils.auth.command_policy.read_only_allow_covers", lambda _org, _cmd: False)
+    monkeypatch.setattr(
+        "utils.auth.command_policy.evaluate_compound_command",
+        lambda _org, _cmd: CommandVerdict(allowed=True),
+    )
+    try:
+        decision = command_gate.gate_command(
+            user_id="uid-admin", tool_name="cloud_exec", command=command,
+        )
+        assert decision.allowed is True
+    finally:
+        _clear_approval()
+    return seen[0]
+
+
+def test_a_saved_check_skips_the_judge_for_its_own_command_only(monkeypatch):
+    saved = "kubectl get pods -n checkout --no-headers"
+    with command_gate.judged_at_save(saved):
+        assert _first_judge_decision(monkeypatch, saved) is True
+        # One byte of difference and the judge runs: the exemption cannot be
+        # stretched over a command nobody judged.
+        assert _first_judge_decision(monkeypatch, saved + " -o yaml") is False
+
+
+def test_the_exemption_ends_with_the_run(monkeypatch):
+    # Celery reuses worker threads: a later agent command on the same thread
+    # must not inherit a check's exemption.
+    saved = "kubectl get pods -n checkout --no-headers"
+    with command_gate.judged_at_save(saved):
+        pass
+    assert _first_judge_decision(monkeypatch, saved) is False
+
+
+def test_an_org_deny_rule_still_blocks_a_saved_check(monkeypatch):
+    from types import SimpleNamespace
+    from utils.auth.command_policy import CommandVerdict
+
+    monkeypatch.setattr(
+        "utils.security.command_safety.evaluate_command",
+        lambda _command, **_kwargs: SimpleNamespace(blocked=False),
+    )
+    monkeypatch.setattr("utils.auth.stateless_auth.get_org_id_for_user", lambda _uid: "org-1")
+    monkeypatch.setattr("utils.auth.command_policy.read_only_allow_covers", lambda _org, _cmd: False)
+    monkeypatch.setattr(
+        "utils.auth.command_policy.evaluate_compound_command",
+        lambda _org, _cmd: CommandVerdict(
+            allowed=False, deny_rule_id=1, rule_description="no kubectl in prod",
+        ),
+    )
+    saved = "kubectl get pods -n checkout --no-headers"
+    try:
+        with command_gate.judged_at_save(saved):
+            decision = command_gate.gate_command(
+                user_id="uid-admin", tool_name="cloud_exec", command=saved,
+            )
+        assert decision.allowed is False
+    finally:
+        _clear_approval()

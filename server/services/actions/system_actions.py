@@ -12,6 +12,10 @@ from typing import Optional
 from services.actions.postmortem_action import DEFAULT_POSTMORTEM_INSTRUCTIONS
 from services.actions.alert_gap_action import DEFAULT_ALERT_GAP_INSTRUCTIONS
 from services.actions.hpa_vpa_action import DEFAULT_HPA_VPA_INSTRUCTIONS
+from services.actions.check_review_action import (
+    DEFAULT_CHECK_REVIEW_INSTRUCTIONS,
+    SYSTEM_KEY as CHECK_REVIEW_KEY,
+)
 
 from utils.db.connection_pool import db_pool
 
@@ -113,6 +117,19 @@ SYSTEM_ACTIONS = [
         "enabled": False,
         "instructions": None,
     },
+    {
+        "system_key": CHECK_REVIEW_KEY,
+        "name": "Check Review",
+        "description": "Looks at the checks Aurora runs by itself that stopped being useful "
+                       "(fired on nothing repeatedly, or error on every run) and fixes or "
+                       "retires them. Runs only when there is one to look at.",
+        # No schedule: the detection runner starts it when a check is waiting.
+        "trigger_type": "manual",
+        "trigger_config": {},
+        # Saving a revised check is a write to Aurora's own store.
+        "mode": "agent",
+        "instructions": None,
+    },
 ]
 
 
@@ -121,6 +138,7 @@ _DEFAULT_INSTRUCTIONS = {
     "alert_gap_audit": DEFAULT_ALERT_GAP_INSTRUCTIONS,
     "hpa_vpa_rightsizing": DEFAULT_HPA_VPA_INSTRUCTIONS,
     "memory_consolidation": DEFAULT_MEMORY_CONSOLIDATION_INSTRUCTIONS,
+    CHECK_REVIEW_KEY: DEFAULT_CHECK_REVIEW_INSTRUCTIONS,
 }
 
 # Fail fast at import if a SYSTEM_ACTIONS entry has no instructions. Deferring
@@ -173,6 +191,16 @@ def seed_system_actions(org_id: str, user_id: Optional[str] = None) -> int:
                         (org_id, key),
                     )
                     if cur.fetchone():
+                        # A built-in nobody edited follows the code. One that was
+                        # edited (instructions != default_instructions) is left alone.
+                        cur.execute(
+                            """UPDATE actions
+                               SET instructions = %s, default_instructions = %s
+                               WHERE org_id = %s AND system_key = %s
+                                 AND instructions = default_instructions
+                                 AND default_instructions IS DISTINCT FROM %s""",
+                            (instructions, instructions, org_id, key, instructions),
+                        )
                         continue
 
                     enabled = action_def.get("enabled", True)

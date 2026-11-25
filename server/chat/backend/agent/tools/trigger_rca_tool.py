@@ -42,6 +42,8 @@ def trigger_rca(
     severity: str = "medium",
     user_id: str | None = None,
     session_id: str | None = None,
+    expected_org_id: str | None = None,
+    dedupe_key: str | None = None,
     **kwargs,
 ) -> str:
     """
@@ -68,6 +70,21 @@ def trigger_rca(
     issue_description = (issue_description or "").strip()
     if not issue_description:
         return json.dumps({"error": "issue_description must be non-empty."})
+
+    # expected_org_id and dedupe_key are for internal callers; neither is in the
+    # tool's argument schema, so an agent cannot set them.
+    #
+    # The incident is created in whatever org *user_id* resolves to here. A
+    # caller acting for a specific org (a detection check opening a case) names
+    # it, and the call is refused rather than landing that org's details in
+    # another one if the user has since moved.
+    from utils.auth.stateless_auth import get_org_id_for_user, set_rls_context
+
+    org_id = get_org_id_for_user(user_id)
+    if not org_id:
+        return json.dumps({"error": "Could not resolve organization for user."})
+    if expected_org_id and org_id != expected_org_id:
+        return json.dumps({"error": "User is not in the organization this incident is for."})
 
     try:
         from chat.backend.agent.tools.cloud_tools import get_state_context
@@ -106,9 +123,10 @@ def trigger_rca(
 
     now = datetime.now()
     timestamp_str = now.isoformat()
-    source_alert_id = zlib.crc32(
-        f"{timestamp_str}:{user_id}:{issue_description}".encode()
-    ) & 0x7FFFFFFF
+    # With a dedupe_key the id is stable, so a caller that retries after a crash
+    # gets the incident it already created instead of a second one.
+    identity = dedupe_key or f"{timestamp_str}:{user_id}:{issue_description}"
+    source_alert_id = zlib.crc32(identity.encode()) & 0x7FFFFFFF
 
     alert_metadata = {
         "user_description": issue_description,
@@ -117,12 +135,7 @@ def trigger_rca(
         "triggered_at": timestamp_str,
     }
 
-    from utils.auth.stateless_auth import get_org_id_for_user, set_rls_context
     from utils.db.connection_pool import db_pool
-
-    org_id = get_org_id_for_user(user_id)
-    if not org_id:
-        return json.dumps({"error": "Could not resolve organization for user."})
 
     incident_id = None
     try:
@@ -137,7 +150,7 @@ def trigger_rca(
                        ON CONFLICT (org_id, source_type, source_alert_id, user_id) DO UPDATE
                        SET updated_at = CURRENT_TIMESTAMP,
                            alert_metadata = EXCLUDED.alert_metadata
-                       RETURNING id""",
+                       RETURNING id, (xmax = 0) AS inserted, rca_celery_task_id""",
                     (
                         user_id, org_id, "chat", source_alert_id, incident_title,
                         service or "unknown", severity, "investigating",
@@ -146,7 +159,13 @@ def trigger_rca(
                 )
                 incident_row = cursor.fetchone()
                 incident_id = str(incident_row[0]) if incident_row else None
+                already_running = bool(
+                    dedupe_key and incident_row and not incident_row[1] and incident_row[2]
+                )
             conn.commit()
+        if already_running:
+            # A retry for an incident whose investigation was already started.
+            return json.dumps({"status": "ok", "incident_id": incident_id, "existing": True})
     except Exception as e:
         logger.exception(f"[TriggerRCA] Failed to create incident: {e}")
         return json.dumps({"error": "Failed to create incident due to an internal error."})

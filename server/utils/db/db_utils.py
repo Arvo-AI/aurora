@@ -1612,6 +1612,242 @@ def initialize_tables():
                     CREATE INDEX IF NOT EXISTS idx_action_runs_action ON action_runs(action_id);
                     CREATE INDEX IF NOT EXISTS idx_action_runs_status ON action_runs(org_id, status);
                 """,
+                # Detection memory (services/detection). A check is a read-only command
+                # plus an assertion on its output, run on a schedule with no model.
+                #
+                # state values (VARCHAR + documented set, as elsewhere in this module):
+                #   silent  -- runs and records; a failure reaches no one
+                #   proven  -- its record earned it the right to open a case
+                #   retired -- no longer runs; record and revisions are kept
+                #
+                # claimed_at marks a run in flight so overlapping scheduler ticks do
+                # not run the same check twice. TIMESTAMPTZ because these columns are
+                # compared against NOW() in SQL.
+                "detection_checks": """
+                    CREATE TABLE IF NOT EXISTS detection_checks (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        org_id VARCHAR(255) NOT NULL,
+                        created_by VARCHAR(255) NOT NULL,
+                        name VARCHAR(255) NOT NULL,
+                        state VARCHAR(16) NOT NULL DEFAULT 'silent',
+                        revision INTEGER NOT NULL DEFAULT 1,
+                        origin JSONB NOT NULL DEFAULT '{}'::jsonb,
+                        prediction TEXT NOT NULL,
+                        asset VARCHAR(512) NOT NULL,
+                        pattern VARCHAR(128) NOT NULL,
+                        provider VARCHAR(32) NOT NULL,
+                        target VARCHAR(255) NOT NULL DEFAULT '',
+                        command TEXT NOT NULL,
+                        assertion JSONB NOT NULL,
+                        interval_seconds INTEGER NOT NULL DEFAULT 900,
+                        window_seconds INTEGER NOT NULL DEFAULT 0,
+                        lag_seconds INTEGER NOT NULL DEFAULT 0,
+                        paused_at TIMESTAMPTZ,
+                        paused_reason TEXT,
+                        run_count INTEGER NOT NULL DEFAULT 0,
+                        fail_count INTEGER NOT NULL DEFAULT 0,
+                        error_count INTEGER NOT NULL DEFAULT 0,
+                        consecutive_errors INTEGER NOT NULL DEFAULT 0,
+                        hit_count INTEGER NOT NULL DEFAULT 0,
+                        false_fire_count INTEGER NOT NULL DEFAULT 0,
+                        consecutive_false_fires INTEGER NOT NULL DEFAULT 0,
+                        revision_false_fires INTEGER NOT NULL DEFAULT 0,
+                        last_status VARCHAR(16),
+                        last_observed TEXT,
+                        last_run_at TIMESTAMPTZ,
+                        claimed_at TIMESTAMPTZ,
+                        retired_reason TEXT,
+                        error_streak INTEGER NOT NULL DEFAULT 0,
+                        review_due_at TIMESTAMPTZ,
+                        review_reason TEXT,
+                        review_attempts INTEGER NOT NULL DEFAULT 0,
+                        vouched_by VARCHAR(255),
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    );
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_detection_checks_org_name
+                        ON detection_checks(org_id, name);
+                    CREATE INDEX IF NOT EXISTS idx_detection_checks_due
+                        ON detection_checks(org_id, last_run_at) WHERE state <> 'retired';
+                """,
+                # One row per version of a check's definition, with why it changed.
+                "detection_check_revisions": """
+                    CREATE TABLE IF NOT EXISTS detection_check_revisions (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        check_id UUID NOT NULL REFERENCES detection_checks(id) ON DELETE CASCADE,
+                        org_id VARCHAR(255) NOT NULL,
+                        created_by VARCHAR(255) NOT NULL,
+                        revision INTEGER NOT NULL,
+                        definition JSONB NOT NULL,
+                        reason TEXT,
+                        replay JSONB,
+                        source VARCHAR(50) NOT NULL DEFAULT 'agent',
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    );
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_detection_check_revisions_check
+                        ON detection_check_revisions(check_id, revision);
+                """,
+                # One row each time a check starts failing. A fire is graded later from
+                # what happened next (services/detection/record.py):
+                #   hit   -- an incident on the same asset was confirmed around it
+                #   false -- it cleared, or the window closed, with no such incident
+                # pattern and asset are copied from the check so a pattern's record
+                # can be summed across checks, including retired ones.
+                # incident_id is the case the fire opened or joined;
+                # evidence_incident_id is the incident that proved it right.
+                # nudge_* record a "worth a look" post (services/detection/attention.py).
+                "detection_check_fires": """
+                    CREATE TABLE IF NOT EXISTS detection_check_fires (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        check_id UUID NOT NULL REFERENCES detection_checks(id) ON DELETE CASCADE,
+                        org_id VARCHAR(255) NOT NULL,
+                        revision INTEGER NOT NULL,
+                        pattern VARCHAR(128) NOT NULL,
+                        asset VARCHAR(512) NOT NULL,
+                        observed TEXT,
+                        fired_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        cleared_at TIMESTAMPTZ,
+                        outcome VARCHAR(16),
+                        graded_at TIMESTAMPTZ,
+                        incident_id UUID,
+                        evidence_incident_id UUID,
+                        case_claimed_at TIMESTAMPTZ,
+                        opened_incident BOOLEAN NOT NULL DEFAULT FALSE,
+                        nudged_at TIMESTAMPTZ,
+                        nudge_channel VARCHAR(64),
+                        nudge_ts VARCHAR(64),
+                        nudge_clear_noted BOOLEAN NOT NULL DEFAULT FALSE,
+                        nudge_clear_attempts INTEGER NOT NULL DEFAULT 0,
+                        replayed BOOLEAN NOT NULL DEFAULT FALSE
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_detection_check_fires_check
+                        ON detection_check_fires(check_id, fired_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_detection_check_fires_ungraded
+                        ON detection_check_fires(org_id, fired_at) WHERE outcome IS NULL;
+                    CREATE INDEX IF NOT EXISTS idx_detection_check_fires_pattern
+                        ON detection_check_fires(org_id, pattern) WHERE outcome IS NOT NULL;
+                """,
+                # Problem reports Aurora read in chat (services/detection/chat_signals.py).
+                # claim is the one-line statement Aurora read out of the conversation;
+                # the messages and their authors are not stored. said_at is when the
+                # first of them was said. status says how the report ended.
+                "detection_chat_signals": """
+                    CREATE TABLE IF NOT EXISTS detection_chat_signals (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        org_id VARCHAR(255) NOT NULL,
+                        source VARCHAR(20) NOT NULL DEFAULT 'slack',
+                        channel_id VARCHAR(64) NOT NULL,
+                        message_ts VARCHAR(64) NOT NULL,
+                        thread_ts VARCHAR(64),
+                        message_count INTEGER NOT NULL DEFAULT 1,
+                        said_at TIMESTAMPTZ NOT NULL,
+                        kind VARCHAR(16) NOT NULL DEFAULT 'problem',
+                        asset VARCHAR(512),
+                        claim TEXT NOT NULL,
+                        status VARCHAR(16) NOT NULL DEFAULT 'new',
+                        status_detail TEXT,
+                        severity VARCHAR(16),
+                        merged_into UUID,
+                        session_id VARCHAR(64),
+                        confirmed_by VARCHAR(255),
+                        verify_started_at TIMESTAMPTZ,
+                        incident_id UUID,
+                        reply TEXT,
+                        reply_ts VARCHAR(64),
+                        replied_at TIMESTAMPTZ,
+                        pointed_at TIMESTAMPTZ,
+                        related_to UUID,
+                        reply_checks INTEGER NOT NULL DEFAULT 0,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    );
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_detection_chat_signals_message
+                        ON detection_chat_signals(org_id, channel_id, message_ts);
+                    CREATE INDEX IF NOT EXISTS idx_detection_chat_signals_asset
+                        ON detection_chat_signals(org_id, lower(asset), said_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_detection_chat_signals_status
+                        ON detection_chat_signals(org_id, status, said_at);
+                """,
+                # One row per channel Aurora reads or has been given a level for:
+                # the level its line in the Slack memory gives it (NULL = the
+                # slider's), how far it has been read, and whether a message just
+                # arrived. last_ts is NULL until the channel's first turn.
+                "detection_chat_cursors": """
+                    CREATE TABLE IF NOT EXISTS detection_chat_cursors (
+                        org_id VARCHAR(255) NOT NULL,
+                        channel_id VARCHAR(64) NOT NULL,
+                        last_ts VARCHAR(64),
+                        level VARCHAR(8),
+                        pending_since TIMESTAMPTZ,
+                        failed_attempts INTEGER NOT NULL DEFAULT 0,
+                        claimed_at TIMESTAMPTZ,
+                        updated_at TIMESTAMPTZ,
+                        threads JSONB NOT NULL DEFAULT '{}'::jsonb,
+                        PRIMARY KEY (org_id, channel_id)
+                    );
+                """,
+                # One row per model call over a channel: what was read, and what the
+                # per-org daily limit counts.
+                "detection_chat_reads": """
+                    CREATE TABLE IF NOT EXISTS detection_chat_reads (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        org_id VARCHAR(255) NOT NULL,
+                        channel_id VARCHAR(64) NOT NULL,
+                        messages INTEGER NOT NULL DEFAULT 0,
+                        reports INTEGER NOT NULL DEFAULT 0,
+                        ok BOOLEAN NOT NULL DEFAULT TRUE,
+                        read_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_detection_chat_reads_org
+                        ON detection_chat_reads(org_id, read_at DESC);
+                """,
+                # One row while Aurora cannot run checks against a provider, so the
+                # "I have lost access" message is sent once per outage, not per check.
+                # One row per replay tried for an incident (services/detection/replay.py):
+                # caps how often a check can be reshaped against the same incident.
+                "detection_replay_attempts": """
+                    CREATE TABLE IF NOT EXISTS detection_replay_attempts (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        org_id VARCHAR(255) NOT NULL,
+                        incident_id UUID NOT NULL,
+                        check_name VARCHAR(255) NOT NULL,
+                        refused BOOLEAN NOT NULL DEFAULT FALSE,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_detection_replay_attempts_incident
+                        ON detection_replay_attempts(org_id, incident_id, created_at DESC);
+                """,
+                "detection_access_alerts": """
+                    CREATE TABLE IF NOT EXISTS detection_access_alerts (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        org_id VARCHAR(255) NOT NULL,
+                        provider VARCHAR(32) NOT NULL,
+                        detail TEXT,
+                        delivered BOOLEAN NOT NULL DEFAULT FALSE,
+                        alerted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        resolved_at TIMESTAMPTZ
+                    );
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_detection_access_alerts_open
+                        ON detection_access_alerts(org_id, provider) WHERE resolved_at IS NULL;
+                """,
+                # Runs worth reading later: failures, errors and changes of status.
+                # A passing run that follows a passing run only moves the counters
+                # on detection_checks.
+                "detection_check_runs": """
+                    CREATE TABLE IF NOT EXISTS detection_check_runs (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        check_id UUID NOT NULL REFERENCES detection_checks(id) ON DELETE CASCADE,
+                        org_id VARCHAR(255) NOT NULL,
+                        revision INTEGER NOT NULL,
+                        status VARCHAR(16) NOT NULL,
+                        observed TEXT,
+                        detail TEXT,
+                        duration_ms INTEGER,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_detection_check_runs_check
+                        ON detection_check_runs(check_id, created_at DESC);
+                """,
                 # Right-sizing recommendations proposed by the hpa_vpa_rightsizing action.
                 # One live row per (org, workload) while a PR is open; dismissal starts a
                 # cooldown so the action does not re-propose a change a human rejected.
@@ -1767,7 +2003,110 @@ def initialize_tables():
             rls_tables.append("artifact_versions")
             rls_tables.append("hpa_vpa_recommendations")
             rls_tables.append("recurrence_verdicts")
+            rls_tables.append("detection_checks")
+            rls_tables.append("detection_check_revisions")
+            rls_tables.append("detection_check_runs")
+            rls_tables.append("detection_check_fires")
+            rls_tables.append("detection_access_alerts")
+            rls_tables.append("detection_chat_signals")
+            rls_tables.append("detection_chat_cursors")
+            rls_tables.append("detection_chat_reads")
+            rls_tables.append("detection_replay_attempts")
 
+
+            # Migration: columns added to the detection tables after they first
+            # shipped. On a new install the tables do not exist yet and CREATE
+            # TABLE includes these columns.
+            try:
+                cursor.execute("""
+                    ALTER TABLE detection_check_fires
+                    ADD COLUMN IF NOT EXISTS case_claimed_at TIMESTAMPTZ;
+                    ALTER TABLE detection_access_alerts
+                    ADD COLUMN IF NOT EXISTS delivered BOOLEAN NOT NULL DEFAULT FALSE;
+                    ALTER TABLE detection_checks
+                    ADD COLUMN IF NOT EXISTS error_streak INTEGER NOT NULL DEFAULT 0,
+                    ADD COLUMN IF NOT EXISTS review_due_at TIMESTAMPTZ,
+                    ADD COLUMN IF NOT EXISTS review_reason TEXT,
+                    ADD COLUMN IF NOT EXISTS review_attempts INTEGER NOT NULL DEFAULT 0,
+                    ADD COLUMN IF NOT EXISTS vouched_by VARCHAR(255);
+                """)
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error adding columns to detection tables: {e}")
+                conn.rollback()
+
+            # Migration: "worth a look" posts on detection fires. The table may not
+            # exist yet (new install); CREATE TABLE includes the columns.
+            try:
+                cursor.execute("""
+                    ALTER TABLE detection_check_fires
+                    ADD COLUMN IF NOT EXISTS nudged_at TIMESTAMPTZ,
+                    ADD COLUMN IF NOT EXISTS nudge_channel VARCHAR(64),
+                    ADD COLUMN IF NOT EXISTS nudge_ts VARCHAR(64),
+                    ADD COLUMN IF NOT EXISTS nudge_clear_noted BOOLEAN NOT NULL DEFAULT FALSE,
+                    ADD COLUMN IF NOT EXISTS nudge_clear_attempts INTEGER NOT NULL DEFAULT 0;
+                """)
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error adding nudge columns to detection_check_fires: {e}")
+                conn.rollback()
+
+            # Migration: windowed checks and replay (services/detection/window.py,
+            # replay.py). Same note: on a new install CREATE TABLE has these.
+            try:
+                cursor.execute("""
+                    ALTER TABLE detection_checks
+                    ADD COLUMN IF NOT EXISTS window_seconds INTEGER NOT NULL DEFAULT 0,
+                    ADD COLUMN IF NOT EXISTS lag_seconds INTEGER NOT NULL DEFAULT 0,
+                    ADD COLUMN IF NOT EXISTS paused_at TIMESTAMPTZ,
+                    ADD COLUMN IF NOT EXISTS paused_reason TEXT;
+                    ALTER TABLE detection_check_revisions
+                    ADD COLUMN IF NOT EXISTS replay JSONB;
+                    ALTER TABLE detection_check_fires
+                    ADD COLUMN IF NOT EXISTS replayed BOOLEAN NOT NULL DEFAULT FALSE;
+                """)
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error adding replay columns to detection tables: {e}")
+                conn.rollback()
+
+            # Migration: the chat tables as they are now (services/detection/
+            # chat_signals.py), for a database that ran an earlier shape of them.
+            # CREATE TABLE below then finds the columns its indexes name.
+            try:
+                cursor.execute("""
+                    ALTER TABLE detection_chat_signals
+                    ADD COLUMN IF NOT EXISTS message_count INTEGER NOT NULL DEFAULT 1,
+                    ADD COLUMN IF NOT EXISTS status VARCHAR(16) NOT NULL DEFAULT 'new',
+                    ADD COLUMN IF NOT EXISTS status_detail TEXT,
+                    ADD COLUMN IF NOT EXISTS severity VARCHAR(16),
+                    ADD COLUMN IF NOT EXISTS merged_into UUID,
+                    ADD COLUMN IF NOT EXISTS session_id VARCHAR(64),
+                    ADD COLUMN IF NOT EXISTS confirmed_by VARCHAR(255),
+                    ADD COLUMN IF NOT EXISTS verify_started_at TIMESTAMPTZ,
+                    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    ADD COLUMN IF NOT EXISTS thread_ts VARCHAR(64),
+                    ADD COLUMN IF NOT EXISTS kind VARCHAR(16) NOT NULL DEFAULT 'problem',
+                    ADD COLUMN IF NOT EXISTS reply TEXT,
+                    ADD COLUMN IF NOT EXISTS reply_ts VARCHAR(64),
+                    ADD COLUMN IF NOT EXISTS replied_at TIMESTAMPTZ,
+                    ADD COLUMN IF NOT EXISTS pointed_at TIMESTAMPTZ,
+                    ADD COLUMN IF NOT EXISTS related_to UUID,
+                    ADD COLUMN IF NOT EXISTS reply_checks INTEGER NOT NULL DEFAULT 0;
+                    ALTER TABLE detection_chat_cursors
+                    ALTER COLUMN last_ts DROP NOT NULL,
+                    ALTER COLUMN updated_at DROP NOT NULL,
+                    ALTER COLUMN updated_at DROP DEFAULT,
+                    ADD COLUMN IF NOT EXISTS level VARCHAR(8),
+                    ADD COLUMN IF NOT EXISTS pending_since TIMESTAMPTZ,
+                    ADD COLUMN IF NOT EXISTS failed_attempts INTEGER NOT NULL DEFAULT 0,
+                    ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ,
+                    ADD COLUMN IF NOT EXISTS threads JSONB NOT NULL DEFAULT '{}'::jsonb;
+                """)
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error updating the detection chat tables: {e}")
+                conn.rollback()
 
             # Migration: Add rca_celery_task_id column to incidents table if it doesn't exist
             try:
@@ -3375,6 +3714,9 @@ def initialize_tables():
                 cursor.execute("""
                     ALTER TABLE users ADD COLUMN IF NOT EXISTS github_user_id BIGINT;
                     ALTER TABLE users ADD COLUMN IF NOT EXISTS github_login VARCHAR(255);
+                    -- Host that issued github_user_id (NULL = github.com, from before
+                    -- enterprise hosts were supported). IDs are unique per host only.
+                    ALTER TABLE users ADD COLUMN IF NOT EXISTS github_host VARCHAR(255);
                     ALTER TABLE users ADD COLUMN IF NOT EXISTS signup_handoff_hash VARCHAR(64);
                     ALTER TABLE users ADD COLUMN IF NOT EXISTS signup_handoff_expires_at TIMESTAMP;
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_users_github_user_id
