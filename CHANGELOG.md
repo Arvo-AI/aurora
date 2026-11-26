@@ -18,8 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   automatically when budget frees up, each with its own investigation, most
   severe first and then oldest first. Any queued incident can be started by
   hand with "Run investigation now". The stale-investigation sweep no longer
-  fails incidents that are deliberately waiting. Actions, team routing and other background runs keep
-  their own limit and no longer use up the alert budget.
+  fails incidents that are deliberately waiting. Actions, team routing and
+  other background runs keep their own limit and no longer use up the alert
+  budget.
+- Investigations: that per-user limit for manual RCAs, actions and other
+  non-alert background runs is now 20 per 5 minutes instead of 5. Set
+  `BACKGROUND_CHAT_RATE_LIMIT_MAX` to change it (clamped to 1–1000).
 
 ## [1.5.27] - 2026-11-25
 
