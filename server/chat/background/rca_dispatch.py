@@ -68,6 +68,10 @@ _SEVERITY_ORDER_SQL = (
     "CASE lower(COALESCE(severity, '')) WHEN 'critical' THEN 0 WHEN 'high' THEN 1 "
     "WHEN 'medium' THEN 2 WHEN 'low' THEN 3 WHEN 'info' THEN 4 ELSE 5 END"
 )
+# Which queued incidents the drain starts: any not merged away. A re-delivered
+# alert can queue an incident that is already 'analyzed' (a new RCA for an old
+# incident); it drains like any other, so the queue and the drain share this.
+_DRAINABLE_SQL = "status != 'merged'"
 
 DISPATCHED = "dispatched"
 QUEUED_OUTCOME = "queued"
@@ -208,7 +212,7 @@ class SqlStore:
 
     def has_queued(self) -> bool:
         self.cursor.execute(
-            "SELECT 1 FROM incidents WHERE org_id = %s AND aurora_status = %s AND status = 'investigating' LIMIT 1",
+            "SELECT 1 FROM incidents WHERE org_id = %s AND aurora_status = %s AND " + _DRAINABLE_SQL + " LIMIT 1",
             (self.org_id, QUEUED),
         )
         return self.cursor.fetchone() is not None
@@ -270,7 +274,7 @@ class SqlStore:
             f"""
             SELECT id, user_id, source_type, severity, rca_queued_at, rca_queued_request
             FROM incidents
-            WHERE org_id = %s AND aurora_status = %s AND status = 'investigating'
+            WHERE org_id = %s AND aurora_status = %s AND {_DRAINABLE_SQL}
               AND rca_queued_request IS NOT NULL
               AND NOT (id = ANY(%s::uuid[]))
             ORDER BY {_SEVERITY_ORDER_SQL}, rca_queued_at, id

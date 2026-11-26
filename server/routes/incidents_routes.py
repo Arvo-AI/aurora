@@ -284,9 +284,12 @@ def _format_incident_response(
         result["recurrenceOfTitle"] = recurrence_of_title
 
     # Not investigated yet: waiting for the org's RCA budget
-    # (chat/background/rca_dispatch.py).
-    if len(queue_fields) == 1:
-        result["queueReason"] = queue_fields[0]
+    # (chat/background/rca_dispatch.py). rcaDispatchedAt is when the current
+    # RCA was started, so the client's stall check does not count queue time.
+    if len(queue_fields) == 2:
+        queue_reason, rca_dispatched_at = queue_fields
+        result["queueReason"] = queue_reason
+        result["rcaDispatchedAt"] = iso_utc(rca_dispatched_at)
 
     return result
 
@@ -301,7 +304,7 @@ _INCIDENT_COLUMNS = """
         i.alert_metadata, i.correlated_alert_count, i.affected_services,
         i.merged_into_incident_id, target.alert_title AS merged_into_title,
         i.recurrence_of_incident_id, anchor.alert_title AS recurrence_of_title,
-        i.rca_queue_reason
+        i.rca_queue_reason, i.rca_dispatched_at
 """
 _INCIDENT_JOINS = """
     LEFT JOIN incidents target ON i.merged_into_incident_id = target.id

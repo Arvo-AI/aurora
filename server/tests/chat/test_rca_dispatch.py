@@ -82,7 +82,7 @@ class FakeStore:
         )
 
     def has_queued(self):
-        return bool(self.by_status(rd.QUEUED))
+        return any(i["aurora_status"] == rd.QUEUED and i["status"] != "merged" for i in self.incidents.values())
 
     def queue(self, incident_id, reason, request):
         inc = self.incidents[incident_id]
@@ -109,7 +109,7 @@ class FakeStore:
                 queued_at=inc["queued_at"], request=inc["request"],
             )
             for i, inc in self.incidents.items()
-            if inc["aurora_status"] == rd.QUEUED and inc["status"] == "investigating"
+            if inc["aurora_status"] == rd.QUEUED and inc["status"] != "merged"
             and inc["request"] and i not in skip_ids
         ]
         return min(rows, key=rd.drain_order) if rows else None
@@ -300,6 +300,33 @@ def test_an_incident_that_fails_to_start_does_not_hold_back_the_others(monkeypat
     assert rd.drain_with_store(store)["dispatched"] == 1
     assert store.incidents["fine"]["aurora_status"] == "running"
     assert store.by_status(rd.QUEUED) == ["broken"]
+
+
+def test_an_analyzed_incident_queued_by_a_redelivered_alert_still_drains(store, started):
+    for n in range(rd.MAX_PER_WINDOW):
+        _alert(store, f"inc-{n}")
+    # An alert re-delivered to an incident whose earlier RCA finished.
+    store.add("old")
+    store.incidents["old"]["status"] = "analyzed"
+    assert rd.dispatch_with_store(store, USER, "old", _request("old")) == rd.QUEUED_OUTCOME
+    _finish_old_rcas(store, minutes=0)
+    store.clock = T0 + timedelta(minutes=10)
+
+    rd.drain_with_store(store)
+
+    assert store.incidents["old"]["aurora_status"] == "running"
+
+
+def test_the_queue_and_the_drain_share_one_predicate():
+    cursor = MagicMock()
+    cursor.fetchone.return_value = None
+    sql_store = rd.SqlStore(cursor, MagicMock(), ORG)
+    sql_store.has_queued()
+    sql_store.next_queued([])
+    for call in cursor.execute.call_args_list:
+        sql = " ".join(call[0][0].split())
+        assert "status != 'merged'" in sql
+        assert "status = 'investigating'" not in sql
 
 
 def test_a_queued_alert_that_fires_again_keeps_its_place(store, started):
@@ -620,7 +647,9 @@ def test_the_never_started_cleanup_rechecks_that_the_incident_was_not_queued_sin
     cursor, _ = _sweep(monkeypatch, {NEVER_STARTED: [("inc-1", cur_aurora, None, None)]})
     sql, params = _update_for(cursor, fragment)
     assert "AND COALESCE(aurora_status, 'idle') != 'queued'" in sql
-    assert params == ("inc-1",)
+    # A reservation made since the SELECT moved updated_at, so it no longer matches.
+    assert "AND updated_at < %s" in sql
+    assert params == ("inc-1", DB_NOW - timedelta(minutes=20))
 
 
 def test_the_reservation_recovery_leaves_a_renewed_reservation_alone(monkeypatch):

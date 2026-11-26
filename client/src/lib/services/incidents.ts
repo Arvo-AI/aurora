@@ -270,6 +270,8 @@ export interface Incident {
   continuationsLeft?: number;
   // Set while the RCA has not run yet (auroraStatus 'queued').
   queueReason?: QueueReason | null;
+  // When the current RCA was started by the alert dispatcher; the stall check counts from here.
+  rcaDispatchedAt?: string;
   tokenUsage?: {
     requestCount: number;
     totalInputTokens: number;
@@ -320,6 +322,7 @@ export const incidentsService = {
         recurrenceOf: inc.recurrenceOf ?? null,
         occurrenceTotal: inc.occurrenceTotal,
         queueReason: inc.queueReason ?? null,
+        rcaDispatchedAt: inc.rcaDispatchedAt ?? undefined,
         postMortem: inc.postMortem ?? undefined,
         startedAt: inc.startedAt,
         analyzedAt: inc.analyzedAt,
@@ -427,6 +430,7 @@ export const incidentsService = {
         unfinishedReason: inc.unfinishedReason ?? null,
         continuationsLeft: inc.continuationsLeft ?? 0,
         queueReason: inc.queueReason ?? null,
+        rcaDispatchedAt: inc.rcaDispatchedAt ?? undefined,
         tokenUsage: inc.tokenUsage || null,
       };
     } catch (error) {

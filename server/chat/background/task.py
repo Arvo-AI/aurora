@@ -3270,17 +3270,19 @@ def _sweep_stale_background_chats() -> Dict[str, Any]:
                             )
                             conn.commit()
                             continue
-                        # Both UPDATEs re-check that the incident was not queued
-                        # since the SELECT: a queued request must not be dropped.
+                        # Both UPDATEs repeat the SELECT's tests: the incident was
+                        # not queued since (a queued request must not be dropped),
+                        # and is still stale (a reservation made since moved
+                        # updated_at, and keeps its state).
                         if cur_aurora in ('complete', 'error'):
                             cursor.execute(
-                                "UPDATE incidents SET status = 'analyzed', analyzed_at = COALESCE(analyzed_at, NOW()), updated_at = NOW() WHERE id = %s AND status = 'investigating' AND COALESCE(aurora_status, 'idle') != 'queued' RETURNING id",
-                                (inc_id,)
+                                "UPDATE incidents SET status = 'analyzed', analyzed_at = COALESCE(analyzed_at, NOW()), updated_at = NOW() WHERE id = %s AND status = 'investigating' AND updated_at < %s AND COALESCE(aurora_status, 'idle') != 'queued' RETURNING id",
+                                (inc_id, stale_threshold)
                             )
                         else:
                             cursor.execute(
-                                "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', analyzed_at = COALESCE(analyzed_at, NOW()), rca_celery_task_id = NULL, updated_at = NOW() WHERE id = %s AND status != 'merged' AND COALESCE(aurora_status, 'idle') != 'queued' RETURNING id",
-                                (inc_id,)
+                                "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', analyzed_at = COALESCE(analyzed_at, NOW()), rca_celery_task_id = NULL, updated_at = NOW() WHERE id = %s AND status != 'merged' AND updated_at < %s AND COALESCE(aurora_status, 'idle') != 'queued' RETURNING id",
+                                (inc_id, stale_threshold)
                             )
                         if cursor.fetchone():
                             if cur_aurora not in ('complete', 'error'):
