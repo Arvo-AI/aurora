@@ -3231,6 +3231,23 @@ def _sweep_stale_background_chats() -> Dict[str, Any]:
                             "Investigation worker died unexpectedly", rca_run_task_id,
                         )
 
+                    # --- 3a. Unpublished reservations on analyzed incidents ---
+                    # A re-delivered alert can queue (and the drain reserve) an
+                    # incident that is already 'analyzed'. Section 3 below only
+                    # looks at 'investigating' rows, so a reservation whose worker
+                    # died before publishing is requeued here, with the same
+                    # reservation checks and stale cutoff. Nothing else about
+                    # analyzed incidents is touched.
+                    cursor.execute(
+                        "UPDATE incidents SET aurora_status = 'queued', rca_queue_reason = 'dispatch_failed', "
+                        "rca_queued_at = COALESCE(rca_queued_at, NOW() AT TIME ZONE 'UTC'), rca_dispatched_at = NULL, updated_at = NOW() "
+                        "WHERE user_id = %s AND status = 'analyzed' AND updated_at < %s "
+                        "AND COALESCE(aurora_status, 'idle') = 'idle' AND rca_celery_task_id IS NULL "
+                        "AND rca_run_task_id IS NULL AND rca_queued_request IS NOT NULL",
+                        (uid, stale_threshold)
+                    )
+                    conn.commit()
+
                     # --- 3. Stuck investigating (RCA done or orphaned, no active session) ---
                     # An incident deliberately waiting for budget (queued) was
                     # never started, so it cannot have been lost: it is skipped here.
@@ -3262,7 +3279,7 @@ def _sweep_stale_background_chats() -> Dict[str, Any]:
                             # renewed since then (updated_at moved) is left alone.
                             cursor.execute(
                                 "UPDATE incidents SET aurora_status = 'queued', rca_queue_reason = 'dispatch_failed', "
-                                "rca_queued_at = COALESCE(rca_queued_at, NOW()), rca_dispatched_at = NULL, updated_at = NOW() "
+                                "rca_queued_at = COALESCE(rca_queued_at, NOW() AT TIME ZONE 'UTC'), rca_dispatched_at = NULL, updated_at = NOW() "
                                 "WHERE id = %s AND status = 'investigating' AND updated_at < %s "
                                 "AND COALESCE(aurora_status, 'idle') = 'idle' AND rca_celery_task_id IS NULL "
                                 "AND rca_run_task_id IS NULL AND rca_queued_request IS NOT NULL",

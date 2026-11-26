@@ -480,7 +480,7 @@ def test_the_sql_budget_counts_running_rcas_without_a_dispatch_timestamp():
     assert "(aurora_status IN ('running', 'summarizing') AND updated_at >" in sql
     assert "OR aurora_status IN ('running', 'summarizing'))" in sql
     # ...while the rate counts only alert dispatches.
-    assert "COUNT(*) FILTER (WHERE rca_dispatched_at > LOCALTIMESTAMP - make_interval(secs => %s))" in sql
+    assert "COUNT(*) FILTER (WHERE rca_dispatched_at > (NOW() AT TIME ZONE 'UTC') - make_interval(secs => %s))" in sql
 
 
 def test_the_sql_drain_takes_the_most_severe_then_oldest_incident():
@@ -630,7 +630,7 @@ def test_the_sweep_requeues_a_reserved_start_that_was_never_published(monkeypatc
     })
     assert _errored(cursor) == []
     assert reported == []
-    requeue = next(e for e in cursor.executed if "rca_queue_reason = 'dispatch_failed'" in e[0])
+    requeue = next(e for e in cursor.executed if "WHERE id = %s AND status = 'investigating' AND updated_at" in e[0])
     assert requeue[1][0] == "reserved-inc"
 
 
@@ -654,7 +654,7 @@ def test_the_never_started_cleanup_rechecks_that_the_incident_was_not_queued_sin
 
 def test_the_reservation_recovery_leaves_a_renewed_reservation_alone(monkeypatch):
     cursor, _ = _sweep(monkeypatch, {NEVER_STARTED: [("reserved-inc", "idle", None, None, True)]})
-    sql, params = _update_for(cursor, "rca_queue_reason = 'dispatch_failed'")
+    sql, params = _update_for(cursor, "WHERE id = %s AND status = 'investigating' AND updated_at")
     # A renewal moves updated_at past the threshold, so it no longer matches.
     assert "AND updated_at < %s" in sql
     assert "AND COALESCE(aurora_status, 'idle') = 'idle'" in sql
@@ -708,3 +708,32 @@ def test_no_failure_is_reported_when_the_cleanup_update_skips_the_incident(monke
     cursor, reported = _sweep(monkeypatch, {NEVER_STARTED: [("inc-1", "idle", None, None)]})
     assert _update_for(cursor, "SET aurora_status = 'error'")
     assert reported == []
+
+
+def test_the_sweep_requeues_an_unpublished_reservation_on_an_analyzed_incident(monkeypatch):
+    cursor, reported = _sweep(monkeypatch, {})
+    sql, params = _update_for(cursor, "WHERE user_id = %s AND status = 'analyzed'")
+    assert "SET aurora_status = 'queued', rca_queue_reason = 'dispatch_failed'" in sql
+    # Same reservation checks and stale cutoff as the investigating branch.
+    assert "AND updated_at < %s" in sql
+    assert "AND COALESCE(aurora_status, 'idle') = 'idle' AND rca_celery_task_id IS NULL" in sql
+    assert "AND rca_run_task_id IS NULL AND rca_queued_request IS NOT NULL" in sql
+    assert params == ("u1", DB_NOW - timedelta(minutes=20))
+    assert reported == []
+
+
+def test_rca_timestamps_are_written_and_compared_in_utc():
+    cursor = MagicMock()
+    cursor.fetchone.return_value = (0, 0, 0)
+    sql_store = rd.SqlStore(cursor, MagicMock(), ORG)
+    sql_store.mark_dispatched("inc-1")
+    sql_store.queue("inc-1", rd.REASON_RATE, None)
+    sql_store.dispatched_recently("inc-1")
+    sql_store.usage()
+    statements = [" ".join(c[0][0].split()) for c in cursor.execute.call_args_list]
+    assert "rca_dispatched_at = (NOW() AT TIME ZONE 'UTC')" in statements[0]
+    assert "COALESCE(rca_queued_at, NOW() AT TIME ZONE 'UTC')" in statements[1]
+    for sql in statements[2:]:
+        # The API returns rca_dispatched_at as UTC; no comparison may use the session clock.
+        assert "rca_dispatched_at > LOCALTIMESTAMP" not in sql
+        assert "rca_dispatched_at > (NOW() AT TIME ZONE 'UTC')" in sql

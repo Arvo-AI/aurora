@@ -186,7 +186,7 @@ class SqlStore:
     def dispatched_recently(self, incident_id: str) -> bool:
         """An RCA was started for this incident moments ago (a retried delivery)."""
         self.cursor.execute(
-            "SELECT 1 FROM incidents WHERE id = %s AND rca_dispatched_at > LOCALTIMESTAMP - make_interval(secs => %s)",
+            "SELECT 1 FROM incidents WHERE id = %s AND rca_dispatched_at > (NOW() AT TIME ZONE 'UTC') - make_interval(secs => %s)",
             (incident_id, _REDISPATCH_GUARD_SECONDS),
         )
         return self.cursor.fetchone() is not None
@@ -195,17 +195,17 @@ class SqlStore:
         self.cursor.execute(
             """
             SELECT
-                COUNT(*) FILTER (WHERE rca_dispatched_at > LOCALTIMESTAMP - make_interval(secs => %s)),
-                COUNT(*) FILTER (WHERE rca_dispatched_at > LOCALTIMESTAMP - interval '1 hour'),
+                COUNT(*) FILTER (WHERE rca_dispatched_at > (NOW() AT TIME ZONE 'UTC') - make_interval(secs => %s)),
+                COUNT(*) FILTER (WHERE rca_dispatched_at > (NOW() AT TIME ZONE 'UTC') - interval '1 hour'),
                 COUNT(*) FILTER (WHERE status != 'merged' AND (
                     (aurora_status IN ('running', 'summarizing')
                      AND updated_at > LOCALTIMESTAMP - make_interval(hours => %s))
                     OR (COALESCE(aurora_status, 'idle') = 'idle'
-                        AND rca_dispatched_at > LOCALTIMESTAMP - make_interval(mins => %s))
+                        AND rca_dispatched_at > (NOW() AT TIME ZONE 'UTC') - make_interval(mins => %s))
                 ))
             FROM incidents
             WHERE org_id = %s
-              AND (rca_dispatched_at > LOCALTIMESTAMP - make_interval(hours => %s)
+              AND (rca_dispatched_at > (NOW() AT TIME ZONE 'UTC') - make_interval(hours => %s)
                    OR aurora_status IN ('running', 'summarizing'))
             """,
             (WINDOW_SECONDS, _RUNNING_MAX_HOURS, _DISPATCH_PICKUP_MINUTES, self.org_id, _RUNNING_MAX_HOURS),
@@ -225,7 +225,7 @@ class SqlStore:
             """
             UPDATE incidents
             SET aurora_status = %s, rca_queue_reason = %s,
-                rca_queued_at = COALESCE(rca_queued_at, LOCALTIMESTAMP),
+                rca_queued_at = COALESCE(rca_queued_at, NOW() AT TIME ZONE 'UTC'),
                 rca_queued_request = COALESCE(%s::jsonb, rca_queued_request),
                 updated_at = LOCALTIMESTAMP
             WHERE id = %s
@@ -247,11 +247,16 @@ class SqlStore:
         so a worker that dies between this commit and the publish leaves
         something the stale sweep can put back in the queue. updated_at moves so
         the never-started sweep counts from now, not from when the alert arrived.
+
+        rca_dispatched_at and rca_queued_at hold the UTC instant (naive), the
+        contract iso_utc relies on when the API returns them; every comparison
+        on them uses the same UTC clock. updated_at stays on the session clock
+        the stale sweep compares it with.
         """
         self.cursor.execute(
             """
             UPDATE incidents
-            SET aurora_status = 'idle', rca_dispatched_at = LOCALTIMESTAMP,
+            SET aurora_status = 'idle', rca_dispatched_at = (NOW() AT TIME ZONE 'UTC'),
                 rca_queue_reason = NULL, rca_queued_at = NULL,
                 rca_queued_request = COALESCE(%s::jsonb, rca_queued_request),
                 rca_celery_task_id = NULL, updated_at = LOCALTIMESTAMP
