@@ -2224,6 +2224,9 @@ def initialize_tables():
             for table_name, create_script in create_tables.items():
                 cursor.execute(create_script)
                 logging.info(f"Table '{table_name}' initialized successfully.")
+            # Committed first, so a rollback in the warn-and-rollback block below
+            # cannot undo the tables just created.
+            conn.commit()
 
             # RCA queue columns and their indexes, once the incidents table exists.
             # The columns are added again here because the pre-creation migration

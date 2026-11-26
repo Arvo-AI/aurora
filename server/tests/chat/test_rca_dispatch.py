@@ -660,3 +660,51 @@ def test_the_reservation_recovery_leaves_a_renewed_reservation_alone(monkeypatch
     assert "AND COALESCE(aurora_status, 'idle') = 'idle'" in sql
     assert "AND rca_run_task_id IS NULL AND rca_queued_request IS NOT NULL" in sql
     assert params == ("reserved-inc", DB_NOW - timedelta(minutes=20))
+
+
+def test_ten_failing_incidents_do_not_crowd_out_a_healthy_one(monkeypatch, store, started):
+    _fill_window_then_queue(store)
+    for n in range(rd._MAX_DISPATCHES_PER_PASS):
+        store.add(f"broken-{n}", severity="critical")
+        store.queue(f"broken-{n}", rd.REASON_RATE, _request(f"broken-{n}"))
+    store.add("healthy", severity="low")
+    store.queue("healthy", rd.REASON_RATE, _request("healthy"))
+    ok = rd.start_rca
+
+    def _start(user_id, incident_id, request, org_id=None):
+        if incident_id.startswith("broken-"):
+            raise RuntimeError("broker down")
+        return ok(user_id, incident_id, request, org_id=org_id)
+
+    monkeypatch.setattr(rd, "start_rca", _start)
+    assert rd.drain_with_store(store)["dispatched"] == 1
+    assert store.incidents["healthy"]["aurora_status"] == "running"
+
+
+def test_an_owner_who_moved_org_is_refused_and_the_incident_stays_queued(monkeypatch, store):
+    import importlib
+
+    task_mod = importlib.import_module("chat.background.task")
+
+    def _session(**kw):
+        # The real helper refuses an owner no longer in the expected org.
+        assert kw["org_id"] == ORG
+        raise ValueError("user moved to another org")
+
+    monkeypatch.setattr(task_mod, "create_background_chat_session", _session)
+    delay = MagicMock()
+    monkeypatch.setattr(task_mod, "run_background_chat", SimpleNamespace(delay=delay))
+    _fill_window_then_queue(store, "moved")
+
+    assert rd.drain_with_store(store)["dispatched"] == 0
+    delay.assert_not_called()
+    assert store.incidents["moved"]["aurora_status"] == rd.QUEUED
+    assert store.incidents["moved"]["reason"] == rd.REASON_DISPATCH_FAILED
+    assert store.incidents["moved"]["request"] is not None
+
+
+def test_no_failure_is_reported_when_the_cleanup_update_skips_the_incident(monkeypatch):
+    # Queued or reserved after the SELECT: the guarded UPDATE matches no row.
+    cursor, reported = _sweep(monkeypatch, {NEVER_STARTED: [("inc-1", "idle", None, None)]})
+    assert _update_for(cursor, "SET aurora_status = 'error'")
+    assert reported == []

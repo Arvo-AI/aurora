@@ -49,6 +49,9 @@ _RUNNING_MAX_HOURS = 3
 _REDISPATCH_GUARD_SECONDS = 120
 # Bound on investigations one drain pass starts per org.
 _MAX_DISPATCHES_PER_PASS = 10
+# Bound on failed starts one drain pass tolerates per org before giving up
+# until the next tick.
+_MAX_FAILED_PER_PASS = 25
 
 QUEUED = "queued"
 
@@ -476,7 +479,10 @@ def drain_with_store(store) -> Dict[str, int]:
     """
     stats = {"dispatched": 0}
     skipped: List[str] = []
-    for _ in range(_MAX_DISPATCHES_PER_PASS):
+    # The cap counts starts, not attempts: incidents that keep failing are
+    # skipped without using it up, so they cannot crowd out a healthy one
+    # queued behind them. _MAX_FAILED_PER_PASS bounds the publish attempts.
+    while stats["dispatched"] < _MAX_DISPATCHES_PER_PASS and len(skipped) < _MAX_FAILED_PER_PASS:
         store.lock_org()
         if not store.has_queued():
             store.commit()

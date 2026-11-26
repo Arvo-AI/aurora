@@ -3284,12 +3284,15 @@ def _sweep_stale_background_chats() -> Dict[str, Any]:
                                 "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', analyzed_at = COALESCE(analyzed_at, NOW()), rca_celery_task_id = NULL, updated_at = NOW() WHERE id = %s AND status != 'merged' AND updated_at < %s AND COALESCE(aurora_status, 'idle') != 'queued' RETURNING id",
                                 (inc_id, stale_threshold)
                             )
-                        if cursor.fetchone():
+                        cleaned = cursor.fetchone() is not None
+                        if cleaned:
                             if cur_aurora not in ('complete', 'error'):
                                 _record_rca_error(cursor, str(inc_id), uid)
                             orphaned_count += 1
                         conn.commit()
-                        if cur_aurora not in ('complete', 'error'):
+                        # Only for a row the UPDATE actually failed: one queued or
+                        # reserved since the SELECT gets no failure report.
+                        if cleaned and cur_aurora not in ('complete', 'error'):
                             _report_or_fail_dead_rca(
                                 uid, str(inc_id), rca_session_id,
                                 "Investigation became orphaned and was cleaned up", rca_run_task_id,
