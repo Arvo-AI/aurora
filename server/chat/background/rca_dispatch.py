@@ -307,8 +307,12 @@ class SqlStore:
 
 # --- Starting an investigation ----------------------------------------------------
 
-def start_rca(user_id: str, incident_id: str, request: RcaRequest) -> str:
+def start_rca(user_id: str, incident_id: str, request: RcaRequest, org_id: Optional[str] = None) -> str:
     """Create the RCA's chat session and enqueue it. Returns the Celery task id.
+
+    *org_id* is the org the incident was queued in. The session helper refuses
+    an owner who has since moved to another org, so a queued request is never
+    started in the wrong org.
 
     When the broker refuses the task, the session is marked failed before the
     error propagates, so a retry does not leave an extra chat in progress.
@@ -322,6 +326,7 @@ def start_rca(user_id: str, incident_id: str, request: RcaRequest) -> str:
         title=request.session_title,
         trigger_metadata=request.trigger_metadata,
         incident_id=incident_id,
+        org_id=org_id,
     )
     try:
         task = run_background_chat.delay(
@@ -361,7 +366,7 @@ def _start_or_requeue(store, user_id: str, incident_id: str, request: RcaRequest
     in the queue later.
     """
     try:
-        task_id = start_rca(user_id, incident_id, request)
+        task_id = start_rca(user_id, incident_id, request, org_id=store.org_id)
     except Exception:
         logger.exception("[RcaDispatch] Could not start RCA for incident %s; queued for retry", sanitize(incident_id))
         try:
@@ -545,7 +550,7 @@ def run_queued_investigation(incident_id: str, requested_by: str, org_id: str) -
     """
     refusal: Optional[RunRefused] = None
     owner_id = request = None
-    outcome = FAILED
+    outcome: Optional[str] = None
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cursor:
             row = None

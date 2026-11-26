@@ -133,8 +133,8 @@ def started(monkeypatch, store):
     """Starting an RCA puts it on a worker, which marks the incident running."""
     calls = []
 
-    def _start(user_id, incident_id, request):
-        calls.append(SimpleNamespace(incident_id=incident_id, prompt=request.prompt))
+    def _start(user_id, incident_id, request, org_id=None):
+        calls.append(SimpleNamespace(incident_id=incident_id, prompt=request.prompt, org_id=org_id))
         store.incidents[incident_id]["aurora_status"] = "running"
         return f"task-{incident_id}"
 
@@ -291,10 +291,10 @@ def test_an_incident_that_fails_to_start_does_not_hold_back_the_others(monkeypat
     store.queue("fine", rd.REASON_RATE, _request("fine"))
     ok = rd.start_rca
 
-    def _broken_one(user_id, incident_id, request):
+    def _broken_one(user_id, incident_id, request, org_id=None):
         if incident_id == "broken":
             raise RuntimeError("broker down")
-        return ok(user_id, incident_id, request)
+        return ok(user_id, incident_id, request, org_id=org_id)
 
     monkeypatch.setattr(rd, "start_rca", _broken_one)
     assert rd.drain_with_store(store)["dispatched"] == 1
@@ -482,6 +482,25 @@ def test_a_refused_publish_fails_the_session_it_created(monkeypatch):
     assert failed == [("sess-1", "failed")]
 
 
+def test_every_start_carries_the_org_the_incident_was_queued_in(store, started):
+    _fill_window_then_queue(store, "a")
+    rd.drain_with_store(store)
+    assert {c.org_id for c in started} == {ORG}
+
+
+def test_the_session_is_created_in_the_queue_org_so_a_moved_owner_is_refused(monkeypatch):
+    import importlib
+
+    task_mod = importlib.import_module("chat.background.task")
+    sessions = []
+    monkeypatch.setattr(task_mod, "create_background_chat_session",
+                        lambda **kw: sessions.append(kw) or "sess-1")
+    monkeypatch.setattr(task_mod, "run_background_chat",
+                        SimpleNamespace(delay=MagicMock(return_value=SimpleNamespace(id="task-1"))))
+    assert rd.start_rca(USER, "inc-1", _request("inc-1"), org_id=ORG) == "task-1"
+    assert sessions[0]["org_id"] == ORG
+
+
 def test_a_temporary_error_is_reported_as_failed_not_missing(monkeypatch):
     pool = MagicMock()
     pool.get_admin_connection.side_effect = RuntimeError("pool exhausted")
@@ -585,4 +604,30 @@ def test_the_sweep_requeues_a_reserved_start_that_was_never_published(monkeypatc
     assert _errored(cursor) == []
     assert reported == []
     requeue = next(e for e in cursor.executed if "rca_queue_reason = 'dispatch_failed'" in e[0])
-    assert requeue[1] == ("reserved-inc",)
+    assert requeue[1][0] == "reserved-inc"
+
+
+def _update_for(cursor, fragment):
+    return next(e for e in cursor.executed if e[0].startswith("UPDATE incidents") and fragment in e[0])
+
+
+@pytest.mark.parametrize("cur_aurora, fragment", [
+    ("idle", "SET aurora_status = 'error'"),
+    ("complete", "SET status = 'analyzed'"),
+])
+def test_the_never_started_cleanup_rechecks_that_the_incident_was_not_queued_since(monkeypatch, cur_aurora, fragment):
+    # Dispatch may queue the incident between the sweep's SELECT and its UPDATE.
+    cursor, _ = _sweep(monkeypatch, {NEVER_STARTED: [("inc-1", cur_aurora, None, None)]})
+    sql, params = _update_for(cursor, fragment)
+    assert "AND COALESCE(aurora_status, 'idle') != 'queued'" in sql
+    assert params == ("inc-1",)
+
+
+def test_the_reservation_recovery_leaves_a_renewed_reservation_alone(monkeypatch):
+    cursor, _ = _sweep(monkeypatch, {NEVER_STARTED: [("reserved-inc", "idle", None, None, True)]})
+    sql, params = _update_for(cursor, "rca_queue_reason = 'dispatch_failed'")
+    # A renewal moves updated_at past the threshold, so it no longer matches.
+    assert "AND updated_at < %s" in sql
+    assert "AND COALESCE(aurora_status, 'idle') = 'idle'" in sql
+    assert "AND rca_run_task_id IS NULL AND rca_queued_request IS NOT NULL" in sql
+    assert params == ("reserved-inc", DB_NOW - timedelta(minutes=20))

@@ -3257,23 +3257,29 @@ def _sweep_stale_background_chats() -> Dict[str, Any]:
                         if unpublished:
                             # Reserved by the alert dispatcher, but the worker that
                             # held the reservation died before publishing the task.
-                            # Its request is still on the row: queue it again.
+                            # Its request is still on the row: queue it again. The
+                            # WHERE repeats the SELECT's test, so a reservation
+                            # renewed since then (updated_at moved) is left alone.
                             cursor.execute(
                                 "UPDATE incidents SET aurora_status = 'queued', rca_queue_reason = 'dispatch_failed', "
                                 "rca_queued_at = COALESCE(rca_queued_at, NOW()), rca_dispatched_at = NULL, updated_at = NOW() "
-                                "WHERE id = %s AND status = 'investigating' AND rca_celery_task_id IS NULL",
-                                (inc_id,)
+                                "WHERE id = %s AND status = 'investigating' AND updated_at < %s "
+                                "AND COALESCE(aurora_status, 'idle') = 'idle' AND rca_celery_task_id IS NULL "
+                                "AND rca_run_task_id IS NULL AND rca_queued_request IS NOT NULL",
+                                (inc_id, stale_threshold)
                             )
                             conn.commit()
                             continue
+                        # Both UPDATEs re-check that the incident was not queued
+                        # since the SELECT: a queued request must not be dropped.
                         if cur_aurora in ('complete', 'error'):
                             cursor.execute(
-                                "UPDATE incidents SET status = 'analyzed', analyzed_at = COALESCE(analyzed_at, NOW()), updated_at = NOW() WHERE id = %s AND status = 'investigating' RETURNING id",
+                                "UPDATE incidents SET status = 'analyzed', analyzed_at = COALESCE(analyzed_at, NOW()), updated_at = NOW() WHERE id = %s AND status = 'investigating' AND COALESCE(aurora_status, 'idle') != 'queued' RETURNING id",
                                 (inc_id,)
                             )
                         else:
                             cursor.execute(
-                                "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', analyzed_at = COALESCE(analyzed_at, NOW()), rca_celery_task_id = NULL, updated_at = NOW() WHERE id = %s AND status != 'merged' RETURNING id",
+                                "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', analyzed_at = COALESCE(analyzed_at, NOW()), rca_celery_task_id = NULL, updated_at = NOW() WHERE id = %s AND status != 'merged' AND COALESCE(aurora_status, 'idle') != 'queued' RETURNING id",
                                 (inc_id,)
                             )
                         if cursor.fetchone():
