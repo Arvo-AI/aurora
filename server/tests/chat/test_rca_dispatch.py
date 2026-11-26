@@ -737,3 +737,40 @@ def test_rca_timestamps_are_written_and_compared_in_utc():
         # The API returns rca_dispatched_at as UTC; no comparison may use the session clock.
         assert "rca_dispatched_at > LOCALTIMESTAMP" not in sql
         assert "rca_dispatched_at > (NOW() AT TIME ZONE 'UTC')" in sql
+
+
+def test_the_real_session_helper_refuses_an_owner_now_in_another_org(monkeypatch, store):
+    import importlib
+
+    task_mod = importlib.import_module("chat.background.task")
+    executed = []
+
+    class _Cursor:
+        def execute(self, sql, params=None):
+            executed.append(" ".join(sql.split()))
+
+        def fetchone(self):
+            # The owner's users row now points at another org.
+            return ("org-2",)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    conn = MagicMock()
+    conn.cursor.return_value = _Cursor()
+    pool = MagicMock()
+    pool.get_admin_connection.return_value.__enter__.return_value = conn
+    monkeypatch.setattr(task_mod, "db_pool", pool)
+    delay = MagicMock()
+    monkeypatch.setattr(task_mod, "run_background_chat", SimpleNamespace(delay=delay))
+    _fill_window_then_queue(store, "moved")
+
+    assert rd.drain_with_store(store)["dispatched"] == 0
+    # Every start looked the owner up and was refused before writing a session.
+    assert executed and all(sql == "SELECT org_id FROM users WHERE id = %s" for sql in executed)
+    delay.assert_not_called()
+    assert store.incidents["moved"]["aurora_status"] == rd.QUEUED
+    assert store.incidents["moved"]["reason"] == rd.REASON_DISPATCH_FAILED
