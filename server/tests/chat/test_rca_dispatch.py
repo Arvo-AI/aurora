@@ -112,11 +112,13 @@ class FakeStore:
             if inc["aurora_status"] == rd.QUEUED and inc["status"] != "merged"
             and inc["request"] and i not in skip_ids
         ]
-        return min(rows, key=rd.drain_order) if rows else None
+        return min(
+            rows, key=lambda q: rd.drain_order(q, self.incidents[q.id]["reason"] == rd.REASON_DISPATCH_FAILED),
+        ) if rows else None
 
     def set_reason_all(self, reason):
         for inc in self.incidents.values():
-            if inc["aurora_status"] == rd.QUEUED:
+            if inc["aurora_status"] == rd.QUEUED and inc["reason"] != rd.REASON_DISPATCH_FAILED:
                 inc["reason"] = reason
 
     def set_task(self, incident_id, task_id):
@@ -490,6 +492,7 @@ def test_the_sql_drain_takes_the_most_severe_then_oldest_incident():
     sql, params = cursor.execute.call_args[0]
     sql = " ".join(sql.split())
     assert "WHEN 'critical' THEN 0" in sql
+    assert "ORDER BY (COALESCE(rca_queue_reason, '') = 'dispatch_failed'), CASE" in sql
     assert "END, rca_queued_at, id LIMIT 1 FOR UPDATE SKIP LOCKED" in sql
     assert params == (ORG, rd.QUEUED, ["skip-me"])
 
@@ -774,3 +777,37 @@ def test_the_real_session_helper_refuses_an_owner_now_in_another_org(monkeypatch
     delay.assert_not_called()
     assert store.incidents["moved"]["aurora_status"] == rd.QUEUED
     assert store.incidents["moved"]["reason"] == rd.REASON_DISPATCH_FAILED
+
+
+def test_a_healthy_incident_starts_even_when_more_than_a_pass_of_failures_sit_ahead(monkeypatch, store, started):
+    _fill_window_then_queue(store)
+    many = rd._MAX_FAILED_PER_PASS + 5
+    for n in range(many):
+        store.add(f"broken-{n}", severity="critical")
+        store.queue(f"broken-{n}", rd.REASON_RATE, _request(f"broken-{n}"))
+    store.add("healthy", severity="low")
+    store.queue("healthy", rd.REASON_RATE, _request("healthy"))
+    ok = rd.start_rca
+
+    def _start(user_id, incident_id, request, org_id=None):
+        if incident_id.startswith("broken-"):
+            raise RuntimeError("broker down")
+        return ok(user_id, incident_id, request, org_id=org_id)
+
+    monkeypatch.setattr(rd, "start_rca", _start)
+    # First pass: the critical ones go first and use up the failure cap.
+    rd.drain_with_store(store)
+    # Later passes: those that failed sort after the rest, so the healthy one starts.
+    for minute in range(1, 4):
+        store.clock = T0 + timedelta(minutes=10 + minute)
+        rd.drain_with_store(store)
+    assert store.incidents["healthy"]["aurora_status"] == "running"
+    assert all(store.incidents[f"broken-{n}"]["aurora_status"] == rd.QUEUED for n in range(many))
+
+
+def test_an_over_budget_drain_keeps_the_failed_start_marker():
+    cursor = MagicMock()
+    rd.SqlStore(cursor, MagicMock(), ORG).set_reason_all(rd.REASON_CONCURRENCY)
+    sql, params = cursor.execute.call_args[0]
+    assert "AND rca_queue_reason IS DISTINCT FROM %s AND rca_queue_reason IS DISTINCT FROM %s" in " ".join(sql.split())
+    assert params[-1] == rd.REASON_DISPATCH_FAILED

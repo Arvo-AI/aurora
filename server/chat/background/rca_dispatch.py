@@ -144,9 +144,14 @@ def budget_refusal(usage: BudgetUsage) -> Optional[str]:
     return None
 
 
-def drain_order(q: QueuedIncident):
-    """Sort key for the queue: most severe first, then oldest."""
-    return (_SEVERITY_RANK.get((q.severity or "").lower(), 5), q.queued_at, q.id)
+def drain_order(q: QueuedIncident, retrying: bool = False):
+    """Sort key for the queue, mirrored by next_queued's ORDER BY.
+
+    Incidents whose last start failed (*retrying*) go after the others, so a
+    batch that keeps failing cannot hold the head of the queue pass after pass;
+    then most severe first, then oldest.
+    """
+    return (retrying, _SEVERITY_RANK.get((q.severity or "").lower(), 5), q.queued_at, q.id)
 
 
 # --- Storage --------------------------------------------------------------------
@@ -285,7 +290,8 @@ class SqlStore:
             WHERE org_id = %s AND aurora_status = %s AND {_DRAINABLE_SQL}
               AND rca_queued_request IS NOT NULL
               AND NOT (id = ANY(%s::uuid[]))
-            ORDER BY {_SEVERITY_ORDER_SQL}, rca_queued_at, id
+            ORDER BY (COALESCE(rca_queue_reason, '') = '{REASON_DISPATCH_FAILED}'),
+                     {_SEVERITY_ORDER_SQL}, rca_queued_at, id
             LIMIT 1
             FOR UPDATE SKIP LOCKED
             """,
@@ -304,9 +310,10 @@ class SqlStore:
 
     def set_reason_all(self, reason: str) -> None:
         self.cursor.execute(
+            # A failed start keeps its reason: it is what orders it after the others.
             "UPDATE incidents SET rca_queue_reason = %s WHERE org_id = %s AND aurora_status = %s"
-            " AND rca_queue_reason IS DISTINCT FROM %s",
-            (reason, self.org_id, QUEUED, reason),
+            " AND rca_queue_reason IS DISTINCT FROM %s AND rca_queue_reason IS DISTINCT FROM %s",
+            (reason, self.org_id, QUEUED, reason, REASON_DISPATCH_FAILED),
         )
 
     def set_task(self, incident_id: str, task_id: str) -> None:
