@@ -816,8 +816,11 @@ def _base_is_open_pr_head(installation_id: int, repo: str, base_ref: str) -> boo
     """Whether ``base_ref`` is the head branch of another open PR in ``repo``.
 
     A lookup failure answers True: the PR is enqueued and ``investigate_pr``
-    asks again with its own retry handling, so a GitHub blip cannot drop a
-    review here.
+    asks again with its own retry handling, so a GitHub blip does not skip
+    the PR at this layer. That only covers the webhook: if ``investigate_pr``
+    then skips (retries exhausted, or the base PR closed meanwhile), the
+    dedupe key is not released, so redeliveries for this head are dropped
+    until it expires (24 h), as on the existing ``get_pull_request`` path.
     """
     from services.change_gating.github_adapter import GitHubPRAdapter
 

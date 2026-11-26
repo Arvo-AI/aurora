@@ -412,6 +412,66 @@ class TestBaseIsReviewable:
         lookup.assert_not_called()
 
 
+class TestCompareMergesOtherHistory:
+    """An incremental review covers only what was pushed to the PR's own
+    branch. Once another branch is merged into the head, the compare since the
+    last review also holds that branch's changes, so the review goes back to
+    the PR's own diff."""
+
+    @staticmethod
+    def _commit(*parents):
+        return {"sha": "c", "parents": [{"sha": p} for p in parents]}
+
+    def test_own_commits_only_stay_incremental(self):
+        from tasks.change_gating import _compare_merges_other_history
+
+        compare = {
+            "status": "ahead",
+            "total_commits": 2,
+            "commits": [self._commit("a"), self._commit("b")],
+        }
+        assert _compare_merges_other_history(compare) is False
+
+    def test_merge_commit_means_other_history(self):
+        """The parent of a stacked PR moved and was merged into the child."""
+        from tasks.change_gating import _compare_merges_other_history
+
+        compare = {
+            "status": "ahead",
+            "total_commits": 3,
+            "commits": [
+                self._commit("a"),
+                self._commit("p1"),
+                self._commit("a", "p1"),
+            ],
+        }
+        assert _compare_merges_other_history(compare) is True
+
+    def test_truncated_commit_list_cannot_be_checked(self):
+        from tasks.change_gating import _compare_merges_other_history
+
+        compare = {
+            "status": "ahead",
+            "total_commits": 300,
+            "commits": [self._commit("a")] * 250,
+        }
+        assert _compare_merges_other_history(compare) is True
+
+    @pytest.mark.parametrize(
+        "compare",
+        [
+            {"status": "ahead"},
+            {"status": "ahead", "commits": None},
+            {"status": "ahead", "commits": [], "total_commits": 0},
+            {"status": "ahead", "commits": [{"sha": "c"}, "junk"]},
+        ],
+    )
+    def test_no_commit_evidence_keeps_the_incremental_review(self, compare):
+        from tasks.change_gating import _compare_merges_other_history
+
+        assert _compare_merges_other_history(compare) is False
+
+
 class TestReposAddedAfterInstall:
     """A repo added later is reviewed only when the installation is hands-off."""
 
