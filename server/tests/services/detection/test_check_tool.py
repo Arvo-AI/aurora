@@ -43,8 +43,8 @@ def test_a_check_aurora_came_up_with_is_not_vouched_for_even_in_a_conversation(m
     lambda: tool.list_detection_checks(user_id="u1"),
     lambda: tool.retire_detection_check("x", "why", user_id="u1"),
 ])
-def test_with_the_feature_off_no_tool_touches_the_store(monkeypatch, call):
-    monkeypatch.setenv("DETECTION_CHECKS_ENABLED", "false")
+def test_on_an_install_that_never_turned_the_feature_on_no_tool_touches_the_store(monkeypatch, call):
+    monkeypatch.delenv("DETECTION_CHECKS_ENABLED", raising=False)
 
     def _no_database(*_args, **_kwargs):
         raise AssertionError("the store was reached with the feature off")
@@ -52,3 +52,22 @@ def test_with_the_feature_off_no_tool_touches_the_store(monkeypatch, call):
     monkeypatch.setattr(tool, "_connection", _no_database)
     monkeypatch.setattr(tool, "_may_write", lambda _user: True)
     assert "turned off" in json.loads(call())["error"]
+
+
+@pytest.mark.parametrize("checks, chat, reads", [
+    (None, None, False),
+    (None, "true", False),
+    ("true", None, False),
+    ("true", "false", False),
+    ("false", "true", False),
+    ("true", "true", True),
+])
+def test_chat_is_only_read_on_an_install_that_turned_on_both_the_feature_and_the_reading(
+        monkeypatch, checks, chat, reads):
+    from services import detection
+    for name, value in (("DETECTION_CHECKS_ENABLED", checks), ("DETECTION_CHAT_INTAKE_ENABLED", chat)):
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+    assert detection.chat_intake_enabled() is reads

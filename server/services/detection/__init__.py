@@ -8,26 +8,29 @@ are recorded and reach no one.
 import os
 
 
+def _on(name: str) -> bool:
+    return (os.getenv(name) or "").strip().lower() == "true"
+
+
 def checks_enabled() -> bool:
-    """The switch for the whole feature (DETECTION_CHECKS_ENABLED=false turns it off).
+    """The switch for the whole feature. Off unless DETECTION_CHECKS_ENABLED=true:
+    an install turns it on, it does not arrive turned on with an upgrade.
 
     Off means off everywhere: no check runs, the agent has no check tools and
     is not told to save checks, nothing is replayed, and the page says so.
     """
-    return (os.getenv("DETECTION_CHECKS_ENABLED") or "true").strip().lower() != "false"
+    return _on("DETECTION_CHECKS_ENABLED")
 
 
 def chat_intake_enabled() -> bool:
     """Whether Aurora may read chat channels at all on this install.
 
-    DETECTION_CHAT_INTAKE_ENABLED=false is the install's kill switch, and it is
-    off with the feature. On does not mean anything is read: each org starts
-    with its Dynamic alerting slider at off, and reads nothing until one of its
-    admins moves it (services/detection/chat_signals.py).
+    Off unless DETECTION_CHAT_INTAKE_ENABLED=true, and off with the feature.
+    On does not mean anything is read: each org starts with its Dynamic
+    alerting slider at off, and reads nothing until one of its admins moves it
+    (services/detection/chat_signals.py).
     """
-    return checks_enabled() and (
-        (os.getenv("DETECTION_CHAT_INTAKE_ENABLED") or "true").strip().lower() != "false"
-    )
+    return checks_enabled() and _on("DETECTION_CHAT_INTAKE_ENABLED")
 
 
 STATE_SILENT = "silent"

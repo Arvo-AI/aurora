@@ -308,7 +308,7 @@ export default function ChecksPage() {
     if (data && !data.enabled) {
       return (
         <div className="text-sm text-zinc-500 py-12 text-center">
-          Checks are turned off on this install (DETECTION_CHECKS_ENABLED).
+          Checks are not turned on for this install. An administrator can turn them on with DETECTION_CHECKS_ENABLED=true.
         </div>
       );
     }

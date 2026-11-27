@@ -454,8 +454,14 @@ config:
   # Defaults to "live" (folding on). Set to "off" to disable, or "shadow" to
   # log verdicts without folding.
   RECURRENCE_DETECTION_MODE: "live"
-  DETECTION_CHECKS_ENABLED: "true"
-  DETECTION_CHAT_INTAKE_ENABLED: "true"
+  # Detection checks: read-only commands Aurora saves and runs by itself on a
+  # schedule. Off unless set to "true".
+  DETECTION_CHECKS_ENABLED: "false"
+  # Dynamic alerting: lets each org choose, in Settings, to have Aurora read
+  # its Slack channels and speak up. Off unless set to "true", and it needs
+  # DETECTION_CHECKS_ENABLED as well. On here reads nothing until an org admin
+  # moves the slider.
+  DETECTION_CHAT_INTAKE_ENABLED: "false"
   # Wall-clock budget (seconds) for one recurrence check; keep well under the
   # summarization task's soft time limit (330s) minus summary work.
   RECURRENCE_AGENT_TIMEOUT_SECONDS: "120"
