@@ -84,12 +84,12 @@ class AlertPipeline(unittest.TestCase):
             self.assertEqual(response.status_code, expected_status)
             return response.json
 
-        def sentry_post():
-            body = json.dumps({"action": "triggered", "data": {"event": {"event_id": "c"*32,
+        def sentry_post(payload=None, resource="event_alert"):
+            body = json.dumps(payload or {"action": "triggered", "data": {"event": {"event_id": "c"*32,
                               "web_url": "https://example.sentry.io/issues/447/events/" + "c"*32, "title": "Error in checkout",
                               "project": {"slug": "checkout"}, "level": "error"}}}).encode()
             self.assertEqual(http.post(f"/sentry/webhook/{user}", data=body, headers={
-                "Sentry-Hook-Resource": "event_alert",
+                "Sentry-Hook-Resource": resource,
                 "Sentry-Hook-Signature": hmac.new(b"test-secret", body, hashlib.sha256).hexdigest()
             }).status_code, 202)
 
@@ -301,6 +301,23 @@ class AlertPipeline(unittest.TestCase):
             self.assertEqual(len(report_attempts), 2)
             self.assertTrue(all(p.get("thread_ts") and findings in json.dumps(p.get("blocks"))
                                 for p in post_attempts), "Every outbound Slack post must be a threaded final report")
+            # The Sentry issue subscription sends both creation and later
+            # lifecycle changes. A resolution can also arrive without its creation.
+            issue = {"id": "629", "title": "Synthetic checkout exception", "level": "error",
+                     "project": {"slug": "qa-store"}, "permalink": "https://test.sentry.io/issues/629/"}
+            parent = add_post("C-sentry", "A011MFBJEUU", issue["title"], issue["permalink"])
+            expected.append(("C-sentry", parent))
+            before = len(contexts)
+            for action in ("created", "created", "resolved"):
+                sentry_post({"action": action, "data": {"issue": issue}}, resource="issue")
+            sentry_post({"action": "resolved", "data": {"issue": dict(issue, id="630")}}, resource="issue")
+            wait_for(lambda: sorted(replies) == sorted(expected), "one final reply under the Sentry issue")
+            retry_pending.delay().get(timeout=20, disable_sync_subtasks=False)
+            self.assertEqual(sql("SELECT action, count(*) FROM sentry_events WHERE org_id=%s "
+                                 "AND group_id IN ('629','630') GROUP BY action ORDER BY action", (org,)),
+                             [("created", 1), ("resolved", 2)])
+            self.assertEqual(len(contexts), before + 1)
+            self.assertCountEqual(replies, expected)
             routing.assert_not_called()
 
             self.assertEqual(saved_connection, {"approved_topic_arn": topic})

@@ -256,6 +256,12 @@ def process_sentry_event(
                     logger.info("[SENTRY][WEBHOOK] Duplicate delivery for user %s", user_id)
                     return
 
+                # Issue lifecycle updates and integration housekeeping are useful
+                # audit events. Only the initial issue notification starts an RCA.
+                if resource in {"installation", "comment"} or (resource == "issue" and action != "created"):
+                    conn.commit()
+                    return
+
                 # source_alert_id is the integer PK of the source-specific event row.
                 # Mirrors the pattern used by incidentio/datadog/etc — the FK back to
                 # sentry_events.id, not a synthesized string.
