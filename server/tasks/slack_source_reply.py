@@ -8,6 +8,7 @@ from utils.auth.stateless_auth import get_credentials_from_db, get_org_preferenc
 from utils.cache.redis_client import get_redis_client
 from utils.db.connection_pool import db_pool
 from utils.notifications.slack_alert_match import find_source_thread
+from utils.notifications.slack_threading import placed_thread_ts
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +20,8 @@ def queue_source_reply(user_id, incident_id):
             return
         cur.execute("""UPDATE incidents SET slack_source_reply_due = NOW()
                        WHERE id=%s AND user_id=%s AND org_id=%s
-                       AND slack_source_reply_ts IS NULL AND slack_source_reply_due IS NULL""",
+                       AND aurora_status='complete' AND rca_unfinished_reason IS NULL
+                       AND slack_source_reply_attempts=0 AND slack_source_reply_ts IS NULL AND slack_source_reply_due IS NULL""",
                     (incident_id, user_id, org))
         queued = cur.rowcount
         conn.commit()
@@ -53,13 +55,21 @@ def _find_target(cur, client, org, team, data, target):
     return target
 
 
+def _remove_unthreaded_message(client, target):
+    from connectors.slack_connector.client import SlackAPIError
+    try:
+        client.delete_message(target["channel"], target["unthreaded_ts"])
+    except SlackAPIError as error:
+        if error.error != "message_not_found":
+            raise
+    del target["unthreaded_ts"]
+
+
 @celery_app.task(name="tasks.slack_source_reply.deliver")
 def deliver_source_reply(user_id, incident_id):
     from connectors.slack_connector.client import SlackClient
-    from utils.notifications.dispatcher import _get_incident_data, _enrich_incident_summary
-    from utils.notifications.slack_notification_service import (
-        send_source_rca_reply, send_slack_investigation_completed_notification,
-    )
+    from utils.notifications.dispatcher import _get_incident_data
+    from utils.notifications.slack_notification_service import send_source_rca_reply
 
     with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
         org = set_rls_context(cur, conn, user_id)
@@ -70,7 +80,7 @@ def deliver_source_reply(user_id, incident_id):
         cur.execute("SELECT pg_try_advisory_xact_lock(hashtextextended(%s, 0))", ("source-reply:" + incident_id,))
         if not cur.fetchone()[0]:
             return
-        cur.execute("""SELECT slack_source_reply_attempts, aurora_chat_session_id, slack_source_target
+        cur.execute("""SELECT slack_source_reply_attempts, slack_source_target
                        FROM incidents WHERE id=%s AND org_id=%s AND user_id=%s
                        AND EXISTS (SELECT 1 FROM users u WHERE u.id=incidents.user_id AND u.org_id=incidents.org_id)
                        AND slack_source_reply_due <= NOW() AND slack_source_reply_ts IS NULL""",
@@ -78,47 +88,52 @@ def deliver_source_reply(user_id, incident_id):
         row = cur.fetchone()
         if not row:
             return
-        attempt, session, target = row
-        done = None
+        attempt, target = row
+        reply_ts = None
+        finished = False
         try:
             data = _get_incident_data(incident_id, user_id)
-            creds = get_credentials_from_db(user_id, "slack") or {}
-            if not get_org_preference(org, 'slack_investigation_complete_notifications', default=True, strict=True):
-                done = "disabled"
-            elif not creds.get("access_token"):
-                raise ValueError("Slack credentials unavailable")
-            elif not data:
+            if not data:
                 raise ValueError("Incident unavailable for Slack reply")
+            enabled = get_org_preference(org, "slack_investigation_complete_notifications", default=True, strict=True)
+            cleanup_pending = target and target.get("unthreaded_ts")
+            if not cleanup_pending and (not enabled or data["aurora_status"] != "complete" or data.get("unfinished_reason")):
+                finished = True
             else:
+                creds = get_credentials_from_db(user_id, "slack") or {}
+                if not creds.get("access_token") or not creds.get("team_id"):
+                    raise ValueError("Slack workspace credentials unavailable")
                 client = SlackClient(creds["access_token"])
-                team = creds.get("team_id")
+                team = creds["team_id"]
                 if target and target.get("team") != team:
                     raise ValueError("Source Slack workspace changed")
                 target = _find_target(cur, client, org, team, data, target)
-                if session:
-                    _enrich_incident_summary(data, str(session), user_id)
-                if not data.get("aurora_summary"):
-                    raise ValueError("Completed RCA text unavailable")
-                if target:
-                    result = send_source_rca_reply(client, target["channel"], target["ts"], data,
-                                                   str(uuid5(UUID(incident_id), "slack-source-reply")))
+                if cleanup_pending:
+                    _remove_unthreaded_message(client, target)
+                    finished = True
+                elif target:
+                    if not data.get("aurora_summary"):
+                        raise ValueError("Completed RCA text unavailable")
+                    delivery_id = str(uuid5(UUID(incident_id), "slack-source-reply"))
+                    result = send_source_rca_reply(client, target["channel"], target["ts"], data, delivery_id)
                     if result:
-                        done = result["ts"]
-                    # A definitive thread rejection (deleted or locked parent)
-                    # can use the configured channel. A transport failure raises
-                    # and keeps this target for the next attempt.
-                if not done and (target or attempt >= 3):
-                    logger.info("No usable source thread for %s; using its configured incidents channel", incident_id)
-                    if send_slack_investigation_completed_notification(user_id, data):
-                        done = "fallback"
-                    else:
-                        raise ValueError("Slack rejected the fallback notification")
+                        if placed_thread_ts(result) == target["ts"]:
+                            reply_ts = result["ts"]
+                        else:
+                            # Slack can accept a reply as a channel post if the parent
+                            # disappears. Retain the ts until cleanup succeeds.
+                            target["unthreaded_ts"] = result["ts"]
+                            _remove_unthreaded_message(client, target)
+                    finished = True
+                elif attempt >= 3:
+                    logger.info("No matching Slack thread for incident %s after %s lookups", incident_id, attempt + 1)
+                    finished = True
         except Exception:
             logger.exception("Slack RCA delivery pending for incident %s", incident_id)
         cur.execute("""UPDATE incidents SET slack_source_reply_ts=%s, slack_source_target=%s,
                        slack_source_reply_attempts=slack_source_reply_attempts+1,
                        slack_source_reply_due=CASE WHEN %s THEN NULL ELSE NOW() + %s * interval '1 second' END
                        WHERE id=%s AND org_id=%s""",
-                    (done, json.dumps(target) if target else None, bool(done),
+                    (reply_ts, json.dumps(target) if target else None, finished,
                      min(3600, 30 * 2 ** min(attempt, 7)), incident_id, org))
         conn.commit()

@@ -26,13 +26,13 @@ OTHER = tr.PlatformRoutingSpec(
 OTHER_IDENTITY = PlatformMemoryIdentity("other", "context", "Other", frozenset({"other"}))
 
 
-def _dispatch(fn, *, slack_connected=True):
+def _dispatch(fn, *, slack_connected=True, source_type="datadog"):
     with patch("chat.backend.agent.tools.slack_tool.is_slack_connected", return_value=slack_connected), \
          patch("services.memory.incident_index.read_index", return_value=""), \
          patch("chat.background.task.create_background_chat_session", return_value="sess-1") as sess, \
          patch("chat.background.task.is_background_chat_allowed", return_value=True), \
          patch("chat.background.task.run_background_chat") as run_mock:
-        result = fn("u1", standalone_incident())
+        result = fn("u1", standalone_incident(source_type=source_type))
     return result, run_mock, sess
 
 
@@ -115,6 +115,17 @@ def test_a_failing_connection_check_only_drops_that_platform():
         result, run_mock, _sess = _dispatch(tr.trigger_team_routing_agent)
     assert result is True
     assert run_mock.delay.call_args.kwargs["initial_message"] == golden.STANDALONE_NO_INDEX
+
+
+def test_provider_thread_reserves_slack_delivery_and_retains_teams_routing():
+    with patch.object(tr, "_is_connected", return_value=True):
+        for source in ("cloudwatch", "sentry"):
+            dispatched, run, _ = _dispatch(tr.trigger_team_routing_agent, source_type=source)
+            assert dispatched
+            kwargs = run.delay.call_args.kwargs
+            assert kwargs["trigger_metadata"]["slack_source_thread_only"] is True
+            assert "post_teams_message" in kwargs["initial_message"]
+            assert "post_slack_message" not in kwargs["initial_message"]
 
 
 def test_platform_registries_stay_in_step():

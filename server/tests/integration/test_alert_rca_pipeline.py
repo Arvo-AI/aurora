@@ -113,17 +113,18 @@ class AlertPipeline(unittest.TestCase):
                 {"sender": "assistant", "text": findings}]), state.session_id))
             return True
 
+        post_attempts = []
         fail_post = [True]
         def slack_http(client, method, endpoint, data=None, **kwargs):
             if endpoint == "conversations.history":
                 return {"ok": True, "messages": list(messages[data["channel"]])}
             if endpoint == "chat.postMessage":
+                post_attempts.append(dict(data))
                 if fail_post and fail_post.pop():
                     raise ValueError("simulated Slack transport failure")
                 self.assertIn(findings, json.dumps(data["blocks"]))
-                if data["channel"] != "C-configured":
-                    self.assertTrue(data["client_msg_id"])
-                    self.assertTrue(data["thread_ts"])
+                self.assertTrue(data["client_msg_id"])
+                self.assertTrue(data["thread_ts"])
                 replies.append((data["channel"], data.get("thread_ts")))
                 return {"ok": True, "ts": str(time.time()), "message": {"thread_ts": data.get("thread_ts")}}
             raise AssertionError(endpoint)
@@ -143,10 +144,11 @@ class AlertPipeline(unittest.TestCase):
             replace("tasks.slack_source_reply.get_credentials_from_db", return_value=slack_creds)
             replace("utils.auth.stateless_auth.get_credentials_from_db", side_effect=lambda u,p: slack_creds if p=="slack" else None)
             replace("utils.notifications.dispatcher.get_org_preference",
-                    side_effect=lambda org, key, default=None: key=="slack_investigation_complete_notifications")
+                    side_effect=lambda org, key, default=None: key in {"slack_investigation_start_notifications", "slack_investigation_complete_notifications"})
             replace("connectors.slack_connector.client.SlackClient._make_request", new=slack_http)
             replace("utils.notifications.slack_notification_service._get_incidents_channel_id", return_value="C-configured")
-            replace("utils.notifications.team_routing.trigger_team_routing_agent")
+            routing = replace("utils.notifications.team_routing.trigger_team_routing_agent")
+            replace("utils.notifications.dispatcher._has_teams_connected", return_value=False)
             replace("services.correlation.recurrence_agent.run_recurrence_check", return_value={})
             replace("services.memory.incident_index.append_incident_line")
             replace("services.memory.incident_index.generate_root_cause_synopsis", return_value=findings)
@@ -236,15 +238,17 @@ class AlertPipeline(unittest.TestCase):
             self.assertEqual(sql("SELECT count(*) FROM chat_sessions WHERE org_id=%s AND incident_id IS NOT NULL", (org,)), [(8,)])
 
             # Some SNS topics have no Slack subscriber. Exhaust the lookup delay
-            # without sleeping for minutes and use the existing configured channel.
+            # without sleeping for minutes. An unmatched alert stays quiet.
             aws_post("Service: power\nBattery offline", subject="Battery offline")
             wait_for(lambda: sql("SELECT count(*) FROM incidents WHERE org_id=%s AND alert_title='Battery offline' "
                                  "AND slack_source_reply_attempts=1", (org,)) == [(1,)], "unmatched delivery")
             sql("UPDATE incidents SET slack_source_reply_due=NOW(), slack_source_reply_attempts=3 "
                 "WHERE org_id=%s AND alert_title='Battery offline'", (org,))
             retry_pending.delay()
-            wait_for(lambda: ("C-configured", None) in replies, "configured channel fallback")
-            self.assertEqual(len(replies), 9)
+            wait_for(lambda: sql("SELECT slack_source_reply_ts, slack_source_reply_due FROM incidents "
+                                 "WHERE org_id=%s AND alert_title='Battery offline'", (org,)) == [(None, None)],
+                     "exhausted lookup without a standalone message")
+            self.assertCountEqual(replies, expected)
             for kind in ("incident_initial_summary", "incident_rca_summary"):
                 prompts = [call.args[1][0].content for call in summarize.call_args_list
                            if call.kwargs.get("request_type") == kind]
@@ -277,6 +281,10 @@ class AlertPipeline(unittest.TestCase):
             wait_for(failed_run, "failed workflow recorded without a completed RCA")
             retry_pending.delay().get(timeout=20, disable_sync_subtasks=False)
             self.assertNotIn(("C-alert", parent), replies)
+            self.assertCountEqual(replies, expected)
+            self.assertTrue(all(p.get("thread_ts") and findings in json.dumps(p.get("blocks"))
+                                for p in post_attempts), "Every outbound Slack post must be a threaded final report")
+            routing.assert_not_called()
 
             self.assertEqual(saved_connection, {"approved_topic_arn": topic})
             save_connection.assert_called_once()

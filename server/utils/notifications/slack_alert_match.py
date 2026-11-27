@@ -13,6 +13,10 @@ _WINDOW = 180
 logger = logging.getLogger(__name__)
 
 
+def uses_source_thread(source_type):
+    return source_type in _APP_IDS
+
+
 def _strings(value):
     if isinstance(value, str):
         yield html.unescape(value)

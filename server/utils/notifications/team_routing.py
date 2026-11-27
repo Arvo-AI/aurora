@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Sequence, Tuple
 
 from services.memory import PLATFORM_MEMORY_IDENTITIES, TEAM_ROUTING_SOURCE
+from utils.notifications.slack_alert_match import uses_source_thread
 
 logger = logging.getLogger(__name__)
 
@@ -262,7 +263,9 @@ def trigger_team_routing_agent(user_id: str, incident_data: Dict[str, Any]) -> b
             return False
 
         # Only worth running if a chat platform is actually connected.
-        specs = [spec for spec in SPECS.values() if _is_connected(spec, user_id)]
+        source_thread = uses_source_thread(incident_data.get("source_type"))
+        specs = [spec for spec in SPECS.values()
+                 if not (source_thread and spec.platform == "slack") and _is_connected(spec, user_id)]
         if not specs:
             return False
 
@@ -317,6 +320,8 @@ def trigger_team_routing_agent(user_id: str, incident_data: Dict[str, Any]) -> b
             "source": TEAM_ROUTING_SOURCE,
             "incident_id": str(incident_id),
         }
+        if source_thread:
+            trigger_metadata["slack_source_thread_only"] = True
         session_id = create_background_chat_session(
             user_id=user_id,
             title=title,
