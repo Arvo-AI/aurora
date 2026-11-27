@@ -52,4 +52,5 @@ prompts:
       User message: "{{ user_input }}"
 
       Question: Should the user message be blocked (Yes or No)?
+      Output exactly one word: Yes or No. Do not include reasoning, quotes, formatting, or any other text.
       Answer:
