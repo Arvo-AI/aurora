@@ -28,6 +28,20 @@ class SlackAPIError(ValueError):
         return f"Slack API error: {self.error}"
 
 
+class SlackRateLimited(ValueError):
+    """Slack answered 429 and the retries are spent. Nothing is wrong with the
+    request: `retry_after` is how many seconds Slack asked to wait, or None if
+    it did not say. A ValueError like every other failure of a request."""
+
+    def __init__(self, endpoint: str, retry_after: Optional[int] = None):
+        super().__init__(endpoint, retry_after)
+        self.endpoint = endpoint
+        self.retry_after = retry_after
+
+    def __str__(self) -> str:
+        return f"Failed to communicate with Slack: rate limited on {self.endpoint}"
+
+
 class SlackClient:
     """
     Slack API client for Aurora integration.
@@ -42,17 +56,18 @@ class SlackClient:
         }
     
     @staticmethod
-    def _get_retry_delay(attempt: int, response=None) -> int:
+    def _retry_after(response) -> Optional[int]:
+        """The seconds Slack asked to wait in Retry-After, or None if it did not say."""
+        try:
+            return max(0, int(response.headers.get("Retry-After")))
+        except (AttributeError, TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _get_retry_delay(cls, attempt: int, response=None) -> int:
         """Parse Retry-After header or compute exponential backoff, capped at 30s."""
-        fallback = 2 * (attempt + 1)
-        if response is not None:
-            try:
-                delay = int(response.headers.get("Retry-After", fallback))
-            except (TypeError, ValueError):
-                delay = fallback
-        else:
-            delay = fallback
-        return min(delay, 30)
+        asked = cls._retry_after(response)
+        return min(2 * (attempt + 1) if asked is None else asked, 30)
 
     def _validate_response(self, result: Dict[str, Any], endpoint: str) -> Dict[str, Any]:
         """Check Slack's ok field; raise ValueError on API-level errors."""
@@ -79,7 +94,9 @@ class SlackClient:
                 else:
                     response = requests.post(url, headers=self.headers, json=data, timeout=timeout)
                 
-                if response.status_code == 429 and attempt < max_retries:
+                if response.status_code == 429:
+                    if attempt >= max_retries:
+                        raise SlackRateLimited(endpoint, self._retry_after(response))
                     retry_after = self._get_retry_delay(attempt, response)
                     logger.warning("Rate limited on %s, retrying in %ds (attempt %d/%d)", endpoint, retry_after, attempt + 1, max_retries)
                     time.sleep(retry_after)

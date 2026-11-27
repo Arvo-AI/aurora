@@ -217,7 +217,7 @@ def reads_to_claim(cursor, org_id: str, limit: int) -> int:
 
 
 def claim_channels(cursor, org_id: str, team_id: str, company: str,
-                   limit: int) -> List[Tuple[str, Optional[str], str]]:
+                   limit: int, quiet_after: int = 0) -> List[Turn]:
     """Take up to *limit* channels to read now, as Turns.
 
     Only channels of the workspace the token belongs to, that Aurora is in, and
@@ -225,8 +225,9 @@ def claim_channels(cursor, org_id: str, team_id: str, company: str,
     being invited to one to post notifications is not consent to read it.
 
     A channel where a message just arrived (see note_activity) goes first, then
-    the one read longest ago. The claim keeps two overlapping turns off the
-    same channel and expires by itself.
+    the one read longest ago. A channel where none arrived is left alone until
+    it was last read *quiet_after* seconds ago. The claim keeps two overlapping
+    turns off the same channel and expires by itself.
     """
     params = _channel_params(org_id, team_id, company)
     cursor.execute(
@@ -242,6 +243,8 @@ def claim_channels(cursor, org_id: str, team_id: str, company: str,
                JOIN readable r ON r.channel_id = c.channel_id
                WHERE c.org_id = %s
                  AND (c.claimed_at IS NULL OR c.claimed_at <= NOW() - %s * INTERVAL '1 second')
+                 AND (c.pending_since IS NOT NULL OR c.updated_at IS NULL
+                      OR c.updated_at <= NOW() - %s * INTERVAL '1 second')
                ORDER BY c.pending_since NULLS LAST, c.updated_at NULLS FIRST, c.channel_id
                LIMIT %s
                FOR UPDATE OF c SKIP LOCKED
@@ -250,10 +253,13 @@ def claim_channels(cursor, org_id: str, team_id: str, company: str,
            FROM readable r
            WHERE c.org_id = %s AND c.channel_id = r.channel_id
              AND c.channel_id IN (SELECT channel_id FROM taken)
-           RETURNING c.channel_id, c.last_ts, r.level, c.claimed_at, c.threads""",
-        params + (org_id, CHANNEL_CLAIM_SECONDS, limit, org_id),
+           RETURNING c.channel_id, c.last_ts, r.level, c.claimed_at, c.threads,
+                     c.pending_since IS NULL, c.pending_since, c.updated_at IS NOT NULL, c.updated_at""",
+        params + (org_id, CHANNEL_CLAIM_SECONDS, quiet_after, limit, org_id),
     )
-    return [Turn(row[0], row[1], row[2], row[3], dict(row[4] or {})) for row in cursor.fetchall()]
+    # Read in the order they were chosen in: an UPDATE returns its rows in any order.
+    rows = sorted(cursor.fetchall(), key=lambda row: (row[5], row[6] or 0, row[7], row[8] or 0, row[0]))
+    return [Turn(row[0], row[1], row[2], row[3], dict(row[4] or {})) for row in rows]
 
 
 def advance(cursor, org_id: str, channel_id: str, last_ts: str, claim: Any) -> None:
@@ -275,6 +281,22 @@ def advance(cursor, org_id: str, channel_id: str, last_ts: str, claim: Any) -> N
                ), '{}'::jsonb)
            WHERE org_id = %s AND channel_id = %s AND claimed_at = %s""",
         (last_ts, last_ts, org_id, channel_id, claim),
+    )
+
+
+def put_back(cursor, org_id: str, channel_id: str, claim: Any, first: bool = False) -> None:
+    """The turn holding *claim* did not read the channel, through no fault of the
+    channel: it is free to be taken again, and is where it was in the order.
+
+    *first* puts it ahead of every other channel. That is for a reading stopped
+    part way, which a later turn goes on with (see chat_pace).
+    """
+    cursor.execute(
+        """UPDATE detection_chat_cursors
+           SET claimed_at = NULL,
+               pending_since = CASE WHEN %s THEN 'epoch'::timestamptz ELSE pending_since END
+           WHERE org_id = %s AND channel_id = %s AND claimed_at = %s""",
+        (first, org_id, channel_id, claim),
     )
 
 

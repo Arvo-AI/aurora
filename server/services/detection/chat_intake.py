@@ -26,7 +26,8 @@ import time
 from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from celery_config import celery_app
-from services.detection import chat_intake_enabled, chat_memory, chat_reader, chat_signals
+from connectors.slack_connector.client import SlackAPIError
+from services.detection import chat_intake_enabled, chat_memory, chat_pace, chat_reader, chat_signals
 from services.detection.runner import _for_each_org, _org_cursor
 from utils.log_sanitizer import sanitize
 
@@ -34,6 +35,11 @@ logger = logging.getLogger(__name__)
 
 _LOG = "[DetectionChat]"
 CHANNELS_PER_TURN = 3
+# Where Slack limits how often Aurora may read (see chat_pace), a turn takes
+# fewer, and a channel nobody has posted in is only looked at this often. That
+# look is for a message whose event never arrived.
+LIMITED_CHANNELS_PER_TURN = 2
+QUIET_CHANNEL_SECONDS = 30 * 60
 VERIFICATIONS_PER_TURN = 2
 # One page of a channel's latest messages. It holds what is new, the
 # conversation before it, and the parents of recent threads.
@@ -96,11 +102,13 @@ def read_chat_for_org(user_id: str, org_id: str):
         from utils.auth.stateless_auth import get_credentials_from_db
 
         client = get_slack_client_for_user(user_id)
-        team_id = (get_credentials_from_db(user_id, "slack") or {}).get("team_id")
+        credentials = get_credentials_from_db(user_id, "slack") or {}
+        team_id = credentials.get("team_id")
         if client is None or not team_id:
             return
 
-        bot_user_id = (get_credentials_from_db(user_id, "slack") or {}).get("bot_user_id")
+        bot_user_id = credentials.get("bot_user_id")
+        limit, quiet_after = _turn_size(team_id)
         company = chat_signals.company_level(org_id)
         with _org_cursor(user_id, org_id) as (cur, conn):
             if cur is None:
@@ -109,16 +117,17 @@ def read_chat_for_org(user_id: str, org_id: str):
             # Out of reads for the day: nothing new is read, and what was already kept is
             # still looked into below.
             turns = []
-            allowed = chat_signals.reads_to_claim(cur, org_id, CHANNELS_PER_TURN)
+            allowed = chat_signals.reads_to_claim(cur, org_id, limit)
             if allowed:
-                turns = chat_signals.claim_channels(cur, org_id, team_id, company, allowed)
+                turns = chat_signals.claim_channels(cur, org_id, team_id, company, allowed,
+                                                    quiet_after)
             assets = chat_signals.known_assets(cur, org_id) if turns else []
             conn.commit()
 
+        workspace = _Workspace(team_id, bot_user_id, user_id, org_id)
         for turn in turns:
             try:
-                _read_channel(client, _Workspace(team_id, bot_user_id, user_id, org_id),
-                              turn, assets)
+                _read_channel(client, workspace, turn, assets)
             except Exception:
                 logger.exception("%s Reading channel %s failed", _LOG, sanitize(turn.channel_id))
 
@@ -134,7 +143,28 @@ class _Workspace(NamedTuple):
     org_id: str
 
 
-def _latest(client, channel_id: str, last_ts: str, upto: str) -> Tuple[List[dict], bool]:
+def _turn_size(team_id: str) -> Tuple[int, int]:
+    """(channels this turn may take, seconds a quiet channel is left alone).
+
+    A workspace Slack has not limited is read a few channels a minute, quiet
+    ones included. A limited one has a call or two a minute to spend: a turn
+    takes two channels, so that one waiting on a thread does not keep the next
+    from being started, and quiet channels are left for QUIET_CHANNEL_SECONDS.
+    """
+    if chat_pace.limited(team_id, chat_pace.HISTORY) or chat_pace.limited(team_id, chat_pace.REPLIES):
+        return LIMITED_CHANNELS_PER_TURN, QUIET_CHANNEL_SECONDS
+    return CHANNELS_PER_TURN, 0
+
+
+def _put_back(workspace: _Workspace, turn: chat_signals.Turn, first: bool = False) -> None:
+    """Hand a channel back unread. Nothing is counted against it."""
+    with _org_cursor(workspace.user_id, workspace.org_id) as (cur, conn):
+        if cur is not None:
+            chat_signals.put_back(cur, workspace.org_id, turn.channel_id, turn.claim, first)
+            conn.commit()
+
+
+def _latest(ask, channel_id: str, last_ts: str, upto: str) -> Tuple[List[dict], bool]:
     """The channel's latest messages, back to *last_ts*: (messages, whether that reached it).
 
     The first page is taken whatever the cursor says, so it also brings the
@@ -145,7 +175,7 @@ def _latest(client, channel_id: str, last_ts: str, upto: str) -> Tuple[List[dict
         params: Dict[str, Any] = {"channel": channel_id, "limit": _PAGE, "latest": upto}
         if page_cursor:
             params["cursor"] = page_cursor
-        result = client._make_request("GET", "conversations.history", params) or {}
+        result = ask(chat_pace.HISTORY, params)
         page = [m for m in result.get("messages", []) if m.get("ts")]
         messages.extend(page)
         page_cursor = (result.get("response_metadata") or {}).get("next_cursor")
@@ -155,12 +185,12 @@ def _latest(client, channel_id: str, last_ts: str, upto: str) -> Tuple[List[dict
     return messages, False
 
 
-def _new_replies(client, channel_id: str, parents: List[dict], last_ts: str, upto: str) -> List[dict]:
+def _new_replies(ask, channel_id: str, parents: List[dict], last_ts: str, upto: str) -> List[dict]:
     """Replies in (*last_ts*, *upto*] in threads whose parent is among *parents*.
 
     Every thread with something new is read, and read to the end. The channel
     has one cursor: a reply left for a later turn would be behind it by then,
-    and never read.
+    and never read. A thread that is gone has nothing to read.
     """
     active = [m for m in parents
               if m.get("reply_count") and float(m.get("latest_reply") or 0) > float(last_ts)]
@@ -172,7 +202,12 @@ def _new_replies(client, channel_id: str, parents: List[dict], last_ts: str, upt
                       "limit": _REPLY_PAGE}
             if page_cursor:
                 params["cursor"] = page_cursor
-            result = client._make_request("GET", "conversations.replies", params) or {}
+            try:
+                result = ask(chat_pace.REPLIES, params)
+            except SlackAPIError as gone:
+                if gone.error != "thread_not_found":
+                    raise
+                break
             replies.extend(m for m in result.get("messages", [])
                            if m.get("ts") and m["ts"] != parent["ts"] and float(m["ts"]) > float(last_ts))
             page_cursor = (result.get("response_metadata") or {}).get("next_cursor")
@@ -209,7 +244,7 @@ def _full_members(client, team_id: str, messages: List[dict]) -> set:
 
 
 def _gather(client, team_id: str, channel_id: str, last_ts: str, bot_user_id: Optional[str] = None,
-            threads: Optional[Dict[str, str]] = None):
+            threads: Optional[Dict[str, str]] = None, progress: Optional[chat_pace.Progress] = None):
     """What is new in the channel since *last_ts*: (new, context, newest ts seen).
 
     *threads* are threads noted as having a new reply (thread ts to reply ts).
@@ -222,9 +257,19 @@ def _gather(client, team_id: str, channel_id: str, last_ts: str, bot_user_id: Op
     Nothing later than the moment the reading starts is taken, by either call.
     The cursor then never passes a message this reading did not have the chance
     to see.
+
+    Raises chat_pace.Busy when Slack may not be asked for more now. What it
+    answered so far is in *progress*, and the reading goes on from there when
+    given the same *progress* again.
     """
-    upto = "%.6f" % time.time()
-    latest, complete = _latest(client, channel_id, last_ts, upto)
+    if progress is None:
+        progress = chat_pace.Progress(last_ts, "%.6f" % time.time())
+    upto = progress.upto
+
+    def ask(endpoint: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        return progress.ask(client, team_id, endpoint, params)
+
+    latest, complete = _latest(ask, channel_id, last_ts, upto)
     if not complete:
         logger.warning("%s Channel %s had more than %d new messages; the oldest were not read",
                        _LOG, sanitize(channel_id), _PAGE * _MAX_PAGES)
@@ -234,7 +279,7 @@ def _gather(client, team_id: str, channel_id: str, last_ts: str, bot_user_id: Op
     shown = {m["ts"] for m in latest}
     noted = [{"ts": thread_ts, "reply_count": 1, "latest_reply": reply_ts}
              for thread_ts, reply_ts in (threads or {}).items() if thread_ts not in shown]
-    seen = top_new + _new_replies(client, channel_id, latest + noted, last_ts, upto)
+    seen = top_new + _new_replies(ask, channel_id, latest + noted, last_ts, upto)
     newest_ts = max((m["ts"] for m in seen), key=float) if seen else last_ts
     with_aurora = _asked_of_aurora(latest + seen, bot_user_id)
     typed = [m for m in seen + before if chat_reader.is_readable(m, team_id)]
@@ -258,6 +303,7 @@ def _keep(cur, org_id: str, turn: chat_signals.Turn, new: list, reports, newest_
                                  reports is not None)
     if reports is None:
         if chat_signals.read_failed(cur, org_id, channel_id, newest_ts, turn.claim):
+            chat_pace.done(org_id, channel_id)
             logger.warning("%s Gave up on %d message(s) in channel %s after repeated failures",
                            _LOG, len(new), sanitize(channel_id))
         return
@@ -266,6 +312,7 @@ def _keep(cur, org_id: str, turn: chat_signals.Turn, new: list, reports, newest_
         if kept and report.asset:
             chat_signals.run_checks_now(cur, org_id, report.asset)
     chat_signals.advance(cur, org_id, channel_id, newest_ts, turn.claim)
+    chat_pace.done(org_id, channel_id)
 
 
 def _read_channel(client, workspace: _Workspace, turn: chat_signals.Turn, assets: List[str]) -> None:
@@ -280,15 +327,38 @@ def _read_channel(client, workspace: _Workspace, turn: chat_signals.Turn, assets
                 conn.commit()
         return
 
+    progress = chat_pace.resume(org_id, channel_id, last_ts, "%.6f" % time.time())
     reports, new, newest_ts = None, [], last_ts
     try:
         new, context, newest_ts = _gather(client, team_id, channel_id, last_ts, bot_user_id,
-                                          turn.threads)
-        # Questions are only picked out where Aurora would answer them.
-        reports = chat_reader.read(new, context, assets, user_id,
-                                   questions=level == chat_signals.LEVEL_FREE)
+                                          turn.threads, progress)
+    except chat_pace.Busy:
+        # Not a failure. What Slack has answered so far is kept, and a reading
+        # that got somewhere goes first next time, to go on from here.
+        chat_pace.keep(org_id, channel_id, progress)
+        _put_back(workspace, turn, first=bool(progress.answers))
+        return
+    except chat_pace.Unreachable:
+        # The messages are still there to read, when Slack answers again.
+        logger.warning("%s Could not reach Slack for channel %s", _LOG, sanitize(channel_id), exc_info=True)
+        chat_pace.keep(org_id, channel_id, progress)
+        _put_back(workspace, turn)
+        return
     except Exception:
+        # Slack refused (Aurora is no longer in the channel, or it is gone), or
+        # what it sent could not be worked with. Counted, so a channel that
+        # cannot be read is not tried for good.
         logger.exception("%s Could not read channel %s", _LOG, sanitize(channel_id))
+    else:
+        try:
+            # Questions are only picked out where Aurora would answer them.
+            reports = chat_reader.read(new, context, assets, user_id,
+                                       questions=level == chat_signals.LEVEL_FREE)
+        except Exception:
+            logger.exception("%s Could not read channel %s", _LOG, sanitize(channel_id))
+        if reports is None:
+            # The model is asked again next turn. Slack need not be.
+            chat_pace.keep(org_id, channel_id, progress)
 
     with _org_cursor(user_id, org_id) as (cur, conn):
         if cur is not None:
