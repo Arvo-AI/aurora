@@ -838,15 +838,12 @@ def initialize_tables():
                          UNIQUE(org_id, source_type, source_alert_id, user_id)
                      );
                      
-                     ALTER TABLE incidents ADD COLUMN IF NOT EXISTS alert_rca_pending BOOLEAN NOT NULL DEFAULT FALSE;
                      ALTER TABLE incidents ADD COLUMN IF NOT EXISTS slack_source_reply_ts VARCHAR(50);
                      ALTER TABLE incidents ADD COLUMN IF NOT EXISTS slack_source_reply_due TIMESTAMPTZ,
                          ADD COLUMN IF NOT EXISTS slack_source_target JSONB,
                          ADD COLUMN IF NOT EXISTS slack_source_reply_attempts INTEGER NOT NULL DEFAULT 0;
                      CREATE INDEX IF NOT EXISTS idx_incidents_slack_source_due
                          ON incidents(org_id, slack_source_reply_due) WHERE slack_source_reply_due IS NOT NULL;
-                     CREATE INDEX IF NOT EXISTS idx_incidents_pending_rca
-                         ON incidents(org_id, created_at) WHERE alert_rca_pending;
                      CREATE INDEX IF NOT EXISTS idx_incidents_user_id ON incidents(user_id, started_at DESC);
                      CREATE INDEX IF NOT EXISTS idx_incidents_status ON incidents(status);
                      CREATE INDEX IF NOT EXISTS idx_incidents_source ON incidents(source_type, source_alert_id);

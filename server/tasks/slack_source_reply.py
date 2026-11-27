@@ -29,6 +29,19 @@ def queue_source_reply(user_id, incident_id):
         deliver_source_reply.delay(user_id, incident_id)
 
 
+@celery_app.task(name="tasks.slack_source_reply.retry_due")
+def retry_due_source_replies():
+    from services.detection.runner import _for_each_org
+
+    def collect(cur, conn, _user, org_id):
+        cur.execute("SELECT user_id, id FROM incidents WHERE org_id=%s AND slack_source_reply_due <= NOW()",
+                    (org_id,))
+        for owner, incident in cur.fetchall():
+            deliver_source_reply.delay(owner, str(incident))
+
+    _for_each_org(collect, "retrying due Slack source replies")
+
+
 def _find_target(cur, client, org, team, data, target):
     incident_id = data["incident_id"]
     cur.execute("""SELECT DISTINCT channel_id FROM slack_channels WHERE org_id=%s AND team_id=%s

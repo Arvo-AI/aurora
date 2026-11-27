@@ -45,8 +45,8 @@ class AlertPipeline(unittest.TestCase):
         from utils.db.connection_pool import db_pool
         from routes.aws import cloudwatch_routes as aws
         from routes.sentry import sentry_routes as sentry
-        from tasks.alert_rca import retry_pending, dispatch_pending_rca
-        from chat.background.task import run_background_chat
+        from tasks.slack_source_reply import retry_due_source_replies
+        from utils.cache.redis_client import get_redis_client
         with patch.dict(os.environ, INTERNAL_API_SECRET="integration-test-only"):
             from main_chatbot import process_workflow_async
 
@@ -179,16 +179,8 @@ class AlertPipeline(unittest.TestCase):
             # unrelated to delivery (e.g. visualizations) are ancillary.
             stack.enter_context(start_worker(celery_app, pool="solo", perform_ping_check=False,
                                              queues=(queue,), loglevel="INFO", shutdown_timeout=30))
-            publish = run_background_chat.apply_async
-            unavailable = [True]
-
-            def publish_after_outage(*args, **kwargs):
-                if unavailable and unavailable.pop():
-                    raise ConnectionError("simulated broker outage")
-                return publish(*args, **kwargs)
-            stack.enter_context(patch.object(run_background_chat, "apply_async", side_effect=publish_after_outage))
             expected = []
-            for n in range(5):
+            for n in range(2):
                 title = f"[CRITICAL] fault {n} on terminal 42"
                 body = f"Terminal: 42\nSeverity: critical\nSignal value: {n}"
                 custom = dict(version="1.0", source="custom", content=dict(title=title, description=body))
@@ -207,35 +199,34 @@ class AlertPipeline(unittest.TestCase):
             expected.append(("C-sentry", add_post("C-sentry","A011MFBJEUU","checkout","https://test.sentry.io/issues/447/")))
             sentry_post()
             sentry_post()
-            wait_for(lambda: len(contexts) == 7, "healthy alerts during a broker failure")
-            self.assertEqual(sql("SELECT count(*) FROM incidents WHERE org_id=%s AND alert_rca_pending", (org,)), [(1,)])
-            retry_pending.delay()
-            wait_for(lambda: len(contexts) == 8, "eight separate RCA workflows")
-            self.assertEqual(sorted(x[0] for x in contexts), ["cloudwatch"]*7 + ["sentry"])
+            wait_for(lambda: len(contexts) == 5, "five investigations within the shared limit")
+            self.assertEqual(sorted(x[0] for x in contexts), ["cloudwatch"]*4 + ["sentry"])
             self.assertTrue(all(question for _, question in contexts))
-            wait_for(lambda: len(replies) == 6, "six immediate replies")
+            wait_for(lambda: len(replies) == 3, "three immediate replies")
             expected.append(("C-alert", add_post("C-alert","A6L22LZNH","[V2] CRITICAL offline",plain)))
             sql("UPDATE incidents SET slack_source_reply_due=NOW() WHERE org_id=%s AND slack_source_reply_due IS NOT NULL", (org,))
-            retry_pending.delay()
+            retry_due_source_replies.delay()
             wait_for(lambda: sorted(replies)==sorted(expected), "late and retried replies")
             aws_post(dict(alarm, NewStateValue="OK"))
             wait_for(lambda: sql("SELECT count(*) FROM incidents WHERE org_id=%s AND status='resolved'",(org,))==[(1,)], "CloudWatch OK")
             self.assertEqual(sql("SELECT count(*) FROM incidents WHERE org_id=%s AND slack_source_reply_ts IS NOT NULL",
-                                 (org,)), [(8,)])
-            # Simulate a publisher dying after Redis accepted the task, leaving
-            # its pending flag set while the first worker went on to finish.
-            duplicate = sql("UPDATE incidents SET alert_rca_pending=TRUE WHERE org_id=%s AND source_type='sentry' "
-                            "RETURNING id", (org,))[0][0]
-            dispatch_pending_rca(user, str(duplicate))
-            session_id = str(sql("SELECT aurora_chat_session_id FROM incidents WHERE id=%s", (duplicate,))[0][0])
-            publish(task_id=session_id, kwargs=dict(user_id=user, session_id=session_id,
-                             incident_id=str(duplicate), initial_message="retry",
-                             trigger_metadata={"source":"sentry", "alert_delivery":True}))
-            # Redis may still hold the first task result. A queue barrier proves
-            # this second message has been consumed before we count executions.
-            retry_pending.delay().get(timeout=20, disable_sync_subtasks=False)
-            self.assertEqual(len(contexts), 8)
-            self.assertEqual(sql("SELECT count(*) FROM chat_sessions WHERE org_id=%s AND incident_id IS NOT NULL", (org,)), [(8,)])
+                                 (org,)), [(5,)])
+
+            # Both connectors still ingest alerts when the user's five slots are spent.
+            aws_post("Client: terminal-99\nPower lost", subject="Rate-limited SNS")
+            sentry_post({"action": "created", "data": {"issue": {
+                "id": "899", "title": "Rate-limited Sentry",
+            }}}, resource="issue")
+            retry_due_source_replies.delay().get(timeout=20, disable_sync_subtasks=False)
+            self.assertEqual(sql("SELECT alert_title, rca_celery_task_id, slack_source_reply_ts FROM incidents "
+                                 "WHERE org_id=%s AND alert_title IN ('Rate-limited SNS','Rate-limited Sentry') "
+                                 "ORDER BY alert_title", (org,)),
+                             [("Rate-limited SNS", None, None), ("Rate-limited Sentry", None, None)])
+            self.assertEqual(sql("SELECT count(*) FROM chat_sessions WHERE org_id=%s AND incident_id IS NOT NULL",
+                                 (org,)), [(5,)])
+            self.assertEqual(len(contexts), 5)
+            # Begin a fresh rate-limit window for the remaining delivery scenarios.
+            get_redis_client().delete(f"background_chat_rate_limit:{user}")
 
             # Some SNS topics have no Slack subscriber. Exhaust the lookup delay
             # without sleeping for minutes. An unmatched alert stays quiet.
@@ -244,7 +235,7 @@ class AlertPipeline(unittest.TestCase):
                                  "AND slack_source_reply_attempts=1", (org,)) == [(1,)], "unmatched delivery")
             sql("UPDATE incidents SET slack_source_reply_due=NOW(), slack_source_reply_attempts=3 "
                 "WHERE org_id=%s AND alert_title='Battery offline'", (org,))
-            retry_pending.delay()
+            retry_due_source_replies.delay()
             wait_for(lambda: sql("SELECT slack_source_reply_ts, slack_source_reply_due FROM incidents "
                                  "WHERE org_id=%s AND alert_title='Battery offline'", (org,)) == [(None, None)],
                      "exhausted lookup without a standalone message")
@@ -257,7 +248,7 @@ class AlertPipeline(unittest.TestCase):
             aws_post(dict(alarm, NewStateValue="INSUFFICIENT_DATA"))
             wait_for(lambda: sql("SELECT count(*) FROM cloudwatch_alarms WHERE org_id=%s AND state_value IN "
                                  "('', 'INSUFFICIENT_DATA')", (org,)) == [(2,)], "non-firing audit rows")
-            self.assertEqual(sql("SELECT count(*) FROM incidents WHERE org_id=%s", (org,)), [(9,)])
+            self.assertEqual(sql("SELECT count(*) FROM incidents WHERE org_id=%s", (org,)), [(8,)])
 
 
             # A v1 worker can still execute its original upsert while v2 workers
@@ -268,7 +259,7 @@ class AlertPipeline(unittest.TestCase):
                 "WHERE issue_id IS NOT NULL DO UPDATE SET payload=EXCLUDED.payload", (org,user,json.dumps(legacy)))
             from routes.sentry.tasks import process_sentry_event
             process_sentry_event.delay(legacy, {"resource": "issue"}, user).get(timeout=20, disable_sync_subtasks=False)
-            self.assertEqual(sql("SELECT count(*) FROM incidents WHERE org_id=%s", (org,)), [(9,)])
+            self.assertEqual(sql("SELECT count(*) FROM incidents WHERE org_id=%s", (org,)), [(8,)])
 
             parent = add_post("C-alert", "A6L22LZNH", "QA stream failure", "Signal unavailable")
             aws_post("Signal unavailable", subject="QA stream failure")
@@ -279,7 +270,7 @@ class AlertPipeline(unittest.TestCase):
                     "WHERE i.org_id=%s AND i.alert_title='QA stream failure'", (org,)
                 ) == [("error", "failed", None)]
             wait_for(failed_run, "failed workflow recorded without a completed RCA")
-            retry_pending.delay().get(timeout=20, disable_sync_subtasks=False)
+            retry_due_source_replies.delay().get(timeout=20, disable_sync_subtasks=False)
             self.assertNotIn(("C-alert", parent), replies)
             self.assertCountEqual(replies, expected)
 
@@ -312,7 +303,7 @@ class AlertPipeline(unittest.TestCase):
                 sentry_post({"action": action, "data": {"issue": issue}}, resource="issue")
             sentry_post({"action": "resolved", "data": {"issue": dict(issue, id="630")}}, resource="issue")
             wait_for(lambda: sorted(replies) == sorted(expected), "one final reply under the Sentry issue")
-            retry_pending.delay().get(timeout=20, disable_sync_subtasks=False)
+            retry_due_source_replies.delay().get(timeout=20, disable_sync_subtasks=False)
             self.assertEqual(sql("SELECT action, count(*) FROM sentry_events WHERE org_id=%s "
                                  "AND group_id IN ('629','630') GROUP BY action ORDER BY action", (org,)),
                              [("created", 1), ("resolved", 2)])

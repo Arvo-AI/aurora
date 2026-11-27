@@ -262,15 +262,15 @@ def _try_correlate_alarm(
 def _create_incident_record(
     cursor, conn, user_id: str, org_id: str, alarm_db_id,
     alarm_name: str, service: str, severity: str,
-    alert_metadata: Dict[str, Any], received_at, queue_rca: bool,
+    alert_metadata: Dict[str, Any], received_at,
 ):
     """Insert the incident + lifecycle event + alert link. Returns incident_id or None."""
     cursor.execute(
         """
         INSERT INTO incidents
           (user_id, org_id, source_type, source_alert_id, alert_title, alert_service,
-           severity, status, started_at, alert_metadata, alert_fired_at, alert_rca_pending)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+           severity, status, started_at, alert_metadata, alert_fired_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (org_id, source_type, source_alert_id, user_id) DO UPDATE
           SET updated_at = CURRENT_TIMESTAMP,
               started_at = CASE WHEN incidents.status != 'analyzed'
@@ -281,7 +281,7 @@ def _create_incident_record(
         (
             user_id, org_id, "cloudwatch", alarm_db_id, alarm_name,
             service, severity, "investigating", received_at,
-            json.dumps(alert_metadata), received_at, queue_rca,
+            json.dumps(alert_metadata), received_at,
         ),
     )
     incident_row = cursor.fetchone()
@@ -340,9 +340,11 @@ def _create_incident_record(
 
 def _post_incident_actions(
     user_id: str, org_id: str, incident_id, alarm_name: str,
-    service: str, severity: str, alert_metadata: Dict[str, Any], payload: Dict[str, Any],
+    service: str, severity: str, state_value: str,
+    alert_metadata: Dict[str, Any], payload: Dict[str, Any],
+    skip_rca: bool, cursor, conn,
 ) -> None:
-    """Broadcast and summarize after releasing the intake connection."""
+    """SSE broadcast, summary generation, and RCA trigger."""
     try:
         from routes.incidents_sse import broadcast_incident_update_to_user_connections
         broadcast_incident_update_to_user_connections(
@@ -365,6 +367,63 @@ def _post_incident_actions(
             "[CLOUDWATCH][ALARM] Failed to enqueue summary for incident %s: %s",
             incident_id, exc,
         )
+
+    if skip_rca:
+        return
+
+    try:
+        from chat.background.task import (
+            run_background_chat,
+            create_background_chat_session,
+            is_background_chat_allowed,
+        )
+        if not is_background_chat_allowed(user_id):
+            logger.info("[CLOUDWATCH][ALARM] Skipping RCA — rate limited for user %s", user_id)
+            return
+
+        from chat.background.rca_prompt_builder import build_rca_prompt
+        if payload.get("Type") == "Notification":
+            payload = {key: payload.get(key) for key in ("Subject", "Message")}
+        rca_prompt, rail_text = build_rca_prompt(
+            "cloudwatch", alarm_name, payload, user_id=user_id
+        )
+        chat_title = f"RCA: {alarm_name}"
+        session_id = create_background_chat_session(
+            user_id=user_id,
+            title=chat_title,
+            org_id=org_id,
+            trigger_metadata={
+                "source": "cloudwatch",
+                "alert_delivery": True,
+                "alarm_name": alarm_name,
+                "state": state_value,
+            },
+            incident_id=str(incident_id),
+        )
+        task = run_background_chat.delay(
+            user_id=user_id,
+            session_id=session_id,
+            initial_message=rca_prompt,
+            trigger_metadata={
+                "source": "cloudwatch",
+                "alert_delivery": True,
+                "alarm_name": alarm_name,
+                "state": state_value,
+            },
+            incident_id=str(incident_id),
+            rail_text=rail_text,
+        )
+        cursor.execute(
+            "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
+            (task.id, str(incident_id)),
+        )
+        conn.commit()
+        logger.info(
+            "[CLOUDWATCH][ALARM] Triggered RCA for session %s (task=%s)",
+            session_id, task.id,
+        )
+    except Exception as exc:
+        logger.exception("[CLOUDWATCH][ALARM] Failed to trigger RCA: %s", exc)
 
 
 def _extract_alarm_fields(payload: Dict[str, Any]) -> AlarmFields:
@@ -455,7 +514,7 @@ def _process_alarm_in_db(
 
             incident_id = _create_incident_record(
                 cursor, conn, user_id, org_id, alarm_db_id,
-                fields.alarm_name, service, severity, alert_metadata, received_at, not skip_rca,
+                fields.alarm_name, service, severity, alert_metadata, received_at,
             )
             if not incident_id:
                 return
@@ -465,11 +524,11 @@ def _process_alarm_in_db(
                 incident_id, fields.alarm_name,
             )
 
-    _post_incident_actions(user_id, org_id, incident_id, fields.alarm_name, service, severity,
-                           alert_metadata, payload)
-    if not skip_rca:
-        from tasks.alert_rca import dispatch_pending_rca
-        dispatch_pending_rca(user_id, str(incident_id))
+            _post_incident_actions(
+                user_id, org_id, incident_id, fields.alarm_name,
+                service, severity, fields.state_value, alert_metadata,
+                payload, skip_rca, cursor, conn,
+            )
 
 
 @celery_app.task(

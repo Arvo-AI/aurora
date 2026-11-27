@@ -13,6 +13,7 @@ import psycopg2
 import requests
 
 from celery_config import celery_app
+from chat.background.rca_prompt_builder import build_rca_prompt
 from services.correlation.alert_correlator import AlertCorrelator
 from services.correlation import apply_correlation_outcome
 from utils.payload_timestamp import extract_alert_fired_at
@@ -318,8 +319,8 @@ def process_sentry_event(
                     """
                     INSERT INTO incidents
                     (user_id, org_id, source_type, source_alert_id, alert_title, alert_service,
-                     severity, status, started_at, alert_metadata, alert_fired_at, alert_rca_pending)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE)
+                     severity, status, started_at, alert_metadata, alert_fired_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (org_id, source_type, source_alert_id, user_id) DO UPDATE
                     SET updated_at = CURRENT_TIMESTAMP,
                         started_at = CASE
@@ -407,9 +408,59 @@ def process_sentry_event(
                     except Exception:
                         logger.exception("[SENTRY] Could not queue incident summary")
 
-        if incident_id:
-            from tasks.alert_rca import dispatch_pending_rca
-            dispatch_pending_rca(user_id, str(incident_id))
+                    try:
+                        from chat.background.task import (
+                            run_background_chat,
+                            create_background_chat_session,
+                            is_background_chat_allowed,
+                        )
+
+                        if not is_background_chat_allowed(user_id):
+                            logger.info("[SENTRY][WEBHOOK] Skipping background RCA — rate limited for user %s", user_id)
+                        else:
+                            session_id = create_background_chat_session(
+                                user_id=user_id,
+                                title=f"RCA: {title}",
+                                org_id=org_id,
+                                trigger_metadata={
+                                    "source": "sentry",
+                                    "alert_delivery": True,
+                                    "resource": resource,
+                                    "action": action,
+                                    "issueId": issue_id,
+                                },
+                                incident_id=str(incident_id),
+                            )
+
+                            rca_prompt, rail_text = build_rca_prompt("sentry", title, payload, user_id=user_id)
+
+                            task = run_background_chat.delay(
+                                user_id=user_id,
+                                session_id=session_id,
+                                initial_message=rca_prompt,
+                                trigger_metadata={
+                                    "source": "sentry",
+                                    "alert_delivery": True,
+                                    "resource": resource,
+                                    "action": action,
+                                    "issueId": issue_id,
+                                },
+                                incident_id=str(incident_id),
+                                rail_text=rail_text,
+                            )
+
+                            cursor.execute(
+                                "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
+                                (task.id, str(incident_id)),
+                            )
+                            conn.commit()
+
+                            logger.info(
+                                "[SENTRY][WEBHOOK] Triggered background RCA for session %s (task_id=%s)",
+                                session_id, task.id,
+                            )
+                    except Exception:
+                        logger.exception("[SENTRY][WEBHOOK] Failed to trigger RCA")
 
     except _TRANSIENT_EXCEPTIONS as exc:
         logger.exception("[SENTRY][WEBHOOK] Transient failure; retrying")

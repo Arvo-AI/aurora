@@ -526,23 +526,6 @@ def run_background_chat(
     except Exception as _dedup_err:
         logger.warning(f"[BackgroundChat] DEDUP check failed (proceeding anyway): {_dedup_err}")
 
-    if (trigger_metadata or {}).get("alert_delivery") and self.request.id == session_id:
-        # Publishing to the broker and recording its receipt in Postgres cannot
-        # commit atomically. A redelivery after the first worker finished must
-        # also be idempotent, when the concurrent-execution Redis lock is gone.
-        try:
-            with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
-                org = set_rls_context(cur, conn, user_id)
-                cur.execute("SELECT status FROM chat_sessions WHERE id=%s AND user_id=%s "
-                            "AND org_id=%s AND incident_id=%s", (session_id, user_id, org, incident_id))
-                row = cur.fetchone()
-                if not row or row[0] in TERMINAL_SESSION_STATUSES:
-                    return {"session_id": session_id, "status": "deduplicated", "error": None}
-        except Exception as exc:
-            if _dedup_acquired:
-                _dedup_redis.delete(_dedup_key)
-            raise self.retry(exc=exc, countdown=30)
-
     # Block until prewarm completes (avoids cold-start on first task after child fork)
     from celery_config import _prewarm_ready
     _prewarm_ready.wait(timeout=30)
@@ -2761,7 +2744,6 @@ def create_background_chat_session(
     incident_id: Optional[str] = None,
     question: Optional[str] = None,
     org_id: Optional[str] = None,
-    session_id: Optional[str] = None,
 ) -> str:
     """Create a new chat session for a background chat.
     
@@ -2779,7 +2761,7 @@ def create_background_chat_session(
     Returns:
         The created session ID
     """
-    session_id = session_id or str(uuid.uuid4())
+    session_id = str(uuid.uuid4())
     
     try:
         with db_pool.get_admin_connection() as conn:
@@ -2816,7 +2798,6 @@ def create_background_chat_session(
                 cursor.execute("""
                     INSERT INTO chat_sessions (id, user_id, org_id, title, messages, ui_state, created_at, updated_at, is_active, status, incident_id)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (id) DO NOTHING
                 """, (
                     session_id,
                     user_id,

@@ -459,8 +459,13 @@ def _process_with_cursor(cursor, conn, user_id: str, org_id: str, normalized: Di
     try:
         from chat.background.task import (
             create_background_chat_session,
+            is_background_chat_allowed,
             run_background_chat,
         )
+
+        if not is_background_chat_allowed(user_id):
+            logger.info("[ELASTIC][ALERT] Skipping background RCA - rate limited for user %s", user_id)
+            return
 
         session_id = create_background_chat_session(
             user_id=user_id,

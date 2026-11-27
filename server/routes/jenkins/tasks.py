@@ -357,35 +357,39 @@ def _trigger_rca(
         from chat.background.task import (
             run_background_chat,
             create_background_chat_session,
+            is_background_chat_allowed,
         )
 
-        session_id = create_background_chat_session(
-            user_id=user_id,
-            title=f"RCA: {alert_title}",
-            trigger_metadata={
-                "source": source,
-                "build_number": build_number,
-                "result": result,
-            },
-            incident_id=str(incident_id),
-        )
-        rca_prompt, rail_text = build_rca_prompt(source, alert_title, payload, user_id=user_id)
-        task = run_background_chat.delay(
-            user_id=user_id,
-            session_id=session_id,
-            initial_message=rca_prompt,
-            trigger_metadata={"source": source, "result": result},
-            incident_id=str(incident_id),
-            rail_text=rail_text,
-        )
-        cursor.execute(
-            "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
-            (task.id, str(incident_id)),
-        )
-        conn.commit()
-        logger.info(
-            "%s Triggered RCA for incident %s (task=%s)",
-            log_prefix, incident_id, task.id,
-        )
+        if is_background_chat_allowed(user_id):
+            session_id = create_background_chat_session(
+                user_id=user_id,
+                title=f"RCA: {alert_title}",
+                trigger_metadata={
+                    "source": source,
+                    "build_number": build_number,
+                    "result": result,
+                },
+                incident_id=str(incident_id),
+            )
+            rca_prompt, rail_text = build_rca_prompt(source, alert_title, payload, user_id=user_id)
+            task = run_background_chat.delay(
+                user_id=user_id,
+                session_id=session_id,
+                initial_message=rca_prompt,
+                trigger_metadata={"source": source, "result": result},
+                incident_id=str(incident_id),
+                rail_text=rail_text,
+            )
+            cursor.execute(
+                "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
+                (task.id, str(incident_id)),
+            )
+            conn.commit()
+            logger.info(
+                "%s Triggered RCA for incident %s (task=%s)",
+                log_prefix, incident_id, task.id,
+            )
+        else:
+            logger.info("%s RCA rate-limited for user %s", log_prefix, user_id)
     except Exception as rca_exc:
         logger.exception("%s Failed to trigger RCA: %s", log_prefix, rca_exc)

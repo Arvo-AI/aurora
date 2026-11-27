@@ -384,52 +384,59 @@ def process_datadog_event(
                             from chat.background.task import (
                                 run_background_chat,
                                 create_background_chat_session,
+                                is_background_chat_allowed,
                             )
 
-                            session_id = create_background_chat_session(
-                                user_id=user_id,
-                                title=f"RCA: {event_title or 'Datadog Alert'}",
-                                trigger_metadata={
-                                    "source": "datadog",
-                                    "monitor_id": payload.get("monitor_id")
-                                    or payload.get("alert_id"),
-                                    "status": status,
-                                },
-                                incident_id=str(incident_id),
-                            )
+                            if not is_background_chat_allowed(user_id):
+                                logger.info(
+                                    "[DATADOG][WEBHOOK] Skipping background RCA - rate limited for user %s",
+                                    user_id,
+                                )
+                            else:
+                                session_id = create_background_chat_session(
+                                    user_id=user_id,
+                                    title=f"RCA: {event_title or 'Datadog Alert'}",
+                                    trigger_metadata={
+                                        "source": "datadog",
+                                        "monitor_id": payload.get("monitor_id")
+                                        or payload.get("alert_id"),
+                                        "status": status,
+                                    },
+                                    incident_id=str(incident_id),
+                                )
 
-                            # Build comprehensive RCA prompt with provider context
-                            rca_prompt, rail_text = build_rca_prompt(
-                                "datadog", event_title, payload, user_id=user_id
-                            )
+                                # Build comprehensive RCA prompt with provider context
+                                rca_prompt, rail_text = build_rca_prompt(
+                                    "datadog", event_title, payload, user_id=user_id
+                                )
 
-                            # Start RCA task and immediately store task ID
-                            task = run_background_chat.delay(
-                                user_id=user_id,
-                                session_id=session_id,
-                                initial_message=rca_prompt,
-                                trigger_metadata={
-                                    "source": "datadog",
-                                    "monitor_id": payload.get("monitor_id")
-                                    or payload.get("alert_id"),
-                                    "status": status,
-                                },
-                                incident_id=str(incident_id),
-                                rail_text=rail_text,
-                            )
-
-                            # Store Celery task ID immediately for cancellation support
-                            cursor.execute(
-                                "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
-                                (task.id, str(incident_id))
-                            )
-                            conn.commit()
-
-                            logger.info(
-                                "[DATADOG][WEBHOOK] Triggered background RCA for session %s (task_id=%s)",
-                                session_id,
-                                task.id,
-                            )
+                                # Start RCA task and immediately store task ID
+                                task = run_background_chat.delay(
+                                    user_id=user_id,
+                                    session_id=session_id,
+                                    initial_message=rca_prompt,
+                                    trigger_metadata={
+                                        "source": "datadog",
+                                        "monitor_id": payload.get("monitor_id")
+                                        or payload.get("alert_id"),
+                                        "status": status,
+                                    },
+                                    incident_id=str(incident_id),
+                                    rail_text=rail_text,
+                                )
+                                
+                                # Store Celery task ID immediately for cancellation support
+                                cursor.execute(
+                                    "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
+                                    (task.id, str(incident_id))
+                                )
+                                conn.commit()
+                                
+                                logger.info(
+                                    "[DATADOG][WEBHOOK] Triggered background RCA for session %s (task_id=%s)",
+                                    session_id,
+                                    task.id,
+                                )
                         except Exception as e:
                             logger.error(
                                 "[DATADOG][WEBHOOK] Failed to trigger RCA: %s", e

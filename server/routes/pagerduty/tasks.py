@@ -262,6 +262,7 @@ def trigger_delayed_rca(
     from chat.background.task import (
         run_background_chat,
         create_background_chat_session,
+        is_background_chat_allowed,
     )
 
     logger.info(
@@ -302,6 +303,13 @@ def trigger_delayed_rca(
                     )
                     return
 
+                # Check if user preferences and limits allow background chat
+                if not is_background_chat_allowed(user_id):
+                    logger.info(
+                        "[PAGERDUTY][RCA-DELAYED] Background chat not allowed for user %s",
+                        user_id,
+                    )
+                    return
 
                 # Fetch latest incident metadata to check for runbook
                 cursor.execute(

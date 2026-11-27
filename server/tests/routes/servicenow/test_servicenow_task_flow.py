@@ -412,7 +412,7 @@ def test_dispatch_failure_rolls_back_marks_the_session_failed_and_raises(monkeyp
     assert conn.commits == 1  # only the failed-session mark, after the rollback
 
 
-def test_dispatch_queues_an_alert_even_during_a_burst(monkeypatch, tasks):
+def test_dispatch_skips_a_rate_limited_user_without_touching_the_connection(monkeypatch, tasks):
     stub = _background_stub(lambda **kw: SimpleNamespace(id="task-7"))
     stub.is_background_chat_allowed = lambda user_id: False  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "chat.background.task", stub)
@@ -421,7 +421,8 @@ def test_dispatch_queues_an_alert_even_during_a_burst(monkeypatch, tasks):
 
     _dispatch(tasks, cursor, conn)
 
-    assert any("rca_celery_task_id" in sql for sql, params in cursor.executed)
+    assert cursor.executed == []
+    assert conn.commits == 0
 
 
 # ── the reopen lock against a real Postgres ───────────────────────────
