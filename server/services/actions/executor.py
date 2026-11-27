@@ -23,10 +23,13 @@ def dispatch_action(
 
     with db_pool.get_connection() as conn:
         with conn.cursor() as cur:
-            set_rls_context(cur, conn, user_id, log_prefix="[Actions:dispatch]")
+            user_org_id = set_rls_context(cur, conn, user_id, log_prefix="[Actions:dispatch]")
+            if not user_org_id:
+                raise ValueError(f"Action {action_id} not found")
+            # Scope by org explicitly: RLS is a no-op when the DB role bypasses it.
             cur.execute(
-                "SELECT id, org_id, name, instructions, mode FROM actions WHERE id = %s",
-                (action_id,),
+                "SELECT id, org_id, name, instructions, mode FROM actions WHERE id = %s AND org_id = %s",
+                (action_id, user_org_id),
             )
             row = cur.fetchone()
             if not row:
@@ -114,9 +117,13 @@ def dispatch_on_incident_actions(user_id: str, incident_id: str, timing: str = "
     """Dispatch enabled on_incident actions matching the given timing. Fire-and-forget."""
     with db_pool.get_connection() as conn:
         with conn.cursor() as cur:
-            set_rls_context(cur, conn, user_id, log_prefix="[Actions:on_incident]")
+            org_id = set_rls_context(cur, conn, user_id, log_prefix="[Actions:on_incident]")
+            if not org_id:
+                return
             cur.execute(
-                "SELECT id, trigger_config, system_key FROM actions WHERE trigger_type = 'on_incident' AND enabled = true"
+                "SELECT id, trigger_config, system_key FROM actions "
+                "WHERE trigger_type = 'on_incident' AND enabled = true AND org_id = %s",
+                (org_id,),
             )
             rows = cur.fetchall()
 
@@ -322,12 +329,14 @@ def _load_incident_context(incident_id: str, user_id: str) -> Dict[str, Any]:
     try:
         with db_pool.get_connection() as conn:
             with conn.cursor() as cur:
-                set_rls_context(cur, conn, user_id, log_prefix="[Actions:incident_ctx]")
+                org_id = set_rls_context(cur, conn, user_id, log_prefix="[Actions:incident_ctx]")
+                if not org_id:
+                    return {"incident_id": incident_id}
                 cur.execute(
                     """SELECT alert_title, severity, source_type, alert_service,
                               alert_environment, aurora_summary
-                       FROM incidents WHERE id = %s""",
-                    (incident_id,),
+                       FROM incidents WHERE id = %s AND org_id = %s""",
+                    (incident_id, org_id),
                 )
                 row = cur.fetchone()
                 if not row:

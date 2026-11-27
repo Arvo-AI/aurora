@@ -812,6 +812,32 @@ def _record_gating_outcome(delivery_id: str, repo: str | None, outcome: str) -> 
         )
 
 
+def _base_is_open_pr_head(installation_id: int, repo: str, base_ref: str) -> bool:
+    """Whether ``base_ref`` is the head branch of another open PR in ``repo``.
+
+    A lookup failure answers True: the PR is enqueued and ``investigate_pr``
+    asks again with its own retry handling, so a GitHub blip does not skip
+    the PR at this layer. That only covers the webhook: if ``investigate_pr``
+    then skips (retries exhausted, or the base PR closed meanwhile), the
+    dedupe key is not released, so redeliveries for this head are dropped
+    until it expires (24 h), as on the existing ``get_pull_request`` path.
+    """
+    from services.change_gating.github_adapter import GitHubPRAdapter
+
+    adapter = GitHubPRAdapter(installation_id, repo)
+    try:
+        return adapter.has_open_pull_request_with_head(base_ref)
+    except Exception as exc:
+        logger.warning(
+            "change_gating: stacked-base lookup failed (%s) repo=%s — leaving it to investigate_pr",
+            type(exc).__name__,
+            _fmt_field(repo),
+        )
+        return True
+    finally:
+        adapter.close()
+
+
 def _maybe_enqueue_change_gating(
     payload: dict[str, Any],
     action: str | None,
@@ -820,10 +846,11 @@ def _maybe_enqueue_change_gating(
     """Enqueue ``investigate_pr`` when a pull_request delivery qualifies.
 
     Filter chain (each rejection logs ``change_gating: skipped reason=<x>``):
-    action gate → draft → default-branch base → installation present →
+    action gate → draft → base present → installation present →
     Redis dedupe (``SET NX``, BEFORE any DB work so redeliveries are
     dropped cheaply) → installation not suspended → repo enrolled by a
-    linked user → ``investigate_pr.delay``. If the enqueue itself fails,
+    linked user → base is the default branch or the head of another open PR
+    (a stacked PR) → ``investigate_pr.delay``. If the enqueue itself fails,
     the dedupe key is deleted so the dispatcher's Celery retry can
     re-attempt instead of skipping as a duplicate.
     """
@@ -856,9 +883,13 @@ def _maybe_enqueue_change_gating(
         return
     base_ref = _safe_get(payload, "pull_request", "base", "ref")
     default_branch = _safe_get(payload, "repository", "default_branch")
-    if not base_ref or not default_branch or base_ref != default_branch:
+    if not base_ref or not default_branch:
         _skip("non_default_base")
         return
+    # A base other than the default branch is reviewed only when it is the
+    # head of another open PR (a stacked PR). That needs a GitHub call, so
+    # it waits until dedupe and enrollment have passed, below.
+    off_default_base = base_ref != default_branch
     installation_id = _extract_installation_id(payload)
     if installation_id is None:
         _skip("missing_installation")
@@ -918,6 +949,12 @@ def _maybe_enqueue_change_gating(
             # No task enqueued — free the seen-key so a later redelivery
             # (e.g. after the repo is enrolled or the install unsuspended)
             # isn't swallowed as duplicate_delivery for the next 24h.
+            _release_dedupe_key()
+            return
+
+        if off_default_base and not _base_is_open_pr_head(installation_id, repo, base_ref):
+            _skip("non_default_base")
+            # Same as above: the base may become a PR head later.
             _release_dedupe_key()
             return
 

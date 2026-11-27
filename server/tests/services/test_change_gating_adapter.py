@@ -65,6 +65,36 @@ class TestGitHubPRAdapter:
         assert call.kwargs["timeout"] == 30
         assert call.kwargs["headers"]["Authorization"] == f"Bearer {TOKEN}"
 
+    def test_has_open_pull_request_with_head_filters_on_this_repo(
+        self, mock_requests, _mock_token
+    ):
+        adapter, http = self._adapter_and_http(mock_requests)
+        http.get.return_value = _response(json_data=[{"number": 6}])
+        assert adapter.has_open_pull_request_with_head("feature/part-1") is True
+        call = http.get.call_args
+        assert call.args[0] == "https://api.github.com/repos/acme/widgets/pulls"
+        assert call.kwargs["params"] == {
+            "state": "open",
+            "head": "acme:feature/part-1",
+            "per_page": 1,
+        }
+        assert call.kwargs["timeout"] == 30
+
+    def test_has_open_pull_request_with_head_false_when_none(
+        self, mock_requests, _mock_token
+    ):
+        adapter, http = self._adapter_and_http(mock_requests)
+        http.get.return_value = _response(json_data=[])
+        assert adapter.has_open_pull_request_with_head("release/1.2") is False
+
+    def test_has_open_pull_request_with_head_raises_on_error(
+        self, mock_requests, _mock_token
+    ):
+        adapter, http = self._adapter_and_http(mock_requests)
+        http.get.return_value = _response(status=502)
+        with pytest.raises(_HTTPError):
+            adapter.has_open_pull_request_with_head("feature/part-1")
+
     def test_get_diff_uses_diff_accept_header(self, mock_requests, _mock_token):
         adapter, http = self._adapter_and_http(mock_requests)
         http.get.return_value = _response(text="diff --git a/x b/x")
