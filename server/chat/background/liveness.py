@@ -95,6 +95,22 @@ class _Watchdog:
         self.stall_reason: Optional[str] = None
         self.cancelled_at: Optional[float] = None
         self.gave_up = False
+        # Set by the main thread once asyncio.run has returned or raised. Past
+        # that point a soft-time-limit signal would land outside run_watched's
+        # error conversion and replace the run's real result, so the watchdog
+        # checks it under the same lock before it signals.
+        self._finish_lock = threading.Lock()
+        self._finished = False
+
+    def mark_finished(self) -> None:
+        with self._finish_lock:
+            self._finished = True
+
+    def _interrupt_if_running(self) -> bool:
+        with self._finish_lock:
+            if self._finished:
+                return False
+            return _interrupt_main_thread()
 
     async def watch(self, coro: Awaitable[Any]) -> Any:
         self.loop = asyncio.get_running_loop()
@@ -128,7 +144,7 @@ class _Watchdog:
             "%s cancel did not take effect within %ss; no longer vouching for the worker",
             _LOG, CANCEL_GRACE_SECONDS,
         )
-        if not stopping.is_set() and _interrupt_main_thread():
+        if not stopping.is_set() and self._interrupt_if_running():
             logger.error("%s interrupted the blocked call through the soft time limit", _LOG)
 
 
@@ -219,7 +235,11 @@ def run_watched(
     try:
         with session_heartbeat(session_id, user_id, interval=interval, watchdog=watchdog):
             try:
-                return asyncio.run(watchdog.watch(coro))
+                try:
+                    result = asyncio.run(watchdog.watch(coro))
+                finally:
+                    watchdog.mark_finished()
+                return result
             except (Exception, asyncio.CancelledError) as exc:
                 if watchdog.stall_reason and not isinstance(exc, InvestigationStalled):
                     raise InvestigationStalled(
