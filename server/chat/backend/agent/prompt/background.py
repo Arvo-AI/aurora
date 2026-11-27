@@ -144,7 +144,35 @@ def build_background_mode_segment(state: Optional[Any]) -> str:
 
         _append_segment(parts, "background_source_general_footer")
 
+    check_step = _after_rca_check_step(getattr(state, 'incident_id', None))
+    if check_step:
+        parts.extend(["", check_step])
+
     return "\n".join(parts)
+
+
+def _after_rca_check_step(incident_id: Optional[str]) -> str:
+    """The instruction to leave a check behind once the RCA is concluded.
+
+    It used to live in the postmortem, which runs only when someone clicks
+    Resolve. Teams that read the RCA in Slack never do, so no check was ever
+    written. Here it runs at the end of every RCA on an incident.
+    """
+    if not incident_id:
+        return ""
+    from services.detection import checks_enabled
+    if not checks_enabled():
+        return ""
+    return (
+        "AFTER YOUR CONCLUSION: if the investigation shows one read-only command that would have "
+        "caught this problem earlier, save it with save_detection_check (origin_kind \"incident\", "
+        "origin_ref \"INC " + str(incident_id) + "\"). Aurora then runs it by itself. If the signal "
+        "is in logs or metrics, write the command with {from} and {to} for its time span and set "
+        "window_seconds: Aurora replays it over this incident first and refuses it if it would not "
+        "have caught it. Do not adjust a threshold just to fit this one incident. If no such "
+        "command is clear, write one line saying so (\"No clear check for this incident.\") and "
+        "save nothing."
+    )
 
 
 def build_action_mode_segment(state: Optional[Any]) -> str:

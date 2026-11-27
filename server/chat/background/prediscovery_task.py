@@ -257,6 +257,12 @@ def run_prediscovery(
         _update_session_status(session_id, "completed", user_id=user_id)
 
         logger.info(f"[Prediscovery] Completed for user {user_id}, session {session_id}")
+        # The infrastructure map is fresh: look for what nothing monitors.
+        try:
+            from services.actions.coverage_scan_action import start_after_prediscovery
+            start_after_prediscovery(user_id, trigger)
+        except Exception:
+            logger.exception("[Prediscovery] Could not schedule the coverage scan")
         return {"status": "completed", "session_id": session_id, "user_id": user_id}
 
     except SoftTimeLimitExceeded:
