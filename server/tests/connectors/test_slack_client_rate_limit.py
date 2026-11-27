@@ -20,8 +20,9 @@ def test_a_caller_that_will_not_wait_is_told_how_long_slack_asked_for(monkeypatc
     monkeypatch.setattr(slack.requests, "get", lambda *_a, **_k: _Response(429, {"Retry-After": "47"}))
     monkeypatch.setattr(slack.time, "sleep", lambda _s: pytest.fail("it waited"))
 
+    client = slack.SlackClient("token")
     with pytest.raises(slack.SlackRateLimited) as refused:
-        slack.SlackClient("token")._make_request("GET", "conversations.history", {}, max_retries=0)
+        client._make_request("GET", "conversations.history", {}, max_retries=0)
     assert refused.value.retry_after == 47
     assert isinstance(refused.value, ValueError)
 

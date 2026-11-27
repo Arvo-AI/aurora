@@ -181,4 +181,5 @@ def done(org_id: str, channel_id: str) -> None:
         if redis:
             redis.delete(_key("progress", org_id, channel_id))
     except Exception:
-        pass
+        # It expires by itself, and is not used once the cursor has moved.
+        logger.warning("%s Could not drop a finished reading: Redis did not answer", _LOG)
