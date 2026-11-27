@@ -822,6 +822,7 @@ def initialize_tables():
                          rca_queue_reason VARCHAR(20),
                          rca_queued_at TIMESTAMP,
                          rca_queued_request JSONB,
+                         rca_start_attempts INTEGER NOT NULL DEFAULT 0,
                          started_at TIMESTAMP NOT NULL,
                          analyzed_at TIMESTAMP,
                          slack_message_ts VARCHAR(50),
@@ -2140,7 +2141,8 @@ def initialize_tables():
                     ADD COLUMN IF NOT EXISTS rca_dispatched_at TIMESTAMP,
                     ADD COLUMN IF NOT EXISTS rca_queue_reason VARCHAR(20),
                     ADD COLUMN IF NOT EXISTS rca_queued_at TIMESTAMP,
-                    ADD COLUMN IF NOT EXISTS rca_queued_request JSONB;
+                    ADD COLUMN IF NOT EXISTS rca_queued_request JSONB,
+                    ADD COLUMN IF NOT EXISTS rca_start_attempts INTEGER NOT NULL DEFAULT 0;
                 """)
                 conn.commit()
             except Exception as e:
@@ -2238,7 +2240,8 @@ def initialize_tables():
                     ADD COLUMN IF NOT EXISTS rca_dispatched_at TIMESTAMP,
                     ADD COLUMN IF NOT EXISTS rca_queue_reason VARCHAR(20),
                     ADD COLUMN IF NOT EXISTS rca_queued_at TIMESTAMP,
-                    ADD COLUMN IF NOT EXISTS rca_queued_request JSONB;
+                    ADD COLUMN IF NOT EXISTS rca_queued_request JSONB,
+                    ADD COLUMN IF NOT EXISTS rca_start_attempts INTEGER NOT NULL DEFAULT 0;
                     CREATE INDEX IF NOT EXISTS idx_incidents_rca_queue
                         ON incidents(org_id, rca_queued_at) WHERE aurora_status = 'queued';
                     CREATE INDEX IF NOT EXISTS idx_incidents_rca_dispatched

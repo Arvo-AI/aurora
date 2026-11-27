@@ -83,6 +83,15 @@ MISSING = "missing"
 # A temporary error (database, lock timeout) stopped the dispatch before the
 # RCA was started or queued: the caller should retry the dispatch.
 FAILED = "failed"
+# The incident failed to start MAX_START_ATTEMPTS times in a row and is no
+# longer retried; it shows as an error. Retrying the delivery cannot help.
+ABANDONED = "abandoned"
+
+# Failed starts in a row (e.g. an owner who left the org) before the queue
+# gives up on an incident instead of retrying it every minute.
+MAX_START_ATTEMPTS = 5
+# An RCA already running for the incident: a re-fired alert does not start another.
+_IN_FLIGHT_STATES = ("running", "summarizing")
 
 
 @dataclass
@@ -218,11 +227,19 @@ class SqlStore:
         row = self.cursor.fetchone() or (0, 0, 0)
         return BudgetUsage(int(row[0] or 0), int(row[1] or 0), int(row[2] or 0))
 
-    def has_queued(self) -> bool:
-        self.cursor.execute(
-            "SELECT 1 FROM incidents WHERE org_id = %s AND aurora_status = %s AND " + _DRAINABLE_SQL + " LIMIT 1",
-            (self.org_id, QUEUED),
-        )
+    def has_queued(self, include_failed: bool = True) -> bool:
+        """Whether the org has queued incidents.
+
+        The drain counts all of them. A new alert only waits behind incidents
+        that are waiting for budget, not behind ones whose start keeps failing
+        (include_failed=False), or a broken one would delay every alert.
+        """
+        sql = "SELECT 1 FROM incidents WHERE org_id = %s AND aurora_status = %s AND " + _DRAINABLE_SQL
+        params: tuple = (self.org_id, QUEUED)
+        if not include_failed:
+            sql += " AND rca_queue_reason IS DISTINCT FROM %s"
+            params += (REASON_DISPATCH_FAILED,)
+        self.cursor.execute(sql + " LIMIT 1", params)
         return self.cursor.fetchone() is not None
 
     def queue(self, incident_id: str, reason: str, request: Optional[RcaRequest]) -> None:
@@ -319,8 +336,32 @@ class SqlStore:
     def set_task(self, incident_id: str, task_id: str) -> None:
         # Published: the request is no longer needed for recovery.
         self.cursor.execute(
-            "UPDATE incidents SET rca_celery_task_id = %s, rca_queued_request = NULL WHERE id = %s",
+            "UPDATE incidents SET rca_celery_task_id = %s, rca_queued_request = NULL,"
+            " rca_start_attempts = 0 WHERE id = %s",
             (task_id, incident_id),
+        )
+
+    def record_failed_start(self, incident_id: str) -> int:
+        """Count a failed start; returns the failures in a row so far."""
+        self.cursor.execute(
+            "UPDATE incidents SET rca_start_attempts = COALESCE(rca_start_attempts, 0) + 1"
+            " WHERE id = %s RETURNING rca_start_attempts",
+            (incident_id,),
+        )
+        row = self.cursor.fetchone()
+        return int(row[0]) if row and row[0] is not None else 1
+
+    def abandon(self, incident_id: str) -> None:
+        """Stop retrying an incident that keeps failing to start: it shows as an error."""
+        self.cursor.execute(
+            """
+            UPDATE incidents
+            SET aurora_status = 'error', rca_queue_reason = %s,
+                status = CASE WHEN status = 'investigating' THEN 'analyzed' ELSE status END,
+                analyzed_at = COALESCE(analyzed_at, NOW()), updated_at = LOCALTIMESTAMP
+            WHERE id = %s
+            """,
+            (REASON_DISPATCH_FAILED, incident_id),
         )
 
 
@@ -377,26 +418,37 @@ def _notify(user_id: str, org_id: str, incident_id: str, source: str) -> None:
 
 
 def _start_or_requeue(store, user_id: str, incident_id: str, request: RcaRequest) -> str:
-    """Start a reserved RCA. Returns DISPATCHED, QUEUED_OUTCOME or FAILED.
+    """Start a reserved RCA. Returns DISPATCHED, QUEUED_OUTCOME, ABANDONED or FAILED.
 
     On a failed start the reservation is released and the incident goes back
-    in the queue: QUEUED_OUTCOME. If even that write fails, FAILED: the request
-    is still on the row from the reservation, so the stale sweep puts it back
-    in the queue later.
+    in the queue: QUEUED_OUTCOME. After MAX_START_ATTEMPTS failures in a row it
+    is abandoned instead and shows as an error: ABANDONED. If even that write
+    fails, FAILED: the request is still on the row from the reservation, so the
+    stale sweep puts it back in the queue later.
     """
     try:
         task_id = start_rca(user_id, incident_id, request, org_id=store.org_id)
     except Exception:
-        logger.exception("[RcaDispatch] Could not start RCA for incident %s; queued for retry", sanitize(incident_id))
         try:
             store.rollback()
             store.release_dispatch(incident_id)
-            store.queue(incident_id, REASON_DISPATCH_FAILED, request)
+            attempts = store.record_failed_start(incident_id)
+            if attempts >= MAX_START_ATTEMPTS:
+                store.abandon(incident_id)
+            else:
+                store.queue(incident_id, REASON_DISPATCH_FAILED, request)
             store.commit()
         except Exception:
             store.rollback()
-            logger.exception("[RcaDispatch] Could not requeue incident %s", sanitize(incident_id))
+            logger.exception("[RcaDispatch] Could not start or requeue incident %s", sanitize(incident_id))
             return FAILED
+        if attempts >= MAX_START_ATTEMPTS:
+            logger.error("[RcaDispatch] Gave up on incident %s after %d failed starts",
+                         sanitize(incident_id), attempts)
+            return ABANDONED
+        # One line, no traceback: a start that keeps failing is retried every minute.
+        logger.warning("[RcaDispatch] Could not start RCA for incident %s (attempt %d of %d); queued for retry",
+                       sanitize(incident_id), attempts, MAX_START_ATTEMPTS, exc_info=attempts == 1)
         return QUEUED_OUTCOME
     try:
         store.set_task(incident_id, task_id)
@@ -419,12 +471,14 @@ def dispatch_with_store(store, user_id: str, incident_id: str, request: RcaReque
         store.refresh_request(incident_id, request)
         store.commit()
         return QUEUED_OUTCOME
-    if store.dispatched_recently(incident_id):
+    if state in _IN_FLIGHT_STATES or store.dispatched_recently(incident_id):
+        # Its RCA is already running (or just started): a re-fired alert must
+        # not queue it, which would hide the running RCA and allow a second.
         store.commit()
         return DISPATCHED
     # Alerts already waiting go first: a new one takes its turn behind them, so
     # the drain can start the most severe one rather than whichever came last.
-    reason = REASON_WAITING if store.has_queued() else budget_refusal(store.usage())
+    reason = REASON_WAITING if store.has_queued(include_failed=False) else budget_refusal(store.usage())
     if reason:
         store.queue(incident_id, reason, request)
         store.commit()
@@ -602,6 +656,8 @@ def run_queued_investigation(incident_id: str, requested_by: str, org_id: str) -
         raise refusal
     if outcome == QUEUED_OUTCOME:
         raise RunRefused("Could not start the investigation; it is queued and will be retried", 503)
+    if outcome == ABANDONED:
+        raise RunRefused("Could not start the investigation after several attempts", 500)
     if outcome != DISPATCHED:
         raise RunRefused("Could not start the investigation; try again shortly", 500)
     logger.info("[RunQueuedRCA] Started incident %s on request", sanitize(incident_id))

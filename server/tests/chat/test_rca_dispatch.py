@@ -12,6 +12,8 @@
 
 from __future__ import annotations
 
+import sys
+
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -39,7 +41,7 @@ class FakeStore:
         self.incidents[incident_id] = {
             "aurora_status": "idle", "status": "investigating", "source": source,
             "severity": severity, "dispatched_at": None, "queued_at": None, "reason": None,
-            "request": None, "task": None,
+            "request": None, "task": None, "attempts": 0,
         }
 
     def by_status(self, status):
@@ -81,8 +83,12 @@ class FakeStore:
             ),
         )
 
-    def has_queued(self):
-        return any(i["aurora_status"] == rd.QUEUED and i["status"] != "merged" for i in self.incidents.values())
+    def has_queued(self, include_failed=True):
+        return any(
+            i["aurora_status"] == rd.QUEUED and i["status"] != "merged"
+            and (include_failed or i["reason"] != rd.REASON_DISPATCH_FAILED)
+            for i in self.incidents.values()
+        )
 
     def queue(self, incident_id, reason, request):
         inc = self.incidents[incident_id]
@@ -122,7 +128,17 @@ class FakeStore:
                 inc["reason"] = reason
 
     def set_task(self, incident_id, task_id):
-        self.incidents[incident_id].update(task=task_id, request=None)
+        self.incidents[incident_id].update(task=task_id, request=None, attempts=0)
+
+    def record_failed_start(self, incident_id):
+        self.incidents[incident_id]["attempts"] += 1
+        return self.incidents[incident_id]["attempts"]
+
+    def abandon(self, incident_id):
+        inc = self.incidents[incident_id]
+        inc.update(aurora_status="error", reason=rd.REASON_DISPATCH_FAILED)
+        if inc["status"] == "investigating":
+            inc["status"] = "analyzed"
 
 
 @pytest.fixture
@@ -802,7 +818,7 @@ def test_a_healthy_incident_starts_even_when_more_than_a_pass_of_failures_sit_ah
         store.clock = T0 + timedelta(minutes=10 + minute)
         rd.drain_with_store(store)
     assert store.incidents["healthy"]["aurora_status"] == "running"
-    assert all(store.incidents[f"broken-{n}"]["aurora_status"] == rd.QUEUED for n in range(many))
+    assert not any(store.incidents[f"broken-{n}"]["aurora_status"] == "running" for n in range(many))
 
 
 def test_an_over_budget_drain_keeps_the_failed_start_marker():
@@ -811,3 +827,83 @@ def test_an_over_budget_drain_keeps_the_failed_start_marker():
     sql, params = cursor.execute.call_args[0]
     assert "AND rca_queue_reason IS DISTINCT FROM %s AND rca_queue_reason IS DISTINCT FROM %s" in " ".join(sql.split())
     assert params[-1] == rd.REASON_DISPATCH_FAILED
+
+
+def test_a_refire_on_a_running_rca_does_not_queue_it_or_start_another(store, started):
+    for n in range(rd.MAX_PER_WINDOW):
+        _alert(store, f"inc-{n}")  # spends the window: the org is over budget
+    store.clock = T0 + timedelta(minutes=3)  # past the 2-minute re-dispatch guard
+    assert store.incidents["inc-0"]["aurora_status"] == "running"
+
+    assert rd.dispatch_with_store(store, USER, "inc-0", _request("inc-0")) == rd.DISPATCHED
+
+    assert store.incidents["inc-0"]["aurora_status"] == "running"
+    assert store.by_status(rd.QUEUED) == []
+    assert len(started) == rd.MAX_PER_WINDOW
+
+
+def test_an_incident_that_keeps_failing_does_not_make_new_alerts_wait(store, started):
+    store.add("broken")
+    store.queue("broken", rd.REASON_DISPATCH_FAILED, _request("broken"))
+    # Budget is free: a new alert starts now instead of waiting behind it.
+    assert _alert(store, "new") == rd.DISPATCHED
+
+
+def test_the_queue_gives_up_after_repeated_failed_starts(monkeypatch, store, started):
+    _fill_window_then_queue(store, "broken")
+    monkeypatch.setattr(rd, "start_rca", MagicMock(side_effect=ValueError("owner left the org")))
+    for minute in range(rd.MAX_START_ATTEMPTS + 2):
+        store.clock = T0 + timedelta(minutes=10 + minute)
+        rd.drain_with_store(store)
+    inc = store.incidents["broken"]
+    assert inc["attempts"] == rd.MAX_START_ATTEMPTS  # no further attempts once it gave up
+    assert inc["aurora_status"] == "error"
+    assert inc["reason"] == rd.REASON_DISPATCH_FAILED
+
+
+def test_the_sql_ingest_check_skips_incidents_whose_start_keeps_failing():
+    cursor = MagicMock()
+    cursor.fetchone.return_value = None
+    rd.SqlStore(cursor, MagicMock(), ORG).has_queued(include_failed=False)
+    sql, params = cursor.execute.call_args[0]
+    assert "AND rca_queue_reason IS DISTINCT FROM %s" in sql
+    assert params == (ORG, rd.QUEUED, rd.REASON_DISPATCH_FAILED)
+
+
+def test_an_initial_summary_failure_leaves_the_rca_state_alone(monkeypatch):
+    """A queued (or running) RCA must not be turned into an error by its summary."""
+    import importlib
+    import importlib.util
+    import types
+
+    import celery_config
+
+    def _keep_body(*_a, **_k):
+        def deco(fn):
+            bound_self = SimpleNamespace(request=SimpleNamespace(id="t", retries=3), max_retries=3)
+            return SimpleNamespace(run=lambda *args, **kw: fn(bound_self, *args, **kw))
+        return deco
+
+    monkeypatch.setattr(celery_config.celery_app, "task", _keep_body)
+    exceptions = types.ModuleType("celery.exceptions")
+    exceptions.SoftTimeLimitExceeded = type("SoftTimeLimitExceeded", (Exception,), {})
+    monkeypatch.setitem(sys.modules, "celery.exceptions", exceptions)
+    source = importlib.import_module("chat.background.summarization")
+    spec = importlib.util.spec_from_file_location("summarization_under_test", source.__file__)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    hooks = importlib.import_module("utils.hooks")
+    auth = importlib.import_module("utils.auth.stateless_auth")
+    monkeypatch.setattr(hooks, "get_hook", lambda _n: lambda *_a: (True, None))
+    monkeypatch.setattr(auth, "get_org_id_for_user", lambda _u: ORG)
+    monkeypatch.setattr(mod, "_build_summary_prompt", MagicMock(side_effect=RuntimeError("LLM down")))
+    updates = []
+    monkeypatch.setattr(mod, "_update_incident_summary", lambda *a, **kw: updates.append(kw) or True)
+
+    result = mod.generate_incident_summary.run(
+        "55555555-5555-5555-5555-555555555555", USER, "sentry", "Issue", "high", "api", {}, {},
+    )
+
+    assert result["status"] == "failed"
+    assert updates and all(kw.get("status") is None for kw in updates)
