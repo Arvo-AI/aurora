@@ -31,6 +31,20 @@ logger = logging.getLogger(__name__)
 _LOG_PREFIX = "[IncidentSummary]"
 
 
+def _completed_report_text(response) -> str:
+    """A provider can return usable-looking prose even when it cut the report off."""
+    metadata = getattr(response, "response_metadata", {}) or {}
+    reason = metadata.get("stopReason") or metadata.get("stop_reason") or metadata.get("finish_reason") or metadata.get("done_reason")
+    if reason and str(reason).lower() not in {"end_turn", "stop", "stop_sequence", "eos", "eos_token", "completed"}:
+        raise ValueError(f"RCA report generation did not finish ({reason})")
+    if metadata.get("status") in {"incomplete", "failed", "cancelled"} or metadata.get("incomplete_details"):
+        raise ValueError("The model returned an incomplete RCA report")
+    text = extract_text_from_content(response.content).strip()
+    if not text:
+        raise ValueError("The model returned an empty RCA report")
+    return text
+
+
 def _source_observations(source_type: str, metadata: Dict[str, Any]) -> str:
     """Keep the provider's reported symptoms available alongside tool evidence."""
     if source_type == "cloudwatch":
@@ -907,6 +921,13 @@ def generate_incident_summary_from_chat(
             temperature=0.3,
             streaming=False,
         )
+        # Native Bedrock counts model reasoning toward the output budget. Its
+        # default of 4K cut off an actual RCA mid-sentence. Respect each model's
+        # advertised capacity and leave room for both reasoning and the report.
+        if os.getenv("LLM_PROVIDER_MODE") == "bedrock" and not os.getenv("BEDROCK_BASE_URL"):
+            capacity = (llm.profile or {}).get("max_output_tokens")
+            if isinstance(capacity, int) and capacity > 0:
+                llm.max_tokens = min(16384, capacity)
 
         message = HumanMessage(content=prompt)
         response = tracked_invoke(
@@ -917,7 +938,9 @@ def generate_incident_summary_from_chat(
             model_name=ModelConfig.EMAIL_REPORT_MODEL,
             request_type="incident_rca_summary",
         )
-        summary = extract_text_from_content(response.content).strip() or "No summary generated"
+        # Raising here goes through the task's bounded retry, before a complete
+        # state, a saved report, or any completion notification can be emitted.
+        summary = _completed_report_text(response)
 
         logger.info(
             f"{_LOG_PREFIX} Generated chat-based summary for incident {incident_id} ({len(summary)} chars)"

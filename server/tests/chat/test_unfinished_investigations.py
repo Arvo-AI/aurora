@@ -29,6 +29,31 @@ INCIDENT = "55555555-5555-5555-5555-555555555555"
 
 # --- the partial report ------------------------------------------------------------
 
+@pytest.mark.parametrize("metadata", [
+    {"stopReason": "max_tokens"},
+    {"stop_reason": "max_tokens"},
+    {"finish_reason": "length"},
+    {"finish_reason": "MAX_TOKENS"},
+    {"done_reason": "length"},
+    {"status": "incomplete", "incomplete_details": {"reason": "max_output_tokens"}},
+])
+def test_cut_off_report_is_rejected_even_when_it_has_text(metadata):
+    response = SimpleNamespace(content="Root cause undetermined. The probable cause is", response_metadata=metadata)
+    with pytest.raises(ValueError):
+        summarization._completed_report_text(response)
+
+
+def test_empty_completed_report_is_rejected():
+    with pytest.raises(ValueError, match="empty"):
+        summarization._completed_report_text(SimpleNamespace(content=[], response_metadata={"stopReason": "end_turn"}))
+
+
+def test_completed_report_can_have_an_undetermined_cause():
+    text = "Root cause undetermined. The terminal's input voltage was 0 V."
+    response = SimpleNamespace(content=[{"type": "text", "text": text}], response_metadata={"stopReason": "end_turn"})
+    assert summarization._completed_report_text(response) == text
+
+
 @pytest.mark.parametrize("reason, words", [
     ("time_limit", "reached its time limit"),
     ("stalled", "stopped making progress"),

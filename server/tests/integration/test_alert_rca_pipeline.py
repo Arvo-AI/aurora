@@ -282,6 +282,23 @@ class AlertPipeline(unittest.TestCase):
             retry_pending.delay().get(timeout=20, disable_sync_subtasks=False)
             self.assertNotIn(("C-alert", parent), replies)
             self.assertCountEqual(replies, expected)
+
+            title = "QA truncated RCA"
+            parent = add_post("C-alert", "A6L22LZNH", title, "Signal unavailable")
+            report_attempts = []
+            def generate_report(model, messages, *, request_type, **kwargs):
+                if request_type == "incident_rca_summary":
+                    report_attempts.append(request_type)
+                    self.assertFalse(any(p.get("thread_ts") == parent for p in post_attempts))
+                    if len(report_attempts) == 1:
+                        return SimpleNamespace(content="The cause is", response_metadata={"stopReason": "max_tokens"})
+                return SimpleNamespace(content=findings, response_metadata={"stopReason": "end_turn"})
+
+            summarize.side_effect = generate_report
+            aws_post("Signal unavailable", subject=title)
+            expected.append(("C-alert", parent))
+            wait_for(lambda: sorted(replies) == sorted(expected), "only the finished report posted after regeneration")
+            self.assertEqual(len(report_attempts), 2)
             self.assertTrue(all(p.get("thread_ts") and findings in json.dumps(p.get("blocks"))
                                 for p in post_attempts), "Every outbound Slack post must be a threaded final report")
             routing.assert_not_called()
