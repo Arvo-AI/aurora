@@ -110,7 +110,7 @@ class TestSupportedSecretProvidersShape:
 
     @pytest.mark.parametrize(
         "must_have",
-        ["aws", "gcp", "azure", "github", "datadog", "google"],
+        ["aws", "cloudwatch", "gcp", "azure", "github", "datadog", "google"],
     )
     def test_canonical_providers_present(self, must_have):
         """Anchor the spelling of headline providers; rename = visible CI break."""

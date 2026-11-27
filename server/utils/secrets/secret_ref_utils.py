@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 SUPPORTED_SECRET_PROVIDERS: Set[str] = {
     "gcp",      # Google Cloud
     "aws",      # Amazon Web Services
+    "cloudwatch", # Approved SNS topic for the CloudWatch webhook
     "azure",    # Microsoft Azure
     "github",   # GitHub tokens
     "gitlab",   # GitLab connector tokens

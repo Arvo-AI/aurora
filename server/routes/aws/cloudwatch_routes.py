@@ -196,7 +196,7 @@ def _verify_sns_signature(message: dict) -> bool:
 # DB helpers
 # ---------------------------------------------------------------------------
 
-def _has_cloudwatch_row(user_id: str) -> Tuple[bool, bool]:
+def _has_cloudwatch_row(user_id: str, *, raise_on_error: bool = False) -> Tuple[bool, bool]:
     """Return (row_exists, is_active) for the user's CloudWatch token row."""
     try:
         from utils.db.org_scope import resolve_org, org_read_predicate
@@ -217,6 +217,8 @@ def _has_cloudwatch_row(user_id: str) -> Tuple[bool, bool]:
                 return True, bool(row[0])
     except Exception:
         logger.exception("[CLOUDWATCH] Failed to check user_tokens row")
+        if raise_on_error:
+            raise
         return False, False
 
 
@@ -246,64 +248,20 @@ def _set_cloudwatch_active(user_id: str, active: bool) -> bool:
 # TopicArn binding helpers
 # ---------------------------------------------------------------------------
 
-def _get_approved_topic_arn(user_id: str) -> str | None:
-    """Retrieve the approved TopicArn stored for this user's CloudWatch connection."""
-    try:
-        data = get_token_data(user_id, "cloudwatch")
-        if data:
-            return data.get("approved_topic_arn")
-    except Exception:
-        logger.debug("[CLOUDWATCH] Could not retrieve token data for topic check")
-    return None
-
-
-def _store_approved_topic(user_id: str, topic_arn: str) -> None:
-    """Persist the TopicArn as the approved source for this user's CloudWatch webhook."""
-    try:
-        existing = get_token_data(user_id, "cloudwatch") or {}
-        existing["approved_topic_arn"] = topic_arn
-        store_tokens_in_db(user_id, existing, "cloudwatch")
-        logger.info(
-            "[CLOUDWATCH] Bound TopicArn for user %s",
-            sanitize(user_id),
-        )
-    except Exception:
-        logger.exception("[CLOUDWATCH] Failed to persist TopicArn binding for user %s", sanitize(user_id))
-
-
 def _validate_topic_arn(user_id: str, sns_message: dict) -> bool:
-    """Validate the TopicArn in an SNS message against the stored binding.
-
-    On first interaction (no binding stored yet), the topic is trusted and persisted.
-    On subsequent interactions, the topic must match.
-    Returns True if the message should be processed, False to reject.
-    """
-    topic_arn = sns_message.get("TopicArn") or ""
+    """Bind the first signed topic and require subsequent deliveries to match it."""
+    topic_arn = sns_message.get("TopicArn")
     if not topic_arn:
-        logger.warning("[CLOUDWATCH] SNS message missing TopicArn for user %s", sanitize(user_id))
         return False
-
-    approved = _get_approved_topic_arn(user_id)
-    if approved is None:
-        _store_approved_topic(user_id, topic_arn)
-        # Re-read to guard against a concurrent write binding a different topic.
-        stored = _get_approved_topic_arn(user_id)
-        if stored and stored != topic_arn:
-            logger.warning(
-                "[CLOUDWATCH] TopicArn race for user %s: rejected unauthorized topic",
-                sanitize(user_id),
-            )
-            return False
-        return True
-
-    if topic_arn != approved:
-        logger.warning(
-            "[CLOUDWATCH] TopicArn mismatch for user %s: rejected unauthorized topic",
-            sanitize(user_id),
-        )
-        return False
-
-    return True
+    connection = get_token_data(user_id, "cloudwatch", raise_on_error=True) or {}
+    if not connection.get("approved_topic_arn"):
+        # Storing the binding also creates the connection on its first delivery.
+        connection["approved_topic_arn"] = topic_arn
+        store_tokens_in_db(user_id, connection, "cloudwatch")
+        connection = get_token_data(user_id, "cloudwatch", raise_on_error=True) or {}
+        if not connection.get("approved_topic_arn"):
+            raise RuntimeError("CloudWatch topic binding could not be read after saving")
+    return connection["approved_topic_arn"] == topic_arn
 
 
 # ---------------------------------------------------------------------------
@@ -340,44 +298,6 @@ def _handle_subscription_confirmation(sns_message: dict, user_id: str):
             "[CLOUDWATCH] Rejected non-SNS SubscribeURL for user %s",
             sanitize(user_id),
         )
-
-
-def _ensure_cloudwatch_connection(user_id: str) -> Tuple[bool, bool, bool]:
-    """Ensure a CloudWatch connection exists. Returns (skip_rca, should_skip, is_error).
-
-    Design: On first-ever webhook for a user, we auto-create the connection record
-    so users don't need to manually toggle "connect" before configuring SNS. The
-    webhook is protected by SNS signature verification + validate_user_exists, so
-    this cannot be triggered by arbitrary external requests. A firing first notification follows the same RCA path as later alerts.
-
-    Unlike Grafana, we intentionally do NOT re-activate a disabled connection on
-    webhook receipt — if a user explicitly disconnected, we respect that choice.
-
-    - If the row doesn't exist, auto-creates it and returns (False, False, False).
-    - If the row exists but is inactive, returns (False, True, False).
-    - If the row exists and is active, returns (False, False, False).
-    - On creation failure, returns (False, True, True) — caller should return 500.
-    """
-    row_exists, is_active = _has_cloudwatch_row(user_id)
-
-    if not row_exists:
-        logger.info("[CLOUDWATCH] Auto-connecting user %s via webhook", sanitize(user_id))
-        try:
-            existing = get_token_data(user_id, "cloudwatch") or {}
-            store_tokens_in_db(user_id, existing, "cloudwatch")
-        except Exception:
-            logger.exception("[CLOUDWATCH] Failed to auto-connect user %s", sanitize(user_id))
-            return False, True, True
-        return False, False, False
-
-    if not is_active:
-        logger.info(
-            "[CLOUDWATCH] Webhook received for user %s but connection is disabled, skipping",
-            sanitize(user_id),
-        )
-        return False, True, False
-
-    return False, False, False
 
 
 # ---------------------------------------------------------------------------
@@ -492,7 +412,16 @@ def cloudwatch_alarm_webhook(user_id: str):
         )
         return jsonify({"error": "Invalid SNS signature"}), 403
 
-    if not _validate_topic_arn(user_id, sns_message):
+    try:
+        exists, active = _has_cloudwatch_row(user_id, raise_on_error=True)
+        if exists and not active:
+            return jsonify({"received": True, "skipped": True, "reason": "connection_disabled"})
+        topic_matches = _validate_topic_arn(user_id, sns_message)
+    except Exception:
+        logger.exception("[CLOUDWATCH] Could not verify the saved SNS topic for user %s", sanitize(user_id))
+        return jsonify({"error": "CloudWatch connection unavailable"}), 503
+
+    if not topic_matches:
         return jsonify({"error": "TopicArn not authorized"}), 403
 
     sns_type = (
@@ -513,12 +442,6 @@ def cloudwatch_alarm_webhook(user_id: str):
 
     payload = _parse_notification_payload(sns_message)
 
-    skip_rca, should_skip, is_error = _ensure_cloudwatch_connection(user_id)
-    if should_skip:
-        if is_error:
-            return jsonify({"error": "Failed to create CloudWatch connection"}), 500
-        return jsonify({"received": True, "skipped": True, "reason": "connection_disabled"})
-
     alarm_name = payload.get("AlarmName") or "unknown"
     state_value = payload.get("NewStateValue") or payload.get("state_value") or "unknown"
     logger.info(
@@ -533,6 +456,6 @@ def cloudwatch_alarm_webhook(user_id: str):
         "sns_message_id": sns_message_id,
     }
 
-    process_cloudwatch_alarm.delay(payload, metadata, user_id, skip_rca=skip_rca)
+    process_cloudwatch_alarm.delay(payload, metadata, user_id)
 
     return jsonify({"received": True})

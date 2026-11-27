@@ -20,6 +20,21 @@ from uuid import uuid4
 
 @unittest.skipUnless(os.getenv("ALERT_PIPELINE_INTEGRATION") == "1", "requires disposable Postgres and Redis")
 class AlertPipeline(unittest.TestCase):
+    def test_report_uses_alert_observations_even_with_tool_citations(self):
+        from chat.background.citation_extractor import Citation
+        from chat.background.summarization import _build_summary_prompt_with_chat
+
+        readings = "Input voltage 0 V, battery charge 79%, battery voltage 26.2 V"
+        probe = Citation(1, "lookup", "read inventory", "No device telemetry", None, "test")
+        for citations in ([], [probe]):
+            with self.subTest(has_tool_evidence=bool(citations)):
+                prompt = _build_summary_prompt_with_chat(
+                    "cloudwatch", "UPS alert", "critical", "terminal", None,
+                    investigation_transcript="No independent device access",
+                    citations=citations, source_observations=readings,
+                )
+                self.assertIn(readings, prompt)
+
     def test_from_signed_webhook_to_source_reply(self):
         self.assertEqual(os.environ["POSTGRES_DB"], "aurora_test")
         from celery.contrib.testing.worker import start_worker
@@ -32,6 +47,8 @@ class AlertPipeline(unittest.TestCase):
         from routes.sentry import sentry_routes as sentry
         from tasks.alert_rca import retry_pending, dispatch_pending_rca
         from chat.background.task import run_background_chat
+        with patch.dict(os.environ, INTERNAL_API_SECRET="integration-test-only"):
+            from main_chatbot import process_workflow_async
 
         org, user = str(uuid4()), str(uuid4())
         def sql(query, params=()):
@@ -53,7 +70,7 @@ class AlertPipeline(unittest.TestCase):
         key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         topic = "arn:aws:sns:us-west-2:111111111111:alerts"
-        def aws_post(body, subject=None, message_id=None):
+        def aws_post(body, subject=None, message_id=None, expected_status=200):
             envelope = dict(Type="Notification", Timestamp=ts, TopicArn=topic,
                             MessageId=message_id or str(uuid4()), SignatureVersion="2",
                             SigningCertURL="https://sns.us-west-2.amazonaws.com/test.pem",
@@ -63,7 +80,9 @@ class AlertPipeline(unittest.TestCase):
             envelope["Signature"] = base64.b64encode(key.sign(
                 aws._build_sns_string_to_sign(envelope).encode(), padding.PKCS1v15(), hashes.SHA256()
             )).decode()
-            self.assertEqual(http.post(f"/aws/cloudwatch/webhook/{user}", json=envelope).status_code, 200)
+            response = http.post(f"/aws/cloudwatch/webhook/{user}", json=envelope)
+            self.assertEqual(response.status_code, expected_status)
+            return response.json
 
         def sentry_post():
             body = json.dumps({"action": "triggered", "data": {"event": {"event_id": "c"*32,
@@ -84,8 +103,15 @@ class AlertPipeline(unittest.TestCase):
 
         async def investigate(wf, state, socket, owner, incident_id):
             contexts.append((state.rca_context["source"], state.question))
+            if "QA stream failure" in state.question:
+                async def broken_stream(state):
+                    yield "token", "Starting investigation"
+                    raise RuntimeError("simulated stream failure")
+                wf.stream = broken_stream
+                return await process_workflow_async(wf, state, socket, owner, incident_id)
             sql("UPDATE chat_sessions SET messages=%s WHERE id=%s", (json.dumps([
                 {"sender": "assistant", "text": findings}]), state.session_id))
+            return True
 
         fail_post = [True]
         def slack_http(client, method, endpoint, data=None, **kwargs):
@@ -129,15 +155,18 @@ class AlertPipeline(unittest.TestCase):
             replace("chat.background.task._get_worker_agent")
             replace("chat.backend.agent.workflow.Workflow", side_effect=lambda *args: SimpleNamespace(_last_state=None))
             stack.enter_context(patch.dict(sys.modules, main_chatbot=SimpleNamespace(process_workflow_async=investigate)))
-            replace("chat.background.summarization.tracked_invoke", return_value=SimpleNamespace(content=findings))
+            summarize = replace("chat.background.summarization.tracked_invoke", return_value=SimpleNamespace(content=findings))
             replace("chat.background.summarization.create_chat_model")
             replace("chat.background.summarization._fetch_fix_suggestions", return_value=[])
             replace("chat.background.task._get_connected_integrations", return_value={})
             replace("chat.background.rca_prompt_builder.get_user_providers", return_value=[])
             replace("routes.aws.cloudwatch_routes._get_sns_certificate", return_value=SimpleNamespace(public_key=key.public_key))
-            replace("routes.aws.cloudwatch_routes.get_token_data", return_value={"approved_topic_arn": topic})
-            replace("routes.aws.cloudwatch_routes.store_tokens_in_db")
-            replace("routes.aws.cloudwatch_routes._has_cloudwatch_row", return_value=(False, False))
+            saved_connection = {}
+            read_connection = replace("routes.aws.cloudwatch_routes.get_token_data",
+                                      side_effect=lambda *args, **kwargs: dict(saved_connection))
+            save_connection = replace("routes.aws.cloudwatch_routes.store_tokens_in_db",
+                                      side_effect=lambda owner, data, provider: saved_connection.update(data))
+            connection_status = replace("routes.aws.cloudwatch_routes._has_cloudwatch_row", return_value=(False, False))
             replace("routes.sentry.sentry_routes._get_stored_sentry_credentials", return_value={"client_secret":"test-secret"})
             replace("services.detection.runner._org_representatives", return_value=[(user, org)])
             queue = "alert-qa-" + org
@@ -216,6 +245,10 @@ class AlertPipeline(unittest.TestCase):
             retry_pending.delay()
             wait_for(lambda: ("C-configured", None) in replies, "configured channel fallback")
             self.assertEqual(len(replies), 9)
+            for kind in ("incident_initial_summary", "incident_rca_summary"):
+                prompts = [call.args[1][0].content for call in summarize.call_args_list
+                           if call.kwargs.get("request_type") == kind]
+                self.assertTrue(any("Signal value: 0" in prompt for prompt in prompts), kind)
             aws_post({"unrecognized": "object"})
             aws_post(dict(alarm, NewStateValue="INSUFFICIENT_DATA"))
             wait_for(lambda: sql("SELECT count(*) FROM cloudwatch_alarms WHERE org_id=%s AND state_value IN "
@@ -232,3 +265,25 @@ class AlertPipeline(unittest.TestCase):
             from routes.sentry.tasks import process_sentry_event
             process_sentry_event.delay(legacy, {"resource": "issue"}, user).get(timeout=20, disable_sync_subtasks=False)
             self.assertEqual(sql("SELECT count(*) FROM incidents WHERE org_id=%s", (org,)), [(9,)])
+
+            parent = add_post("C-alert", "A6L22LZNH", "QA stream failure", "Signal unavailable")
+            aws_post("Signal unavailable", subject="QA stream failure")
+            def failed_run():
+                return sql(
+                    "SELECT i.aurora_status, s.status, i.slack_source_reply_ts FROM incidents i "
+                    "JOIN chat_sessions s ON s.id=i.aurora_chat_session_id::text "
+                    "WHERE i.org_id=%s AND i.alert_title='QA stream failure'", (org,)
+                ) == [("error", "failed", None)]
+            wait_for(failed_run, "failed workflow recorded without a completed RCA")
+            retry_pending.delay().get(timeout=20, disable_sync_subtasks=False)
+            self.assertNotIn(("C-alert", parent), replies)
+
+            self.assertEqual(saved_connection, {"approved_topic_arn": topic})
+            save_connection.assert_called_once()
+            connection_status.return_value = (True, False)
+            self.assertEqual(aws_post("Disabled webhook")["reason"], "connection_disabled")
+            save_connection.assert_called_once()
+            connection_status.return_value = (True, True)
+            read_connection.side_effect = OSError("test store unavailable")
+            aws_post("Retry after storage recovery", expected_status=503)
+            save_connection.assert_called_once()

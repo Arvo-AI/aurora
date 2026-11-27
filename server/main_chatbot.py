@@ -328,7 +328,8 @@ def create_websocket_sender(websocket, user_id, session_id):
     return sender
 
 
-async def process_workflow_async(wf, state, websocket, user_id, incident_id=None):
+async def process_workflow_async(wf, state, websocket, user_id, incident_id=None) -> bool:
+    """Stream the workflow and report whether it finished successfully."""
     curr_node = "START"
     sent_message_count = 0
     websocket_connected = True
@@ -587,6 +588,7 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
             except Exception as e:
                 logger.error(f"Failed to send END status for session {session_id}: {e}")
     
+    succeeded = False
     try:
         # Wrap the workflow stream with timeout to prevent infinite hangs
         async def process_stream():
@@ -846,6 +848,7 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
         
         await send_end_status("completed")
         
+        succeeded = True
     except asyncio.TimeoutError:
         logger.error(f"Workflow timeout after {workflow_timeout}s for session {session_id}")
         finalize_streaming_chat_message(remove=True)
@@ -910,6 +913,7 @@ async def process_workflow_async(wf, state, websocket, user_id, incident_id=None
     
     # Workflow always completes here - messages are saved by the workflow.stream() method
     logger.info(f"Background workflow processing completed for session {getattr(state, 'session_id', 'unknown')}")
+    return succeeded
 
 async def handle_connection(websocket) -> None:
     """Handle a single WebSocket connection."""

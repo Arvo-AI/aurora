@@ -1717,7 +1717,14 @@ async def _execute_background_chat(
         # Run the workflow - this is the same function used by regular chats
         progress_task = asyncio.create_task(progress_reporter.run()) if progress_reporter else None
         try:
-            await process_workflow_async(wf, state, background_ws, user_id, incident_id=None if is_action_source else incident_id)
+            succeeded = await process_workflow_async(
+                wf, state, background_ws, user_id, incident_id=None if is_action_source else incident_id,
+            )
+            if (trigger_metadata or {}).get("alert_delivery"):
+                if not succeeded:
+                    raise RuntimeError("Alert investigation workflow did not complete")
+                if wf._last_state and wf._get_state_attr(wf._last_state, "guardrail_blocked"):
+                    raise RuntimeError("Alert investigation was blocked by the input guardrail")
 
             # CRITICAL: Wait for any ongoing tool calls to complete before marking as done
             # The workflow stream might complete, but tool calls could still be running
