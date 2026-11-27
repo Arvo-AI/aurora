@@ -21,6 +21,23 @@ def test_missing_severity_is_not_inferred_from_a_symptom():
     assert parse_sns_alert({"Type": "Notification", "Subject": "Cash balance low", "Message": "No bills"}).severity == "unknown"
 
 
+@pytest.mark.parametrize("custom", [False, True])
+def test_terminal_status_identifies_resource_without_inventing_severity(custom):
+    title = "Terminal kiosk-17 is DOWN"
+    body = "Terminal kiosk-17 went DOWN during the status check."
+    if custom:
+        payload = {"source": "custom", "version": "1.0", "content": {"title": title, "description": body}}
+    else:
+        payload = {"Type": "Notification", "Subject": title, "Message": body}
+    alert = parse_sns_alert(payload)
+    assert (alert.service, alert.severity) == ("kiosk-17", "unknown")
+
+
+def test_multiple_terminal_statuses_do_not_identify_a_single_resource():
+    payload = {"Type": "Notification", "Message": "Terminal kiosk-17 went down. Terminal kiosk-18 is offline."}
+    assert parse_sns_alert(payload).service == ""
+
+
 def page(*messages, cursor=""):
     return {"messages": list(messages), "response_metadata": {"next_cursor": cursor}}
 
