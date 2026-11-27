@@ -100,9 +100,11 @@ class SlackClient:
         raise ValueError(f"Failed to communicate with Slack after {max_retries} retries: rate limited on {endpoint}")
     
     def send_message(self, channel: str, text: str, thread_ts: Optional[str] = None, 
-                     blocks: Optional[List[Dict]] = None) -> Dict[str, Any]:
+                     blocks: Optional[List[Dict]] = None, client_msg_id: Optional[str] = None) -> Dict[str, Any]:
         """Send a message to a Slack channel."""
         data = {"channel": channel, "text": text}
+        if client_msg_id:
+            data["client_msg_id"] = client_msg_id
         if thread_ts:
             data["thread_ts"] = thread_ts
         if blocks:

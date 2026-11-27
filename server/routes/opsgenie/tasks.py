@@ -320,55 +320,48 @@ def process_opsgenie_event(
                         from chat.background.task import (
                             run_background_chat,
                             create_background_chat_session,
-                            is_background_chat_allowed,
                         )
 
-                        if not is_background_chat_allowed(user_id):
-                            logger.info(
-                                "[OPSGENIE][WEBHOOK] Skipping background RCA - rate limited for user %s",
-                                user_id,
-                            )
-                        else:
-                            session_id = create_background_chat_session(
-                                user_id=user_id,
-                                title=f"RCA: {alert_message or 'OpsGenie Alert'}",
-                                trigger_metadata={
-                                    "source": "opsgenie",
-                                    "alert_id": alert_id,
-                                    "action": action,
-                                },
-                                incident_id=str(incident_id),
-                            )
+                        session_id = create_background_chat_session(
+                            user_id=user_id,
+                            title=f"RCA: {alert_message or 'OpsGenie Alert'}",
+                            trigger_metadata={
+                                "source": "opsgenie",
+                                "alert_id": alert_id,
+                                "action": action,
+                            },
+                            incident_id=str(incident_id),
+                        )
 
-                            rca_prompt, rail_text = build_rca_prompt(
-                                "opsgenie", alert_message, payload, user_id=user_id
-                            )
+                        rca_prompt, rail_text = build_rca_prompt(
+                            "opsgenie", alert_message, payload, user_id=user_id
+                        )
 
-                            task = run_background_chat.delay(
-                                user_id=user_id,
-                                session_id=session_id,
-                                initial_message=rca_prompt,
-                                trigger_metadata={
-                                    "source": "opsgenie",
-                                    "alert_id": alert_id,
-                                    "alert_title": alert_message,
-                                    "action": action,
-                                },
-                                incident_id=str(incident_id),
-                                rail_text=rail_text,
-                            )
+                        task = run_background_chat.delay(
+                            user_id=user_id,
+                            session_id=session_id,
+                            initial_message=rca_prompt,
+                            trigger_metadata={
+                                "source": "opsgenie",
+                                "alert_id": alert_id,
+                                "alert_title": alert_message,
+                                "action": action,
+                            },
+                            incident_id=str(incident_id),
+                            rail_text=rail_text,
+                        )
 
-                            cursor.execute(
-                                "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
-                                (task.id, str(incident_id))
-                            )
-                            conn.commit()
+                        cursor.execute(
+                            "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
+                            (task.id, str(incident_id))
+                        )
+                        conn.commit()
 
-                            logger.info(
-                                "[OPSGENIE][WEBHOOK] Triggered background RCA for session %s (task_id=%s)",
-                                session_id,
-                                task.id,
-                            )
+                        logger.info(
+                            "[OPSGENIE][WEBHOOK] Triggered background RCA for session %s (task_id=%s)",
+                            session_id,
+                            task.id,
+                        )
                     except Exception as e:
                         logger.error(
                             "[OPSGENIE][WEBHOOK] Failed to trigger RCA: %s", e

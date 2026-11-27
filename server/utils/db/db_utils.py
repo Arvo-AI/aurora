@@ -699,8 +699,14 @@ def initialize_tables():
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     );
 
+                    -- Old workers upsert one row per (issue_id, action). New workers
+                    -- store each delivery separately, with its provider group in group_id.
+                    ALTER TABLE sentry_events ADD COLUMN IF NOT EXISTS delivery_key TEXT,
+                        ADD COLUMN IF NOT EXISTS group_id VARCHAR(255);
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_sentry_events_org_issue_action
                         ON sentry_events(org_id, issue_id, action) WHERE issue_id IS NOT NULL;
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_sentry_events_delivery
+                        ON sentry_events(org_id, user_id, delivery_key);
                     CREATE INDEX IF NOT EXISTS idx_sentry_events_user_id ON sentry_events(user_id, received_at DESC);
                     CREATE INDEX IF NOT EXISTS idx_sentry_events_resource ON sentry_events(resource);
                     CREATE INDEX IF NOT EXISTS idx_sentry_events_project ON sentry_events(project_slug);
@@ -818,6 +824,7 @@ def initialize_tables():
                          rca_unfinished_reason VARCHAR(20),
                          rca_continuations INTEGER NOT NULL DEFAULT 0,
                          rca_run_task_id VARCHAR(255),
+                         rca_celery_task_id VARCHAR(255),
                          started_at TIMESTAMP NOT NULL,
                          analyzed_at TIMESTAMP,
                          slack_message_ts VARCHAR(50),
@@ -831,6 +838,15 @@ def initialize_tables():
                          UNIQUE(org_id, source_type, source_alert_id, user_id)
                      );
                      
+                     ALTER TABLE incidents ADD COLUMN IF NOT EXISTS alert_rca_pending BOOLEAN NOT NULL DEFAULT FALSE;
+                     ALTER TABLE incidents ADD COLUMN IF NOT EXISTS slack_source_reply_ts VARCHAR(50);
+                     ALTER TABLE incidents ADD COLUMN IF NOT EXISTS slack_source_reply_due TIMESTAMPTZ,
+                         ADD COLUMN IF NOT EXISTS slack_source_target JSONB,
+                         ADD COLUMN IF NOT EXISTS slack_source_reply_attempts INTEGER NOT NULL DEFAULT 0;
+                     CREATE INDEX IF NOT EXISTS idx_incidents_slack_source_due
+                         ON incidents(org_id, slack_source_reply_due) WHERE slack_source_reply_due IS NOT NULL;
+                     CREATE INDEX IF NOT EXISTS idx_incidents_pending_rca
+                         ON incidents(org_id, created_at) WHERE alert_rca_pending;
                      CREATE INDEX IF NOT EXISTS idx_incidents_user_id ON incidents(user_id, started_at DESC);
                      CREATE INDEX IF NOT EXISTS idx_incidents_status ON incidents(status);
                      CREATE INDEX IF NOT EXISTS idx_incidents_source ON incidents(source_type, source_alert_id);

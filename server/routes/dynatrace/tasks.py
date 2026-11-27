@@ -178,11 +178,8 @@ def process_dynatrace_problem(
 
         try:
             from chat.background.task import (
-                run_background_chat, create_background_chat_session, is_background_chat_allowed,
+                run_background_chat, create_background_chat_session,
             )
-            if not is_background_chat_allowed(user_id):
-                logger.info("[DYNATRACE] Skipping RCA - rate limited for user %s", user_id)
-                return
 
             session_id = create_background_chat_session(
                 user_id=user_id,

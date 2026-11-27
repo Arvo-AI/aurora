@@ -337,6 +337,31 @@ def _join_channel_if_needed(client: SlackClient, channel_id: str, err: SlackAPIE
     return bool(joined)
 
 
+def send_source_rca_reply(client, channel: str, parent_ts: str, data: Dict[str, Any], delivery_id: str):
+    """Post the findings under the provider's message without editing that message."""
+    from routes.slack.slack_events_helpers import format_response_for_slack
+
+    title, _, _ = escaped_fields(data)
+    report = format_response_for_slack(data["aurora_summary"], max_length=35000)
+    blocks = [{"type": "section", "text": {"type": "mrkdwn", "text": f"*Root cause analysis* · {title}"}}]
+    # A Block Kit section allows 3,000 characters. Keep paragraph breaks and
+    # include the complete report link for investigations above Slack's limit.
+    while report:
+        end = len(report)
+        if end > 3000:
+            end = report.rfind("\n", 0, 3000)
+            if end < 1:
+                end = report.rfind(" ", 0, 3000)
+            if end < 1:
+                end = 3000
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": report[:end]}})
+        report = report[end:].lstrip()
+    url = _get_incident_url(data["incident_id"])
+    blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": f"<{url}|View full investigation>"}]})
+    return try_post_threaded(client, channel=channel, thread_ts=parent_ts, require_threaded=True,
+                             text=f"Root cause analysis: {title}", blocks=blocks, client_msg_id=delivery_id)
+
+
 def send_slack_investigation_completed_notification(
     user_id: str,
     incident_data: Dict[str, Any],

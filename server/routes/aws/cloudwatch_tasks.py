@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from celery_config import celery_app
+from utils.aws.sns_alert import parse_sns_alert
 from services.correlation.alert_correlator import AlertCorrelator
 from services.correlation import apply_correlation_outcome
 
@@ -63,13 +64,6 @@ def _extract_service(payload: Dict[str, Any]) -> str:
     return str(namespace)[:255] or "aws"
 
 
-def _safe_json(data: Any) -> str:
-    try:
-        return json.dumps(data, ensure_ascii=False)
-    except Exception:
-        return str(data)
-
-
 class AlarmFields:
     """Bundle of fields extracted from a CloudWatch alarm payload."""
     __slots__ = (
@@ -91,27 +85,10 @@ class AlarmFields:
 
 
 def _persist_alarm(
-    cursor, conn, user_id: str, org_id: str, fields: AlarmFields,
+    cursor, user_id: str, org_id: str, fields: AlarmFields,
     payload: Dict[str, Any], received_at, sns_message_id: str = "",
 ):
-    """Insert raw alarm into cloudwatch_alarms. Returns (alarm_db_id, was_inserted) or (None, False).
-
-    Uses sns_message_id for deduplication — if the same SNS message is delivered
-    more than once (retry), we return the existing row instead of creating a duplicate.
-    """
-    if sns_message_id:
-        cursor.execute(
-            "SELECT id FROM cloudwatch_alarms WHERE sns_message_id = %s AND user_id = %s",
-            (sns_message_id, user_id),
-        )
-        existing = cursor.fetchone()
-        if existing:
-            logger.info(
-                "[CLOUDWATCH][ALARM] Dedup: sns_message_id=%s already stored (db_id=%s)",
-                sns_message_id, existing[0],
-            )
-            return existing[0], False
-
+    """Return the new alarm ID, or None when SNS redelivers the same message."""
     cursor.execute(
         """
         INSERT INTO cloudwatch_alarms
@@ -119,6 +96,7 @@ def _persist_alarm(
            previous_state_value, reason, account_id, region, payload, received_at,
            sns_message_id)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (sns_message_id, user_id) WHERE sns_message_id IS NOT NULL DO NOTHING
         RETURNING id
         """,
         (
@@ -129,17 +107,14 @@ def _persist_alarm(
     )
     row = cursor.fetchone()
     alarm_db_id = row[0] if row else None
-    conn.commit()
-
     if not alarm_db_id:
-        logger.error("[CLOUDWATCH][ALARM] Failed to persist alarm for user %s", user_id)
-        return None, False
+        return None
 
     logger.info(
         "[CLOUDWATCH][ALARM] Stored alarm (db_id=%s) for user %s",
         alarm_db_id, user_id,
     )
-    return alarm_db_id, True
+    return alarm_db_id
 
 
 def _handle_resolved_alarm(
@@ -287,15 +262,15 @@ def _try_correlate_alarm(
 def _create_incident_record(
     cursor, conn, user_id: str, org_id: str, alarm_db_id,
     alarm_name: str, service: str, severity: str,
-    alert_metadata: Dict[str, Any], received_at,
+    alert_metadata: Dict[str, Any], received_at, queue_rca: bool,
 ):
     """Insert the incident + lifecycle event + alert link. Returns incident_id or None."""
     cursor.execute(
         """
         INSERT INTO incidents
           (user_id, org_id, source_type, source_alert_id, alert_title, alert_service,
-           severity, status, started_at, alert_metadata, alert_fired_at)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+           severity, status, started_at, alert_metadata, alert_fired_at, alert_rca_pending)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (org_id, source_type, source_alert_id, user_id) DO UPDATE
           SET updated_at = CURRENT_TIMESTAMP,
               started_at = CASE WHEN incidents.status != 'analyzed'
@@ -306,7 +281,7 @@ def _create_incident_record(
         (
             user_id, org_id, "cloudwatch", alarm_db_id, alarm_name,
             service, severity, "investigating", received_at,
-            json.dumps(alert_metadata), received_at,
+            json.dumps(alert_metadata), received_at, queue_rca,
         ),
     )
     incident_row = cursor.fetchone()
@@ -365,11 +340,9 @@ def _create_incident_record(
 
 def _post_incident_actions(
     user_id: str, org_id: str, incident_id, alarm_name: str,
-    service: str, severity: str, state_value: str,
-    alert_metadata: Dict[str, Any], payload: Dict[str, Any],
-    skip_rca: bool, cursor, conn,
+    service: str, severity: str, alert_metadata: Dict[str, Any], payload: Dict[str, Any],
 ) -> None:
-    """SSE broadcast, summary generation, and RCA trigger."""
+    """Broadcast and summarize after releasing the intake connection."""
     try:
         from routes.incidents_sse import broadcast_incident_update_to_user_connections
         broadcast_incident_update_to_user_connections(
@@ -393,65 +366,20 @@ def _post_incident_actions(
             incident_id, exc,
         )
 
-    if skip_rca:
-        return
-
-    try:
-        from chat.background.task import (
-            run_background_chat,
-            create_background_chat_session,
-            is_background_chat_allowed,
-        )
-        if not is_background_chat_allowed(user_id):
-            logger.info("[CLOUDWATCH][ALARM] Skipping RCA — rate limited for user %s", user_id)
-            return
-
-        from chat.background.rca_prompt_builder import build_rca_prompt
-        rca_prompt, rail_text = build_rca_prompt(
-            "cloudwatch", alarm_name, payload, user_id=user_id
-        )
-        chat_title = f"RCA: {alarm_name}"
-        session_id = create_background_chat_session(
-            user_id=user_id,
-            title=chat_title,
-            trigger_metadata={
-                "source": "cloudwatch",
-                "alarm_name": alarm_name,
-                "state": state_value,
-            },
-            incident_id=str(incident_id),
-        )
-        task = run_background_chat.delay(
-            user_id=user_id,
-            session_id=session_id,
-            initial_message=rca_prompt,
-            trigger_metadata={
-                "source": "cloudwatch",
-                "alarm_name": alarm_name,
-                "state": state_value,
-            },
-            incident_id=str(incident_id),
-            rail_text=rail_text,
-        )
-        cursor.execute(
-            "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
-            (task.id, str(incident_id)),
-        )
-        conn.commit()
-        logger.info(
-            "[CLOUDWATCH][ALARM] Triggered RCA for session %s (task=%s)",
-            session_id, task.id,
-        )
-    except Exception as exc:
-        logger.exception("[CLOUDWATCH][ALARM] Failed to trigger RCA: %s", exc)
-
 
 def _extract_alarm_fields(payload: Dict[str, Any]) -> AlarmFields:
     """Parse alarm field values from the CloudWatch/SNS payload."""
+    custom = parse_sns_alert(payload)
+    if custom:
+        return AlarmFields(custom.title, "", "ALARM", "", custom.description, "", "")
+    name = payload.get("AlarmName")
+    state = payload.get("NewStateValue") or payload.get("state_value")
+    if not isinstance(name, str) or not name.strip() or not isinstance(state, str):
+        return AlarmFields("Unrecognized SNS notification", "", "", "", "", "", "")
     return AlarmFields(
-        alarm_name=payload.get("AlarmName") or "Unknown Alarm",
+        alarm_name=name,
         alarm_arn=payload.get("AlarmArn") or payload.get("alarm_arn") or "",
-        state_value=payload.get("NewStateValue") or payload.get("state_value") or "",
+        state_value=state,
         previous_state=payload.get("OldStateValue") or "",
         reason=payload.get("NewStateReason") or payload.get("reason") or "",
         account_id=payload.get("AWSAccountId") or payload.get("account_id") or "",
@@ -476,16 +404,12 @@ def _process_alarm_in_db(
             if not org_id:
                 return
 
-            alarm_db_id, was_inserted = _persist_alarm(
-                cursor, conn, user_id, org_id, fields,
+            alarm_db_id = _persist_alarm(
+                cursor, user_id, org_id, fields,
                 payload, received_at,
                 sns_message_id=(metadata or {}).get("sns_message_id", ""),
             )
             if not alarm_db_id:
-                return
-
-            if not was_inserted:
-                logger.info("[CLOUDWATCH][ALARM] Duplicate SNS delivery, skipping processing")
                 return
 
             if _is_alarm_resolved(fields.state_value):
@@ -493,9 +417,13 @@ def _process_alarm_in_db(
                     cursor, conn, user_id, org_id, fields.alarm_name,
                     alarm_db_id, fields.state_value, payload,
                 )
+                conn.commit()
                 return
 
             if not _is_alarm_firing(fields.state_value):
+                conn.commit()
+                if not fields.state_value:
+                    logger.warning("Unrecognized SNS notification for org %s", org_id)
                 logger.info(
                     "[CLOUDWATCH][ALARM] State=%s for user %s — not firing, skipping incident.",
                     fields.state_value, user_id,
@@ -509,6 +437,16 @@ def _process_alarm_in_db(
                 fields.region, fields.reason, fields.previous_state, payload,
             )
 
+            custom = parse_sns_alert(payload)
+            if custom:
+                service, severity = custom.service or "aws", custom.severity
+            # A delivery ID deduplicates retries. This key describes the problem
+            # across distinct deliveries, including two conditions on one asset.
+            alert_metadata["correlation_key"] = json.dumps([
+                (metadata or {}).get("topic_arn"), fields.alarm_arn or fields.alarm_name, service
+            ])
+            alert_metadata["source_post_at"] = (metadata or {}).get("published_at")
+
             if _try_correlate_alarm(
                 cursor, conn, user_id, org_id, alarm_db_id,
                 fields.alarm_name, service, severity, alert_metadata, payload,
@@ -517,7 +455,7 @@ def _process_alarm_in_db(
 
             incident_id = _create_incident_record(
                 cursor, conn, user_id, org_id, alarm_db_id,
-                fields.alarm_name, service, severity, alert_metadata, received_at,
+                fields.alarm_name, service, severity, alert_metadata, received_at, not skip_rca,
             )
             if not incident_id:
                 return
@@ -527,11 +465,11 @@ def _process_alarm_in_db(
                 incident_id, fields.alarm_name,
             )
 
-            _post_incident_actions(
-                user_id, org_id, incident_id, fields.alarm_name,
-                service, severity, fields.state_value, alert_metadata,
-                payload, skip_rca, cursor, conn,
-            )
+    _post_incident_actions(user_id, org_id, incident_id, fields.alarm_name, service, severity,
+                           alert_metadata, payload)
+    if not skip_rca:
+        from tasks.alert_rca import dispatch_pending_rca
+        dispatch_pending_rca(user_id, str(incident_id))
 
 
 @celery_app.task(
@@ -558,7 +496,6 @@ def process_cloudwatch_alarm(
             "[CLOUDWATCH][ALARM][USER:%s] %s  state=%s -> %s",
             user_id or "unknown", fields.alarm_name, fields.previous_state, fields.state_value,
         )
-        logger.debug("[CLOUDWATCH][ALARM] full payload=%s", _safe_json(payload))
 
         if not user_id:
             logger.warning("[CLOUDWATCH][ALARM] No user_id provided, alarm not stored")

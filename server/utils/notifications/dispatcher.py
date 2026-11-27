@@ -490,9 +490,13 @@ def notify_investigation_completed(user_id: str, incident_id: str, session_id: O
                 from utils.notifications.slack_notification_service import (
                     send_slack_investigation_completed_notification,
                 )
-                send_slack_investigation_completed_notification(
-                    user_id, incident_data, post_primary_card=card_enabled,
-                )
+                if card_enabled and concluded and incident_data.get("source_type") in {"cloudwatch", "sentry"}:
+                    from tasks.slack_source_reply import queue_source_reply
+                    queue_source_reply(user_id, incident_id)
+                else:
+                    send_slack_investigation_completed_notification(
+                        user_id, incident_data, post_primary_card=card_enabled,
+                    )
             except Exception:
                 logger.exception("[Dispatcher] Slack completed notification failed")
             _finish_continue_notice(user_id, incident_data)

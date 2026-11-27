@@ -121,6 +121,7 @@ celery_app.conf.update(
     # ponytail: workers listen `-Q high,celery` (high first). Interactive
     # Bitbucket Incident Prevention must not sit behind a Save of N metadata jobs.
     task_routes={
+        "tasks.slack_source_reply.deliver": {"queue": "detection"},
         "bitbucket.enable_change_gating_bulk": {"queue": "high"},
         # Same reason: a user clicking "Activate" on the Slack manage page must not
         # queue behind the description backfill, which can hold hundreds of
@@ -170,6 +171,8 @@ celery_app.conf.update(
         'services.discovery.tasks',
         'utils.aws.credential_refresh',
         'routes.aws.cloudwatch_tasks',
+        'tasks.alert_rca',
+        'tasks.slack_source_reply',
         'tasks.github_webhook_tasks',
         'tasks.bitbucket_webhook_tasks',
         'tasks.change_gating',
@@ -185,6 +188,7 @@ celery_app.conf.update(
     ],
     # Periodic task schedule
     beat_schedule={
+        'retry-pending-alert-rcas': {'task': 'tasks.alert_rca.retry_pending', 'schedule': 60.0},
         'cleanup-idle-terminal-pods': {
             'task': 'utils.terminal.terminal_pod_cleanup.cleanup_terminal_pods_task',
             'schedule': 600.0,  # Every 10 minutes

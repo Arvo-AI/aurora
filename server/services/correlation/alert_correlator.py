@@ -143,11 +143,13 @@ class AlertCorrelator:
 
             alert_received_at = self._resolve_received_at(alert_metadata)
 
+            identity = (alert_metadata or {}).get("correlation_key")
             candidates = self._get_candidate_incidents(
                 cursor,
                 user_id,
                 alert_received_at,
                 org_id=org_id,
+                source_identity=(source_type, identity) if identity else None,
             )
             # Metadata also carries credential-derived URLs, so don't log fields from it
             logger.info(
@@ -247,6 +249,7 @@ class AlertCorrelator:
         user_id: str,
         alert_received_at: datetime,
         org_id: Optional[str] = None,
+        source_identity: Optional[tuple[str, str]] = None,
     ) -> List[Dict[str, Any]]:
         """Fetch open incidents updated within the time window.
 
@@ -257,6 +260,7 @@ class AlertCorrelator:
 
         scope_col = "org_id" if org_id else "user_id"
         scope_val = org_id if org_id else user_id
+        identity_filter = "AND source_type = %s AND alert_metadata->>'correlation_key' = %s" if source_identity else ""
         cursor.execute(
             f"""
             SELECT id, alert_title, alert_service, affected_services,
@@ -265,10 +269,11 @@ class AlertCorrelator:
             WHERE {scope_col} = %s
               AND status = 'investigating'
               AND updated_at >= %s
+              {identity_filter}
             ORDER BY updated_at DESC
             LIMIT 20
             """,
-            (scope_val, cutoff),
+            (scope_val, cutoff, *(source_identity or ())),
         )
         rows = cursor.fetchall()
         return [

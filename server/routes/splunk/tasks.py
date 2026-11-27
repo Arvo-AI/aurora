@@ -328,61 +328,54 @@ def process_splunk_alert(
                             from chat.background.task import (
                                 run_background_chat,
                                 create_background_chat_session,
-                                is_background_chat_allowed,
                             )
 
-                            if not is_background_chat_allowed(user_id):
-                                logger.info(
-                                    "[SPLUNK][ALERT] Skipping background RCA - rate limited for user %s",
-                                    user_id,
-                                )
-                            else:
-                                chat_title = f"RCA: {alert_title or 'Splunk Alert'}"
-                                session_id = create_background_chat_session(
-                                    user_id=user_id,
-                                    title=chat_title,
-                                    trigger_metadata={
-                                        "source": "splunk",
-                                        "alert_id": alert_id,
-                                        "search_name": search_name,
-                                    },
-                                    incident_id=str(incident_id) if incident_id else None,
-                                )
+                            chat_title = f"RCA: {alert_title or 'Splunk Alert'}"
+                            session_id = create_background_chat_session(
+                                user_id=user_id,
+                                title=chat_title,
+                                trigger_metadata={
+                                    "source": "splunk",
+                                    "alert_id": alert_id,
+                                    "search_name": search_name,
+                                },
+                                incident_id=str(incident_id) if incident_id else None,
+                            )
 
-                                # Build comprehensive RCA prompt with provider context
-                                rca_prompt, rail_text = build_rca_prompt(
-                                    "splunk", alert_title, payload, user_id=user_id
-                                )
+                            # Build comprehensive RCA prompt with provider context
+                            rca_prompt, rail_text = build_rca_prompt(
+                                "splunk", alert_title, payload, user_id=user_id
+                            )
 
-                                # Start RCA task and immediately store task ID
-                                task = run_background_chat.delay(
-                                    user_id=user_id,
-                                    session_id=session_id,
-                                    initial_message=rca_prompt,
-                                    trigger_metadata={
-                                        "source": "splunk",
-                                        "alert_id": alert_id,
-                                        "alert_title": alert_title,
-                                    },
-                                    incident_id=str(incident_id)
-                                    if incident_id
-                                    else None,
-                                    rail_text=rail_text,
+                            # Start RCA task and immediately store task ID
+                            task = run_background_chat.delay(
+                                user_id=user_id,
+                                session_id=session_id,
+                                initial_message=rca_prompt,
+                                trigger_metadata={
+                                    "source": "splunk",
+                                    "alert_id": alert_id,
+                                    "alert_title": alert_title,
+                                },
+                                incident_id=str(incident_id)
+                                if incident_id
+                                else None,
+                                rail_text=rail_text,
+                            )
+
+                            # Store Celery task ID immediately for cancellation support
+                            if incident_id:
+                                cursor.execute(
+                                    "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
+                                    (task.id, str(incident_id))
                                 )
-                                
-                                # Store Celery task ID immediately for cancellation support
-                                if incident_id:
-                                    cursor.execute(
-                                        "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
-                                        (task.id, str(incident_id))
-                                    )
-                                    conn.commit()
-                                
-                                logger.info(
-                                    "[SPLUNK][ALERT] Triggered background RCA chat for session %s (task_id=%s)",
-                                    session_id,
-                                    task.id,
-                                )
+                                conn.commit()
+
+                            logger.info(
+                                "[SPLUNK][ALERT] Triggered background RCA chat for session %s (task_id=%s)",
+                                session_id,
+                                task.id,
+                            )
 
                         except Exception as chat_exc:
                             logger.exception(

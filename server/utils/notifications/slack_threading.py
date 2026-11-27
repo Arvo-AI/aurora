@@ -126,7 +126,7 @@ def message_is_gone(client: SlackClient, *, channel: str, ts: str) -> bool:
 
 def try_post_threaded(client: SlackClient, *, channel: str, text: str,
                       blocks: Optional[List[Dict]], thread_ts: str,
-                      require_threaded: bool = False) -> Optional[Dict[str, Any]]:
+                      require_threaded: bool = False, client_msg_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """chat.postMessage with thread_ts. Returns None when Slack rejected the
     post for a thread-specific reason (_THREAD_ONLY_ERRORS) so the caller can
     post top-level. Any other rejection propagates — it would fail the same
@@ -142,7 +142,8 @@ def try_post_threaded(client: SlackClient, *, channel: str, text: str,
     callers that need a real reply must check placed_thread_ts(result).
     """
     try:
-        result = client.send_message(channel=channel, text=text, blocks=blocks, thread_ts=thread_ts)
+        result = client.send_message(channel=channel, text=text, blocks=blocks, thread_ts=thread_ts,
+                                     **({"client_msg_id": client_msg_id} if client_msg_id else {}))
     except SlackAPIError as e:
         if e.error not in _THREAD_ONLY_ERRORS:
             raise

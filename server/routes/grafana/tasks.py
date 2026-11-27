@@ -515,31 +515,28 @@ def process_grafana_alert(
                             if _should_trigger_background_chat(user_id, alert_payload):
                                 try:
                                     from chat.background.task import (
-                                        run_background_chat, create_background_chat_session, is_background_chat_allowed,
+                                        run_background_chat, create_background_chat_session,
                                     )
-                                    if not is_background_chat_allowed(user_id):
-                                        logger.info("[GRAFANA][ALERT] Skipping background RCA - rate limited for user %s", user_id)
-                                    else:
-                                        chat_title = f"RCA: {per_alert_title or 'Grafana Alert'}"
-                                        session_id = create_background_chat_session(
-                                            user_id=user_id, title=chat_title,
-                                            trigger_metadata={"source": "grafana", "alert_uid": alert_uid, "alert_state": alert_state},
+                                    chat_title = f"RCA: {per_alert_title or 'Grafana Alert'}"
+                                    session_id = create_background_chat_session(
+                                        user_id=user_id, title=chat_title,
+                                        trigger_metadata={"source": "grafana", "alert_uid": alert_uid, "alert_state": alert_state},
+                                    )
+                                    rca_prompt, rail_text = build_rca_prompt("grafana", per_alert_title, alert_payload, user_id=user_id)
+                                    task = run_background_chat.delay(
+                                        user_id=user_id, session_id=session_id, initial_message=rca_prompt,
+                                        trigger_metadata={"source": "grafana", "alert_uid": alert_uid,
+                                                          "alert_title": per_alert_title, "alert_state": alert_state},
+                                        incident_id=str(incident_id) if incident_id else None,
+                                        rail_text=rail_text,
+                                    )
+                                    if incident_id:
+                                        cursor.execute(
+                                            "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
+                                            (task.id, str(incident_id)),
                                         )
-                                        rca_prompt, rail_text = build_rca_prompt("grafana", per_alert_title, alert_payload, user_id=user_id)
-                                        task = run_background_chat.delay(
-                                            user_id=user_id, session_id=session_id, initial_message=rca_prompt,
-                                            trigger_metadata={"source": "grafana", "alert_uid": alert_uid,
-                                                              "alert_title": per_alert_title, "alert_state": alert_state},
-                                            incident_id=str(incident_id) if incident_id else None,
-                                            rail_text=rail_text,
-                                        )
-                                        if incident_id:
-                                            cursor.execute(
-                                                "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
-                                                (task.id, str(incident_id)),
-                                            )
-                                            conn.commit()
-                                        logger.info("[GRAFANA][ALERT] Triggered background RCA for session %s (task_id=%s)", session_id, task.id)
+                                        conn.commit()
+                                    logger.info("[GRAFANA][ALERT] Triggered background RCA for session %s (task_id=%s)", session_id, task.id)
                                 except Exception as chat_exc:
                                     logger.exception("[GRAFANA][ALERT] Failed to trigger background chat: %s", chat_exc)
 

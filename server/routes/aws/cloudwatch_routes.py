@@ -348,13 +348,12 @@ def _ensure_cloudwatch_connection(user_id: str) -> Tuple[bool, bool, bool]:
     Design: On first-ever webhook for a user, we auto-create the connection record
     so users don't need to manually toggle "connect" before configuring SNS. The
     webhook is protected by SNS signature verification + validate_user_exists, so
-    this cannot be triggered by arbitrary external requests. RCA is skipped for the
-    auto-connect event to avoid investigating stale/test alarms during initial setup.
+    this cannot be triggered by arbitrary external requests. A firing first notification follows the same RCA path as later alerts.
 
     Unlike Grafana, we intentionally do NOT re-activate a disabled connection on
     webhook receipt — if a user explicitly disconnected, we respect that choice.
 
-    - If the row doesn't exist, auto-creates it and returns (True, False, False).
+    - If the row doesn't exist, auto-creates it and returns (False, False, False).
     - If the row exists but is inactive, returns (False, True, False).
     - If the row exists and is active, returns (False, False, False).
     - On creation failure, returns (False, True, True) — caller should return 500.
@@ -369,7 +368,7 @@ def _ensure_cloudwatch_connection(user_id: str) -> Tuple[bool, bool, bool]:
         except Exception:
             logger.exception("[CLOUDWATCH] Failed to auto-connect user %s", sanitize(user_id))
             return False, True, True
-        return True, False, False
+        return False, False, False
 
     if not is_active:
         logger.info(
@@ -453,11 +452,17 @@ def get_webhook_url(user_id):
 
 def _parse_notification_payload(sns_message: dict) -> dict:
     """Extract the alarm payload from an SNS notification envelope."""
-    raw_message = sns_message.get("Message") or ""
+    raw_message = sns_message.get("Message")
     try:
-        return json.loads(raw_message) if raw_message else sns_message
-    except Exception:
-        return sns_message
+        value = json.loads(raw_message)
+    except (TypeError, ValueError):
+        value = raw_message
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        # Pass alert content only. SNS also includes subscription management URLs.
+        return {"Type": "Notification", "Subject": sns_message.get("Subject"), "Message": value}
+    return {"unsupported_message": value}
 
 
 @cloudwatch_bp.route("/aws/cloudwatch/webhook/<user_id>", methods=["POST"])
@@ -523,8 +528,8 @@ def cloudwatch_alarm_webhook(user_id: str):
 
     sns_message_id = sns_message.get("MessageId") or ""
     metadata = {
-        "headers": dict(request.headers),
-        "remote_addr": request.remote_addr,
+        "topic_arn": sns_message.get("TopicArn"),
+        "published_at": sns_message.get("Timestamp"),
         "sns_message_id": sns_message_id,
     }
 

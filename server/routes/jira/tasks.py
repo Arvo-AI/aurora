@@ -341,12 +341,7 @@ def _dispatch_rca(
         from chat.background.task import (
             run_background_chat,
             create_background_chat_session,
-            is_background_chat_allowed,
         )
-
-        if not is_background_chat_allowed(user_id):
-            logger.info("[JIRA][WEBHOOK] Skipping RCA - rate limited for user %s", user_id)
-            return
 
         session_id = create_background_chat_session(
             user_id=user_id,

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -11,7 +13,6 @@ import psycopg2
 import requests
 
 from celery_config import celery_app
-from chat.background.rca_prompt_builder import build_rca_prompt
 from services.correlation.alert_correlator import AlertCorrelator
 from services.correlation import apply_correlation_outcome
 from utils.payload_timestamp import extract_alert_fired_at
@@ -104,17 +105,30 @@ def _extract_project_slug(payload: Dict[str, Any]) -> str:
             project_slug = candidate.get("project_slug")
             if project_slug:
                 return str(project_slug)[:255]
+            # Issue-alert webhooks can supply a numeric project and the slug
+            # only in the event's API URL.
+            project_path = re.search(r"/projects/[^/]+/([^/?#]+)/", str(candidate.get("url") or ""))
+            if project_path:
+                return project_path[1][:255]
+            if isinstance(project, (str, int)) and project:
+                return str(project)[:255]
     return "unknown"
 
 
 def _extract_issue_id(payload: Dict[str, Any]) -> Optional[str]:
-    """Extract a stable Sentry issue/group identifier."""
+    """Sentry event IDs and issue/group IDs refer to different objects."""
     data = payload.get("data") or {}
-    for candidate in (data.get("issue"), data.get("error"), data.get("event")):
-        if isinstance(candidate, dict):
-            iid = candidate.get("id") or candidate.get("issue_id") or candidate.get("groupID")
-            if iid:
-                return str(iid)
+    issue = data.get("issue") or {}
+    if issue.get("id") is not None:
+        return str(issue["id"])
+    event = data.get("event") or data.get("error") or {}
+    group = event.get("groupID") or event.get("group_id") or event.get("issue_id")
+    if group:
+        return str(group)
+    for field in ("web_url", "issue_url"):
+        match = re.search(r"/issues/(\d+)(?=/|[?#]|$)", str(event.get(field) or ""))
+        if match:
+            return match[1]
     return None
 
 
@@ -192,6 +206,14 @@ def process_sentry_event(
         issue_id = _extract_issue_id(payload)
         alert_metadata = _build_alert_metadata(payload, resource)
 
+        # A group may fire many times. Identical webhook retries share a digest,
+        # while new events on the same issue keep their own source payload.
+        digest = hashlib.sha256(json.dumps([resource, payload], sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        if issue_id:
+            alert_metadata["issueId"] = issue_id
+            alert_metadata["correlation_key"] = json.dumps([service, issue_id])
+        alert_metadata["source_post_at"] = metadata.get("timestamp")
+
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 from utils.auth.stateless_auth import set_rls_context
@@ -204,17 +226,14 @@ def process_sentry_event(
                 cursor.execute(
                     """
                     INSERT INTO sentry_events
-                    (user_id, org_id, issue_id, issue_title, level, project_slug,
-                     resource, action, payload, received_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (org_id, issue_id, action) WHERE issue_id IS NOT NULL
-                    DO UPDATE
-                    SET issue_title = EXCLUDED.issue_title,
-                        level = EXCLUDED.level,
-                        project_slug = EXCLUDED.project_slug,
-                        resource = EXCLUDED.resource,
-                        payload = EXCLUDED.payload,
-                        received_at = EXCLUDED.received_at
+                    (user_id, org_id, group_id, issue_title, level, project_slug,
+                     resource, action, payload, received_at, delivery_key)
+                    SELECT %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM sentry_events WHERE org_id=%s AND user_id=%s
+                        AND delivery_key IS NULL AND resource=%s AND payload=%s::jsonb
+                    )
+                    ON CONFLICT (org_id, user_id, delivery_key) DO NOTHING
                     RETURNING id
                     """,
                     (
@@ -227,15 +246,14 @@ def process_sentry_event(
                         (resource or "")[:50],
                         (action or "")[:50],
                         json.dumps(payload),
-                        received_at,
+                        received_at, digest, org_id, user_id, resource, json.dumps(payload),
                     ),
                 )
                 event_result = cursor.fetchone()
                 event_id = event_result[0] if event_result else None
-                conn.commit()
 
                 if not event_id:
-                    logger.error("[SENTRY][WEBHOOK] Failed to persist event for user %s", user_id)
+                    logger.info("[SENTRY][WEBHOOK] Duplicate delivery for user %s", user_id)
                     return
 
                 # source_alert_id is the integer PK of the source-specific event row.
@@ -294,8 +312,8 @@ def process_sentry_event(
                     """
                     INSERT INTO incidents
                     (user_id, org_id, source_type, source_alert_id, alert_title, alert_service,
-                     severity, status, started_at, alert_metadata, alert_fired_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     severity, status, started_at, alert_metadata, alert_fired_at, alert_rca_pending)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE)
                     ON CONFLICT (org_id, source_type, source_alert_id, user_id) DO UPDATE
                     SET updated_at = CURRENT_TIMESTAMP,
                         started_at = CASE
@@ -368,68 +386,24 @@ def process_sentry_event(
                     except Exception as e:
                         logger.warning("[SENTRY][WEBHOOK] Failed to notify SSE: %s", e)
 
-                    from chat.background.summarization import generate_incident_summary
-                    generate_incident_summary.delay(
-                        incident_id=str(incident_id),
-                        user_id=user_id,
-                        source_type="sentry",
-                        alert_title=title or "Sentry Alert",
-                        severity=severity,
-                        service=service,
-                        raw_payload=payload,
-                        alert_metadata=alert_metadata,
-                    )
-
                     try:
-                        from chat.background.task import (
-                            run_background_chat,
-                            create_background_chat_session,
-                            is_background_chat_allowed,
+                        from chat.background.summarization import generate_incident_summary
+                        generate_incident_summary.delay(
+                            incident_id=str(incident_id),
+                            user_id=user_id,
+                            source_type="sentry",
+                            alert_title=title or "Sentry Alert",
+                            severity=severity,
+                            service=service,
+                            raw_payload=payload,
+                            alert_metadata=alert_metadata,
                         )
-
-                        if not is_background_chat_allowed(user_id):
-                            logger.info("[SENTRY][WEBHOOK] Skipping background RCA — rate limited for user %s", user_id)
-                        else:
-                            session_id = create_background_chat_session(
-                                user_id=user_id,
-                                title=f"RCA: {title}",
-                                trigger_metadata={
-                                    "source": "sentry",
-                                    "resource": resource,
-                                    "action": action,
-                                    "issueId": issue_id,
-                                },
-                                incident_id=str(incident_id),
-                            )
-
-                            rca_prompt, rail_text = build_rca_prompt("sentry", title, payload, user_id=user_id)
-
-                            task = run_background_chat.delay(
-                                user_id=user_id,
-                                session_id=session_id,
-                                initial_message=rca_prompt,
-                                trigger_metadata={
-                                    "source": "sentry",
-                                    "resource": resource,
-                                    "action": action,
-                                    "issueId": issue_id,
-                                },
-                                incident_id=str(incident_id),
-                                rail_text=rail_text,
-                            )
-
-                            cursor.execute(
-                                "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
-                                (task.id, str(incident_id)),
-                            )
-                            conn.commit()
-
-                            logger.info(
-                                "[SENTRY][WEBHOOK] Triggered background RCA for session %s (task_id=%s)",
-                                session_id, task.id,
-                            )
                     except Exception:
-                        logger.exception("[SENTRY][WEBHOOK] Failed to trigger RCA")
+                        logger.exception("[SENTRY] Could not queue incident summary")
+
+        if incident_id:
+            from tasks.alert_rca import dispatch_pending_rca
+            dispatch_pending_rca(user_id, str(incident_id))
 
     except _TRANSIENT_EXCEPTIONS as exc:
         logger.exception("[SENTRY][WEBHOOK] Transient failure; retrying")

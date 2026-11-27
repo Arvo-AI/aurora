@@ -658,13 +658,8 @@ def _dispatch_rca(
     try:
         from chat.background.task import (
             create_background_chat_session,
-            is_background_chat_allowed,
             run_background_chat,
         )
-
-        if not is_background_chat_allowed(user_id):
-            logger.info("%s Skipping RCA - rate limited for user %s", _LOG, user_id)
-            return
 
         session_id = create_background_chat_session(
             user_id=user_id,
