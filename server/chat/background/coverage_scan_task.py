@@ -56,6 +56,8 @@ Read-only: change nothing in the customer's systems.
 ## STEP 1: LIST THE ASSETS
 - read_memory(category='infrastructure', title='Infrastructure Context') for the map prediscovery wrote.
 - If a service graph tool is available (list_services), use it too.
+- For on-prem Kubernetes, call get_connected_clusters first and pass its cluster_id to
+  on_prem_kubectl. The cluster's display name is not its id.
 - Confirm against the live systems with read-only commands (cloud_exec, on_prem_kubectl, the
   integration tools): services and deployments, databases, caches, queues, load balancers and
   endpoints, scheduled jobs, certificates, nodes.
@@ -95,6 +97,10 @@ For each real blind spot that one read-only command can observe, call save_detec
 - A clear healthy condition. Pick thresholds from what you see the asset do today, with margin,
   so a normal day does not fire it.
 - Prefer one check per failure over one check that mixes several.
+- Only save a check whose exact command you ran in this scan and that returned a healthy value
+  now. Memory and the service graph can be out of date: if a live read fails, fix the call
+  (identifiers, region, namespace) and retry. If it still fails, save nothing for that asset and
+  list it in the memory entry as unverified.
 Save at most {MAX_NEW_CHECKS_PER_RUN} new checks in this run, most important assets first
 (user-facing and data stores before internal tooling). Skip a gap you cannot express as one
 read-only command with a clear healthy condition, and list it in the memory entry instead.
@@ -108,6 +114,7 @@ The next scan starts from it.
 ## RULES
 - The local filesystem is Aurora's own code: never use terminal_exec to read local files.
 - Never run a command that changes anything. Never open PRs.
+- Write no memory entry other than '{COVERAGE_MEMORY_TITLE}'. Do not save these instructions.
 - Only describe infrastructure you actually found. If nothing is connected that you can read,
   write that in the memory entry and stop."""
 
