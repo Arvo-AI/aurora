@@ -135,10 +135,19 @@ def owner_to_run_as(action_id: str, org_id: str, owner_id: str):
         if not admin or not _owner_can_save_checks(admin, org_id):
             logger.warning("[CoverageScan] No one in org %s can save checks; scan not started", org_id)
             return None
+        # actions is RLS-protected: without the org's context the update matches nothing.
+        from utils.auth.stateless_auth import set_rls_context
+        if set_rls_context(cur, conn, admin, log_prefix="[CoverageScan]") != org_id:
+            return admin
         cur.execute("UPDATE actions SET created_by = %s, updated_at = NOW() WHERE id = %s AND org_id = %s",
                     (admin, action_id, org_id))
+        moved = cur.rowcount
         conn.commit()
-    logger.info("[CoverageScan] Scan action %s now runs as an admin of org %s", action_id, org_id)
+    if moved:
+        logger.info("[CoverageScan] Scan action %s now runs as an admin of org %s", action_id, org_id)
+    else:
+        logger.warning("[CoverageScan] Could not reassign scan action %s; running it as an admin "
+                       "this time only", action_id)
     return admin
 
 

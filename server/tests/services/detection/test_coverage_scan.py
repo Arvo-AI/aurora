@@ -255,6 +255,10 @@ def _owner_setup(monkeypatch, can_save, admin_row):
         yield conn
 
     monkeypatch.setattr(pool.db_pool, "get_admin_connection", _admin)
+    import utils.auth.stateless_auth as auth
+
+    monkeypatch.setattr(auth, "set_rls_context", lambda *_a, **_kw: "org-1")
+    cursor.rowcount = 1
     return cursor
 
 
@@ -272,3 +276,13 @@ def test_a_viewer_owned_scan_is_handed_to_an_admin(monkeypatch):
 def test_no_admin_means_no_scan(monkeypatch):
     _owner_setup(monkeypatch, set(), None)
     assert scan.owner_to_run_as("act-1", "org-1", "viewer-1") is None
+
+
+def test_the_reassignment_runs_under_the_orgs_rls_context(monkeypatch):
+    import utils.auth.stateless_auth as auth
+
+    cursor = _owner_setup(monkeypatch, {"admin-1"}, ("admin-1",))
+    seen = []
+    monkeypatch.setattr(auth, "set_rls_context", lambda _c, _n, user, **_kw: seen.append(user) or "org-1")
+    scan.owner_to_run_as("act-1", "org-1", "viewer-1")
+    assert seen == ["admin-1"]
