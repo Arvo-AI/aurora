@@ -494,5 +494,6 @@ def test_a_reading_whose_kept_answers_are_gone_before_it_was_finished_says_it_st
 
     with caplog.at_level("WARNING"):
         again = chat_pace.resume("org", "C1", "1795100200.000000", "1795100460.000000")
-    assert again.answers == {} and again.upto == "1795100460.000000"
+    assert again.answers == {}
+    assert again.upto == "1795100460.000000"
     assert "starts over" in caplog.text

@@ -115,20 +115,20 @@ class SlackClient:
         read_limit.answered(team_id, endpoint, caller[0])
         return result
 
-    def _request(self, method: str, endpoint: str, data: Optional[Dict], timeout: int, max_retries: int,
-                 limited: Optional[Callable[[Optional[int]], None]] = None) -> Dict[str, Any]:
+    def _send(self, method: str, endpoint: str, data: Optional[Dict], timeout: int):
         url = f"{SLACK_API_BASE}/{endpoint}"
-        
+        if method == "GET":
+            return requests.get(url, headers=self.headers, params=data, timeout=timeout)
+        return requests.post(url, headers=self.headers, json=data, timeout=timeout)
+
+    def _request(self, method: str, endpoint: str, data: Optional[Dict], timeout: int, max_retries: int,
+                 limited: Callable[[Optional[int]], None] = lambda _retry_after: None) -> Dict[str, Any]:
         for attempt in range(max_retries + 1):
             try:
-                if method == "GET":
-                    response = requests.get(url, headers=self.headers, params=data, timeout=timeout)
-                else:
-                    response = requests.post(url, headers=self.headers, json=data, timeout=timeout)
-                
+                response = self._send(method, endpoint, data, timeout)
+
                 if response.status_code == 429:
-                    if limited:
-                        limited(self._retry_after(response))
+                    limited(self._retry_after(response))
                     if attempt >= max_retries:
                         raise SlackRateLimited(endpoint, self._retry_after(response))
                     retry_after = self._get_retry_delay(attempt, response)

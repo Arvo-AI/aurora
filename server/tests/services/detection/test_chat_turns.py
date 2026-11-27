@@ -100,7 +100,9 @@ def test_a_limited_workspace_gets_fewer_channels_a_turn_and_its_quiet_channels_a
     unlimited = chat_intake._turn_size("T0OURS")
     read_limit.was_limited("T0OURS", read_limit.REPLIES, 30)
     channels, quiet = chat_intake._turn_size("T0OURS")
-    assert unlimited[1] == 0 and channels < unlimited[0] and quiet > 0
+    assert unlimited[1] == 0
+    assert channels < unlimited[0]
+    assert quiet > 0
 
 
 def test_claimed_channels_are_read_pending_first_then_never_read_then_longest_unread():

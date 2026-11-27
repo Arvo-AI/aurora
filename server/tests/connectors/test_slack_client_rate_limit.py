@@ -74,8 +74,9 @@ def test_a_read_that_gave_up_does_not_keep_the_chat_reader_out(monkeypatch):
     monkeypatch.setattr(slack.requests, "get", lambda *_a, **_k: _Response(429, {"Retry-After": "5"}))
     monkeypatch.setattr(slack.time, "sleep", lambda _s: None)
 
+    client = slack.SlackClient("token", "T1")
     with pytest.raises(slack.SlackRateLimited):
-        slack.SlackClient("token", "T1")._make_request("GET", read_limit.REPLIES, {}, max_retries=1)
+        client._make_request("GET", read_limit.REPLIES, {}, max_retries=1)
 
     redis.now += read_limit.SPACING_SECONDS + 1
     assert read_limit.take("T1", read_limit.REPLIES)
