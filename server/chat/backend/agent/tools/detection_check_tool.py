@@ -296,6 +296,15 @@ def _keep_replay(cursor, org_id: str, saved: tuple, definition: dict, replayed) 
         )
 
 
+def _state_note(state: str, vouched: bool, active: bool) -> str:
+    """Why the check notifies, or does not, in its current state."""
+    if state == "proven" and vouched:
+        return _VOUCHED_NOTE
+    if state == "proven" and active:
+        return _UNMONITORED_NOTE
+    return _STATE_NOTES.get(state, "")
+
+
 def _saved_response(saved: tuple, state: str, vouched: bool, replayed, active: bool = False) -> str:
     check_id, revision, changed = saved
     response = {
@@ -303,9 +312,7 @@ def _saved_response(saved: tuple, state: str, vouched: bool, replayed, active: b
         "check_id": check_id,
         "revision": revision,
         "state": state,
-        "note": (_VOUCHED_NOTE if vouched and state == "proven"
-                 else _UNMONITORED_NOTE if active and state == "proven"
-                 else _STATE_NOTES.get(state, "")),
+        "note": _state_note(state, vouched, active),
     }
     if replayed:
         response["replay"] = replayed.record
