@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from celery_config import celery_app
-from utils.aws.sns_alert import parse_sns_alert
+from utils.aws.sns_alert import SnsAlert, parse_sns_alert
 from services.correlation.alert_correlator import AlertCorrelator
 from services.correlation import apply_correlation_outcome
 
@@ -68,12 +68,12 @@ class AlarmFields:
     """Bundle of fields extracted from a CloudWatch alarm payload."""
     __slots__ = (
         'alarm_name', 'alarm_arn', 'state_value', 'previous_state',
-        'reason', 'account_id', 'region',
+        'reason', 'account_id', 'region', 'custom',
     )
 
     def __init__(
         self, alarm_name: str, alarm_arn: str, state_value: str,
-        previous_state: str, reason: str, account_id: str, region: str,
+        previous_state: str, reason: str, account_id: str, region: str, custom: SnsAlert | None = None,
     ):
         self.alarm_name = alarm_name
         self.alarm_arn = alarm_arn
@@ -82,6 +82,7 @@ class AlarmFields:
         self.reason = reason
         self.account_id = account_id
         self.region = region
+        self.custom = custom
 
 
 def _persist_alarm(
@@ -117,11 +118,8 @@ def _persist_alarm(
     return alarm_db_id
 
 
-def _handle_resolved_alarm(
-    cursor, conn, user_id: str, org_id: str, alarm_name: str,
-    alarm_db_id, state_value: str, payload: Dict[str, Any],
-) -> None:
-    """Correlate a resolved alarm back to its original incident and mark it resolved."""
+def _find_native_alarm(cursor, user_id, alarm_name, payload):
+    """Find the incident identified by a native CloudWatch OK notification."""
     account_id = payload.get("AWSAccountId") or payload.get("account_id") or ""
     region = payload.get("Region") or payload.get("region") or ""
     cursor.execute(
@@ -137,50 +135,116 @@ def _handle_resolved_alarm(
         (user_id, alarm_name, account_id, account_id, region, region),
     )
     row = cursor.fetchone()
-    if row:
-        original_incident_id = row[0]
-        cursor.execute(
-            """
-            INSERT INTO incident_alerts
-              (user_id, org_id, incident_id, source_type, source_alert_id,
-               alert_title, alert_service, alert_severity, correlation_strategy,
-               correlation_score, alert_metadata)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """,
-            (
-                user_id, org_id, original_incident_id, "cloudwatch",
-                alarm_db_id, alarm_name,
-                _extract_service(payload),
-                _extract_severity(state_value, payload),
-                "resolved_webhook", 1.0,
-                json.dumps({"resolved_webhook": True, "alarm_name": alarm_name}),
-            ),
-        )
-        cursor.execute(
-            """
-            UPDATE incidents SET status = 'resolved', resolved_at = CURRENT_TIMESTAMP
-            WHERE id = %s
-            """,
-            (original_incident_id,),
-        )
-        cursor.execute(
-            """
-            INSERT INTO incident_lifecycle_events
-              (incident_id, user_id, org_id, event_type, new_value)
-            VALUES (%s, %s, %s, %s, %s)
-            """,
-            (original_incident_id, user_id, org_id, "status_change", "resolved"),
-        )
-        conn.commit()
-        logger.info(
-            "[CLOUDWATCH][ALARM] Resolved alarm (%s) — incident %s marked resolved",
-            alarm_name, original_incident_id,
-        )
-    else:
-        logger.info(
-            "[CLOUDWATCH][ALARM] Resolved alarm for user %s, no matching incident. Skipping.",
-            user_id,
-        )
+    return row[0] if row else None
+
+
+def _resolve_alarm(cursor, user_id, org_id, original_incident_id, alarm_name,
+                   alarm_db_id, service, severity):
+    cursor.execute(
+        """
+        INSERT INTO incident_alerts
+          (user_id, org_id, incident_id, source_type, source_alert_id,
+           alert_title, alert_service, alert_severity, correlation_strategy,
+           correlation_score, alert_metadata)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        (
+            user_id, org_id, original_incident_id, "cloudwatch",
+            alarm_db_id, alarm_name,
+            service, severity,
+            "resolved_webhook", 1.0,
+            json.dumps({"resolved_webhook": True, "alarm_name": alarm_name}),
+        ),
+    )
+    cursor.execute(
+        """
+        UPDATE incidents SET status = 'resolved', resolved_at = CURRENT_TIMESTAMP
+        WHERE id = %s
+        """,
+        (original_incident_id,),
+    )
+    cursor.execute(
+        """
+        INSERT INTO incident_lifecycle_events
+          (incident_id, user_id, org_id, event_type, new_value)
+        VALUES (%s, %s, %s, %s, %s)
+        """,
+        (original_incident_id, user_id, org_id, "status_change", "resolved"),
+    )
+    logger.info(
+        "[CLOUDWATCH][ALARM] Resolved alarm (%s) — incident %s marked resolved",
+        alarm_name, original_incident_id,
+    )
+
+
+def _handle_sns_followup(cursor, user_id, org_id, condition_key, alert, published_at, alarm_db_id):
+    """Return True if this scoped delivery can finish without a new incident."""
+    # Serialize the first firing with other workers processing the same condition.
+    cursor.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                   (json.dumps([org_id, user_id, condition_key]),))
+    if alert.state != "OK" and not alert.continued:
+        return False
+
+    # A matching alert may be the primary alert or attached by the correlator.
+    cursor.execute(
+        """
+        SELECT i.id, i.alert_metadata ->> 'sns_condition_key'
+        FROM incidents i
+        WHERE i.org_id = %s AND i.user_id = %s
+          AND i.status NOT IN ('resolved', 'closed', 'merged') AND i.resolved_at IS NULL
+          AND (i.alert_metadata ->> 'sns_condition_key' = %s OR EXISTS (
+              SELECT 1 FROM incident_alerts a WHERE a.incident_id = i.id
+                AND a.alert_metadata ->> 'sns_condition_key' = %s
+          ))
+        ORDER BY i.id LIMIT 2 FOR UPDATE OF i
+        """, (org_id, user_id, condition_key, condition_key),
+    )
+    matches = cursor.fetchall()
+    if not matches:
+        return alert.state == "OK"
+    if alert.continued:
+        if len(matches) == 1:
+            cursor.execute(
+                """
+                INSERT INTO incident_alerts
+                    (user_id, org_id, incident_id, source_type, source_alert_id, alert_title,
+                     alert_service, alert_severity, correlation_strategy, correlation_score, alert_metadata)
+                VALUES (%s, %s, %s, 'cloudwatch', %s, %s, %s, %s, 'continued', 1.0, %s)
+                """, (user_id, org_id, matches[0][0], alarm_db_id, alert.title, alert.service, alert.severity,
+                      json.dumps({"sns_condition_key": condition_key, "source_post_at": published_at})),
+            )
+        return True
+    if len(matches) != 1 or matches[0][1] != condition_key or not published_at:
+        return True
+
+    incident_id = matches[0][0]
+    # One connectivity recovery cannot close a mixed incident, or a newer outage.
+    cursor.execute(
+        """
+        SELECT 1 FROM (
+            SELECT alert_metadata FROM incidents WHERE id = %s
+            UNION ALL
+            SELECT alert_metadata FROM incident_alerts WHERE incident_id = %s
+        ) members
+        WHERE (alert_metadata ->> 'sns_condition_key' = %s AND
+               alert_metadata ->> 'source_post_at' < %s) IS NOT TRUE
+        LIMIT 1
+        """, (incident_id, incident_id, condition_key, published_at),
+    )
+    if not cursor.fetchone():
+        _resolve_alarm(cursor, user_id, org_id, incident_id, alert.title, alarm_db_id, alert.service, alert.severity)
+    return True
+
+
+def _sns_timestamp(value):
+    """Normalize signed publish times to a comparable UTC representation."""
+    try:
+        stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (AttributeError, ValueError):
+        return None
+    if stamp.tzinfo is not None:
+        return stamp.astimezone(timezone.utc).isoformat(timespec="microseconds")
+    return None
 
 
 def _build_alert_metadata(
@@ -430,7 +494,7 @@ def _extract_alarm_fields(payload: Dict[str, Any]) -> AlarmFields:
     """Parse alarm field values from the CloudWatch/SNS payload."""
     custom = parse_sns_alert(payload)
     if custom:
-        return AlarmFields(custom.title, "", "ALARM", "", custom.description, "", "")
+        return AlarmFields(custom.title, "", custom.state, "", custom.description, "", "", custom)
     name = payload.get("AlarmName")
     state = payload.get("NewStateValue") or payload.get("state_value")
     if not isinstance(name, str) or not name.strip() or not isinstance(state, str):
@@ -454,7 +518,9 @@ def _process_alarm_in_db(
     from utils.db.connection_pool import db_pool
     from utils.auth.stateless_auth import set_rls_context
 
+    metadata = metadata or {}
     fields = _extract_alarm_fields(payload)
+    custom = fields.custom
 
     with db_pool.get_admin_connection() as conn:
         with conn.cursor() as cursor:
@@ -466,16 +532,27 @@ def _process_alarm_in_db(
             alarm_db_id = _persist_alarm(
                 cursor, user_id, org_id, fields,
                 payload, received_at,
-                sns_message_id=(metadata or {}).get("sns_message_id", ""),
+                sns_message_id=metadata.get("sns_message_id", ""),
             )
             if not alarm_db_id:
                 return
 
-            if _is_alarm_resolved(fields.state_value):
-                _handle_resolved_alarm(
-                    cursor, conn, user_id, org_id, fields.alarm_name,
-                    alarm_db_id, fields.state_value, payload,
-                )
+            condition_key = None
+            published_at = metadata.get("published_at")
+            if custom and custom.condition and metadata.get("topic_arn"):
+                condition_key = json.dumps([metadata["topic_arn"], custom.service.casefold(), custom.condition])
+                published_at = _sns_timestamp(published_at)
+                if _handle_sns_followup(cursor, user_id, org_id, condition_key, custom, published_at, alarm_db_id):
+                    conn.commit()
+                    return
+
+            if not custom and _is_alarm_resolved(fields.state_value):
+                incident_id = _find_native_alarm(cursor, user_id, fields.alarm_name, payload)
+                if incident_id:
+                    _resolve_alarm(
+                        cursor, user_id, org_id, incident_id, fields.alarm_name, alarm_db_id,
+                        _extract_service(payload), _extract_severity(fields.state_value, payload),
+                    )
                 conn.commit()
                 return
 
@@ -496,15 +573,16 @@ def _process_alarm_in_db(
                 fields.region, fields.reason, fields.previous_state, payload,
             )
 
-            custom = parse_sns_alert(payload)
+            if condition_key:
+                alert_metadata["sns_condition_key"] = condition_key
             if custom:
                 service, severity = custom.service or "aws", custom.severity
             # A delivery ID deduplicates retries. This key describes the problem
             # across distinct deliveries, including two conditions on one asset.
             alert_metadata["correlation_key"] = json.dumps([
-                (metadata or {}).get("topic_arn"), fields.alarm_arn or fields.alarm_name, service
+                metadata.get("topic_arn"), fields.alarm_arn or fields.alarm_name, service
             ])
-            alert_metadata["source_post_at"] = (metadata or {}).get("published_at")
+            alert_metadata["source_post_at"] = published_at
 
             if _try_correlate_alarm(
                 cursor, conn, user_id, org_id, alarm_db_id,
