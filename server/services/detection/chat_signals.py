@@ -33,6 +33,7 @@ A report counts for nothing in a check's record. A check is credited by
 incidents; a report reaches the record only by becoming one.
 """
 
+import time
 from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from services.detection import STATE_RETIRED
@@ -217,7 +218,7 @@ def reads_to_claim(cursor, org_id: str, limit: int) -> int:
 
 
 def claim_channels(cursor, org_id: str, team_id: str, company: str,
-                   limit: int) -> List[Tuple[str, Optional[str], str]]:
+                   limit: int, quiet_after: int = 0) -> List[Turn]:
     """Take up to *limit* channels to read now, as Turns.
 
     Only channels of the workspace the token belongs to, that Aurora is in, and
@@ -225,8 +226,12 @@ def claim_channels(cursor, org_id: str, team_id: str, company: str,
     being invited to one to post notifications is not consent to read it.
 
     A channel where a message just arrived (see note_activity) goes first, then
-    the one read longest ago. The claim keeps two overlapping turns off the
-    same channel and expires by itself.
+    the one read longest ago. A channel where none arrived is left alone until
+    it was last read *quiet_after* seconds ago, but only a channel Aurora has
+    been told of a message in before: where Slack sends no message events (a
+    private channel, an app without the subscription) silence says nothing,
+    and the channel keeps its turn. The claim keeps two overlapping turns off
+    the same channel and expires by itself.
     """
     params = _channel_params(org_id, team_id, company)
     cursor.execute(
@@ -242,6 +247,8 @@ def claim_channels(cursor, org_id: str, team_id: str, company: str,
                JOIN readable r ON r.channel_id = c.channel_id
                WHERE c.org_id = %s
                  AND (c.claimed_at IS NULL OR c.claimed_at <= NOW() - %s * INTERVAL '1 second')
+                 AND (c.pending_since IS NOT NULL OR c.updated_at IS NULL OR c.noted_ts IS NULL
+                      OR c.updated_at <= NOW() - %s * INTERVAL '1 second')
                ORDER BY c.pending_since NULLS LAST, c.updated_at NULLS FIRST, c.channel_id
                LIMIT %s
                FOR UPDATE OF c SKIP LOCKED
@@ -250,35 +257,72 @@ def claim_channels(cursor, org_id: str, team_id: str, company: str,
            FROM readable r
            WHERE c.org_id = %s AND c.channel_id = r.channel_id
              AND c.channel_id IN (SELECT channel_id FROM taken)
-           RETURNING c.channel_id, c.last_ts, r.level, c.claimed_at, c.threads""",
-        params + (org_id, CHANNEL_CLAIM_SECONDS, limit, org_id),
+           RETURNING c.channel_id, c.last_ts, r.level, c.claimed_at, c.threads,
+                     c.pending_since IS NULL, c.pending_since, c.updated_at IS NOT NULL, c.updated_at""",
+        params + (org_id, CHANNEL_CLAIM_SECONDS, quiet_after, limit, org_id),
     )
-    return [Turn(row[0], row[1], row[2], row[3], dict(row[4] or {})) for row in cursor.fetchall()]
+    return [Turn(row[0], row[1], row[2], row[3], dict(row[4] or {})) for row in _as_chosen(cursor.fetchall())]
 
 
-def advance(cursor, org_id: str, channel_id: str, last_ts: str, claim: Any) -> None:
+def _as_chosen(rows: List[tuple]) -> List[tuple]:
+    """The claimed rows in the order they were chosen in: an UPDATE returns them
+    in any order. Same order as claim_channels asks for: pending first and the
+    longest pending first, then never read, then read longest ago."""
+    return sorted(rows, key=lambda row: (row[5], row[6] or 0, row[7], row[8] or 0, row[0]))
+
+
+def advance(cursor, org_id: str, channel_id: str, last_ts: str, claim: Any,
+            read_upto: Optional[str] = None) -> None:
     """The channel was read up to *last_ts*, by the turn holding *claim*.
 
     A turn that outlived its claim changes nothing: another has the channel by
-    then, and its cursor is the newer one. Threads noted as active are dropped
-    once read past, or after a day.
+    then, and its cursor is the newer one.
+
+    *read_upto* is the moment the reading took the channel at; *last_ts*, the
+    newest message it found, can be earlier. A thread noted as active is
+    dropped once its reply is no later than that moment: the thread was read
+    that far, whether or not the reply was still there. Otherwise after a day.
+
+    The channel still has something to read when a message noted in it is
+    later than the reading (noted_ts, the message's own Slack time, against
+    *read_upto*: a reading taken up again over several turns has a moment that
+    is minutes old by the time it ends), or a noted reply is. It then stays in
+    line for the next turn.
     """
+    unread = """SELECT noted.key, noted.value FROM jsonb_each_text(threads) AS noted
+                WHERE noted.value::float8 > %s::float8
+                  AND noted.value::float8 > EXTRACT(EPOCH FROM NOW()) - 86400"""
+    upto = read_upto or last_ts
     cursor.execute(
         """UPDATE detection_chat_cursors
-           SET last_ts = %s, updated_at = NOW(), claimed_at = NULL, pending_since = NULL,
-               failed_attempts = 0,
-               threads = COALESCE((
-                   SELECT jsonb_object_agg(noted.key, noted.value)
-                   FROM jsonb_each_text(threads) AS noted
-                   WHERE noted.value::float8 > %s::float8
-                     AND noted.value::float8 > EXTRACT(EPOCH FROM NOW()) - 86400
-               ), '{}'::jsonb)
+           SET last_ts = %s, updated_at = NOW(), claimed_at = NULL, failed_attempts = 0,
+               pending_since = CASE WHEN noted_ts::float8 > %s::float8 OR EXISTS (""" + unread + """)
+                                    THEN NOW() END,
+               threads = COALESCE((SELECT jsonb_object_agg(u.key, u.value) FROM (""" + unread + """) u),
+                                  '{}'::jsonb)
            WHERE org_id = %s AND channel_id = %s AND claimed_at = %s""",
-        (last_ts, last_ts, org_id, channel_id, claim),
+        (last_ts, upto, upto, upto, org_id, channel_id, claim),
     )
 
 
-def read_failed(cursor, org_id: str, channel_id: str, newest_ts: str, claim: Any) -> bool:
+def put_back(cursor, org_id: str, channel_id: str, claim: Any, first: bool = False) -> None:
+    """The turn holding *claim* did not read the channel, through no fault of the
+    channel: it is free to be taken again, and is where it was in the order.
+
+    *first* puts it ahead of every other channel. That is for a reading stopped
+    part way, which a later turn goes on with (see chat_pace).
+    """
+    cursor.execute(
+        """UPDATE detection_chat_cursors
+           SET claimed_at = NULL,
+               pending_since = CASE WHEN %s THEN 'epoch'::timestamptz ELSE pending_since END
+           WHERE org_id = %s AND channel_id = %s AND claimed_at = %s""",
+        (first, org_id, channel_id, claim),
+    )
+
+
+def read_failed(cursor, org_id: str, channel_id: str, newest_ts: str, claim: Any,
+                read_upto: Optional[str] = None) -> bool:
     """The channel's new messages could not be read. True when they are now given up on.
 
     They are tried again on the channel's next turn, MAX_FAILED_READS times.
@@ -301,7 +345,7 @@ def read_failed(cursor, org_id: str, channel_id: str, newest_ts: str, claim: Any
             (org_id, channel_id),
         )
         return False
-    advance(cursor, org_id, channel_id, newest_ts, claim)
+    advance(cursor, org_id, channel_id, newest_ts, claim, read_upto)
     return True
 
 
@@ -309,22 +353,33 @@ def note_activity(cursor, org_id: str, channel_id: str, thread_ts: Optional[str]
                   ts: Optional[str] = None) -> None:
     """A message just arrived in *channel_id* (a Slack event): read it on the next turn.
 
+    The channel keeps its place in line from the first message not yet read.
+    The message's own time is kept as well (noted_ts, the newest noted): a
+    reading that took the channel before the message was there does not clear
+    it (see advance).
+
     A reply in a thread is noted with its thread: the thread's first message can
     be further back than the history the next reading takes, and the reply
-    would not be found from there. At most MAX_NOTED_THREADS a channel.
+    would not be found from there. The newest reply is the one kept: Slack can
+    deliver an older one after it. At most MAX_NOTED_THREADS a channel.
     """
+    # An event without a usable time is taken as of now.
+    noted = ts if ts and _is_ts(ts) else "%.6f" % time.time()
     cursor.execute(
-        """UPDATE detection_chat_cursors SET pending_since = COALESCE(pending_since, NOW())
+        """UPDATE detection_chat_cursors
+           SET pending_since = COALESCE(pending_since, NOW()),
+               noted_ts = CASE WHEN noted_ts IS NULL OR noted_ts::float8 < %s::float8 THEN %s ELSE noted_ts END
            WHERE org_id = %s AND channel_id = %s""",
-        (org_id, channel_id),
+        (noted, noted, org_id, channel_id),
     )
     if not thread_ts or not ts or thread_ts == ts or not (_is_ts(thread_ts) and _is_ts(ts)):
         return
     cursor.execute(
         """UPDATE detection_chat_cursors SET threads = jsonb_set(threads, ARRAY[%s], to_jsonb(%s::text))
            WHERE org_id = %s AND channel_id = %s
-             AND (threads ? %s OR (SELECT COUNT(*) FROM jsonb_object_keys(threads)) < %s)""",
-        (thread_ts, ts, org_id, channel_id, thread_ts, MAX_NOTED_THREADS),
+             AND (threads ? %s OR (SELECT COUNT(*) FROM jsonb_object_keys(threads)) < %s)
+             AND COALESCE((threads ->> %s)::float8, 0) < %s::float8""",
+        (thread_ts, ts, org_id, channel_id, thread_ts, MAX_NOTED_THREADS, thread_ts, ts),
     )
 
 

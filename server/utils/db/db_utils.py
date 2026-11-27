@@ -1772,6 +1772,7 @@ def initialize_tables():
                         claimed_at TIMESTAMPTZ,
                         updated_at TIMESTAMPTZ,
                         threads JSONB NOT NULL DEFAULT '{}'::jsonb,
+                        noted_ts VARCHAR(64),
                         PRIMARY KEY (org_id, channel_id)
                     );
                 """,
@@ -2010,6 +2011,8 @@ def initialize_tables():
                 cursor.execute("""
                     ALTER TABLE detection_check_fires
                     ADD COLUMN IF NOT EXISTS case_claimed_at TIMESTAMPTZ;
+                    ALTER TABLE detection_chat_cursors
+                    ADD COLUMN IF NOT EXISTS noted_ts VARCHAR(64);
                     ALTER TABLE detection_access_alerts
                     ADD COLUMN IF NOT EXISTS delivered BOOLEAN NOT NULL DEFAULT FALSE;
                     ALTER TABLE detection_checks

@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.28] - 2026-11-27
+
+### Fixed
+- Dynamic alerting for Slack stays within Slack's rate limit. Where Slack
+  allows an app about one read of a workspace's messages a minute (an app that
+  is not in the Slack Marketplace), most reads were refused, each reading task
+  ran for 90 seconds, and after three refusals the new messages in a channel
+  were skipped. Aurora now learns the limit per workspace, spaces its calls,
+  and goes on with a half-read channel on the next turn. A refusal for asking
+  too often, or Slack being unreachable, no longer counts against a channel.
+  Channels with no new message are looked at every 30 minutes in such a
+  workspace, where Slack sends Aurora message events for them, and a deleted
+  thread no longer fails its channel. Aurora's other reads of Slack messages
+  (the agent's channel history and thread tools, alert threading) go ahead of
+  this background reading, which shares the same limit.
+- Change gating reviews a pull request stacked on another open pull request's
+  branch. It was skipped as not targeting the default branch.
+- Actions are scoped to their own organization in the query itself. Where the
+  database role bypasses row-level security (the default compose Postgres
+  user), one organization's on-incident actions ran on other organizations'
+  incidents, and scheduled actions were dispatched once per organization.
+
 ## [1.5.27] - 2026-11-25
 
 ### Added

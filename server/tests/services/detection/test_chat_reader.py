@@ -270,7 +270,7 @@ class _Slack:
     def __init__(self, history, guests=(), unknown=()):
         self.history, self.guests, self.unknown = history, guests, unknown
 
-    def _make_request(self, _method, endpoint, params):
+    def _make_request(self, _method, endpoint, params, **_kwargs):
         if endpoint == "conversations.history":
             return {"messages": self.history}
         if endpoint == "users.info":
@@ -329,10 +329,10 @@ class _SlackWithThreads(_Slack):
         super().__init__(history)
         self.replies = replies
 
-    def _make_request(self, method, endpoint, params):
+    def _make_request(self, method, endpoint, params, **kwargs):
         if endpoint == "conversations.replies":
             return {"messages": self.replies.get(params["ts"], [])}
-        return super()._make_request(method, endpoint, params)
+        return super()._make_request(method, endpoint, params, **kwargs)
 
 
 def test_a_reply_in_a_thread_older_than_the_history_page_is_read_when_the_thread_was_noted():
@@ -351,3 +351,164 @@ def test_a_reply_in_a_thread_older_than_the_history_page_is_read_when_the_thread
                                     {old_thread: reply["ts"]})
     assert [m["text"] for m in new] == ["checkout is failing again"]
     assert newest == reply["ts"]
+
+
+class _Redis:
+    """Enough of Redis for the pacing: keys that expire when the test's clock passes them."""
+
+    def __init__(self):
+        self.now, self.kept = 0, {}
+
+    def _live(self, key):
+        value, until = self.kept.get(key, (None, 0))
+        return value if until > self.now else None
+
+    def exists(self, key):
+        return int(self._live(key) is not None)
+
+    def get(self, key):
+        return self._live(key)
+
+    def set(self, key, value, nx=False, ex=None):
+        if nx and self._live(key) is not None:
+            return None
+        self.kept[key] = (value, self.now + (ex or 10 ** 9))
+        return True
+
+    def delete(self, key):
+        self.kept.pop(key, None)
+
+    def time(self):
+        return self.now, 0
+
+    def expireat(self, key, when):
+        if key in self.kept:
+            self.kept[key] = (self.kept[key][0], min(self.kept[key][1], when))
+
+    def zadd(self, key, scores):
+        self.kept.setdefault(key, ({}, 10 ** 12))[0].update(scores)
+
+    def zrem(self, key, member):
+        self.kept.get(key, ({}, 0))[0].pop(member, None)
+
+    def zremrangebyscore(self, key, _low, high):
+        held = self.kept.get(key, ({}, 0))[0]
+        for member in [m for m, score in held.items() if score <= high]:
+            del held[member]
+
+    def zcard(self, key):
+        return len(self.kept.get(key, ({}, 0))[0])
+
+    def eval(self, _script, _keys, key, seconds):
+        # The one script there is: hold a key, unless it is held for longer already.
+        if self.kept.get(key, (None, 0))[1] < self.now + int(seconds):
+            self.kept[key] = ("1", self.now + int(seconds))
+        return 1
+
+
+class _LimitedSlack(_SlackWithThreads):
+    """Slack as it is for an app from outside its Marketplace: one call a minute to each method."""
+
+    def __init__(self, history, replies, redis):
+        super().__init__(history, replies)
+        self.redis, self.last, self.calls, self.refused = redis, {}, [], 0
+
+    def _make_request(self, method, endpoint, params, **kwargs):
+        from connectors.slack_connector.client import SlackAPIError, SlackRateLimited
+
+        if endpoint.startswith("conversations."):
+            since = self.redis.now - self.last.get(endpoint, -60)
+            if since < 60:
+                self.refused += 1
+                raise SlackRateLimited(endpoint, 60 - since)
+            self.last[endpoint] = self.redis.now
+            self.calls.append((endpoint, params.get("ts")))
+        if endpoint == "conversations.replies" and params["ts"] not in self.replies:
+            raise SlackAPIError("thread_not_found")
+        return super()._make_request(method, endpoint, params, **kwargs)
+
+
+def _read_over_turns(slack, redis, last_ts, threads=None):
+    """Read one channel the way the reader does, a minute between turns, until it is read."""
+    from services.detection import chat_pace
+    from services.detection.chat_intake import _gather
+
+    for _turn in range(10):
+        progress = chat_pace.resume("org", "C1", last_ts, "1795100400.000000")
+        try:
+            return _gather(slack, _TEAM, "C1", last_ts, "UBOT", threads, progress)
+        except chat_pace.Busy:
+            chat_pace.keep("org", "C1", progress)
+            redis.now += 60
+    raise AssertionError("the channel was never read")
+
+
+def _paced(monkeypatch):
+    from connectors.slack_connector import read_limit
+
+    redis = _Redis()
+    monkeypatch.setattr(read_limit, "get_redis_client", lambda: redis)
+    return redis
+
+
+def test_a_channel_slack_lets_be_read_one_call_a_minute_is_read_in_full_over_several_turns(monkeypatch):
+    redis = _paced(monkeypatch)
+    last_ts = "1795100200.000000"
+    parents = [{"ts": "1795100%d00.000100" % n, "text": "thread %d" % n, "team": _TEAM, "user": "UMEM1",
+                "reply_count": 1, "latest_reply": "1795100300.000%d00" % n} for n in (0, 1)]
+    replies = {p["ts"]: [p, {"ts": p["latest_reply"], "thread_ts": p["ts"], "text": "reply to " + p["text"],
+                             "team": _TEAM, "user": "UMEM2"}] for p in parents}
+    slack = _LimitedSlack(parents, replies, redis)
+
+    new, _context, newest = _read_over_turns(slack, redis, last_ts)
+    assert sorted(m["text"] for m in new) == ["reply to thread 0", "reply to thread 1"]
+    assert newest == "1795100300.000100"
+    # Slack was asked each thing once, and once it had said no it was not asked too soon again.
+    assert sorted(slack.calls) == sorted([("conversations.history", None)] + [
+        ("conversations.replies", p["ts"]) for p in parents])
+    assert slack.refused == 1
+
+
+def test_a_deleted_thread_is_asked_about_once_and_the_thread_after_it_is_still_read(monkeypatch):
+    redis = _paced(monkeypatch)
+    last_ts = "1795100200.000000"
+    gone, live = "1795000000.000100", "1795000100.000100"
+    reply = {"ts": "1795100300.000100", "thread_ts": live, "text": "checkout is failing again",
+             "team": _TEAM, "user": "UMEM1"}
+    slack = _LimitedSlack([], {live: [{"ts": live, "text": "checkout"}, reply]}, redis)
+
+    new, _context, _newest = _read_over_turns(
+        slack, redis, last_ts, {gone: "1795100250.000100", live: reply["ts"]})
+
+    assert [m["text"] for m in new] == ["checkout is failing again"]
+    assert [call for call in slack.calls if call[1] == gone] == [("conversations.replies", gone)]
+
+
+def test_a_reading_whose_kept_answers_are_gone_before_it_was_finished_says_it_starts_over(monkeypatch, caplog):
+    from services.detection import chat_pace
+
+    redis = _paced(monkeypatch)
+    progress = chat_pace.resume("org", "C1", "1795100200.000000", "1795100400.000000")
+    progress.answers["conversations.history {}"] = {"messages": []}
+    chat_pace.keep("org", "C1", progress)
+    redis.delete("detection:chat:progress:org:C1")
+
+    with caplog.at_level("WARNING"):
+        again = chat_pace.resume("org", "C1", "1795100200.000000", "1795100460.000000")
+    assert again.answers == {}
+    assert again.upto == "1795100460.000000"
+    assert "starts over" in caplog.text
+
+
+def test_what_is_kept_of_a_reading_is_gone_thirty_minutes_after_it_began_however_late_it_was_kept(monkeypatch):
+    from services.detection import chat_pace
+
+    redis = _paced(monkeypatch)
+    monkeypatch.setattr(chat_pace.time, "time", lambda: 1000.0)
+    progress = chat_pace.Progress("1795100200.000000", "1795100400.000000",
+                                  {"conversations.history {}": {"messages": []}}, began=400.0)
+    redis.now = 1000 + 300   # the write lands five minutes after its time was counted
+    chat_pace.keep("org", "C1", progress)
+
+    redis.now = 400 + chat_pace.PROGRESS_SECONDS
+    assert redis.get("detection:chat:progress:org:C1") is None
