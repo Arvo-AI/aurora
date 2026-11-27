@@ -1,11 +1,8 @@
 """Reading chat no faster than Slack allows.
 
-Slack limits how often an app may read a workspace's messages, per method and
-per workspace. For an app installed from outside its Marketplace that is about
-one `conversations.history` and one `conversations.replies` a minute; an app a
-workspace built for itself gets far more. Aurora cannot tell which it is until
-Slack says so, so it learns: the first 429 on a method marks that workspace as
-limited for a day, and from then on calls to that method are spaced out.
+What Aurora knows of Slack's limit on a workspace, and who gets the one call a
+minute it leaves, is in connectors/slack_connector/read_limit.py. This is the
+reader's side of it.
 
 A call that may not be made now raises Busy. Nothing went wrong and nothing is
 lost: the reading stops where it is and goes on from there on a later turn.
@@ -24,27 +21,17 @@ import logging
 import time
 from typing import Any, Dict, Optional
 
+from connectors.slack_connector import read_limit
 from connectors.slack_connector.client import SlackAPIError, SlackRateLimited
-from utils.cache.redis_client import get_redis_client
+from connectors.slack_connector.read_limit import HISTORY, REPLIES, limited  # noqa: F401  (the reader's names)
 from utils.log_sanitizer import sanitize
 
 logger = logging.getLogger(__name__)
 
 _LOG = "[DetectionChat]"
-HISTORY = "conversations.history"
-REPLIES = "conversations.replies"
-# Between two calls to one method in a workspace known to be limited. A little
-# under the minute the reader's own turns are apart, so that a turn does not
-# find the last one's call still in the way. Slack says so if it is too soon.
-SPACING_SECONDS = 50
-# How long a workspace stays known as limited after its last 429.
-LIMITED_SECONDS = 24 * 3600
 # How long what Slack already gave for an unfinished reading is kept, counted
 # from when the reading began. A reading not finished by then starts over.
 PROGRESS_SECONDS = 30 * 60
-# Slack is taken at its word on how long to wait. Up to a day: a header that
-# says more is not believed.
-MAX_WAIT_SECONDS = LIMITED_SECONDS
 
 
 class Busy(Exception):
@@ -59,75 +46,16 @@ def _key(kind: str, *parts: str) -> str:
     return "detection:chat:%s:%s" % (kind, ":".join(parts))
 
 
-def _redis():
-    try:
-        return get_redis_client()
-    except Exception:
-        return None
-
-
-def limited(team_id: str, endpoint: str = HISTORY) -> bool:
-    """Whether Slack has rate limited this workspace on *endpoint* in the last day."""
-    redis = _redis()
-    try:
-        return bool(redis and redis.exists(_key("limited", team_id, endpoint)))
-    except Exception:
-        logger.warning("%s Could not tell whether the workspace is rate limited on %s: Redis did not answer",
-                       _LOG, endpoint)
-        return False
-
-
-# Hold KEYS[1] for ARGV[1] seconds, unless it is already held for longer.
-_HOLD = """
-if redis.call('TTL', KEYS[1]) < tonumber(ARGV[1]) then
-    redis.call('SET', KEYS[1], '1', 'EX', ARGV[1])
-end
-return 1
-"""
-
-
-def _take(team_id: str, endpoint: str) -> None:
-    """Take the turn to call *endpoint* now, or raise Busy."""
-    redis = _redis()
-    if redis is None:
-        return
-    wait = _key("wait", team_id, endpoint)
-    try:
-        if redis.exists(_key("limited", team_id, endpoint)):
-            free = redis.set(wait, "1", nx=True, ex=SPACING_SECONDS)
-        else:
-            free = not redis.exists(wait)
-    except Exception:
-        logger.warning("%s Could not pace Slack calls: Redis did not answer", _LOG)
-        return
-    if not free:
-        raise Busy(endpoint)
-
-
-def _was_limited(team_id: str, endpoint: str, retry_after: Optional[int]) -> None:
-    # As long as Slack asked for, and never less than the reader's own spacing.
-    wait = min(max(retry_after or 0, SPACING_SECONDS), MAX_WAIT_SECONDS)
-    logger.info("%s Slack rate limited %s; not asking this workspace again for %ds", _LOG, endpoint, wait)
-    redis = _redis()
-    if redis is None:
-        return
-    try:
-        redis.set(_key("limited", team_id, endpoint), "1", ex=LIMITED_SECONDS)
-        # Two calls can be turned away at once: the longer wait is the one kept.
-        redis.eval(_HOLD, 1, _key("wait", team_id, endpoint), wait)
-    except Exception:
-        logger.warning("%s Could not record the rate limit: Redis did not answer", _LOG)
-
-
 def ask(client, team_id: str, endpoint: str, params: Dict[str, Any]) -> Dict[str, Any]:
     """One GET to Slack for the reader. Raises Busy when it may not be made now,
     or when Slack turned it away as too many, and Unreachable when no answer
     came. An answer that refuses (SlackAPIError) is passed on. Never waits."""
-    _take(team_id, endpoint)
+    if not read_limit.take(team_id, endpoint):
+        raise Busy(endpoint)
     try:
         return client._make_request("GET", endpoint, params, max_retries=0) or {}
     except SlackRateLimited as limit:
-        _was_limited(team_id, endpoint, limit.retry_after)
+        read_limit.was_limited(team_id, endpoint, limit.retry_after)
         raise Busy(endpoint) from limit
     except SlackAPIError:
         raise
@@ -175,7 +103,7 @@ class Progress:
 
 def resume(org_id: str, channel_id: str, last_ts: str, upto: str) -> Progress:
     """The unfinished reading of this channel from *last_ts*, or a new one up to *upto*."""
-    redis = _redis()
+    redis = read_limit.redis()
     try:
         kept = json.loads(redis.get(_key("progress", org_id, channel_id)) or "null") if redis else None
     except Exception:
@@ -193,7 +121,7 @@ def keep(org_id: str, channel_id: str, progress: Progress) -> None:
     Until PROGRESS_SECONDS after it began, however many times it is kept. Past
     that it is dropped, and the channel is read from the start.
     """
-    redis = _redis()
+    redis = read_limit.redis()
     if redis is None or not progress.answers:
         return
     left = int(progress.began + PROGRESS_SECONDS - time.time())
@@ -216,7 +144,7 @@ def keep(org_id: str, channel_id: str, progress: Progress) -> None:
 
 def done(org_id: str, channel_id: str) -> None:
     """The reading is finished: forget what was kept for it."""
-    redis = _redis()
+    redis = read_limit.redis()
     try:
         if redis:
             redis.delete(_key("progress", org_id, channel_id))

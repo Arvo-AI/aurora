@@ -18,7 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and goes on with a half-read channel on the next turn. A refusal for asking
   too often, or Slack being unreachable, no longer counts against a channel.
   Channels with no new message are looked at every 30 minutes in such a
-  workspace, and a deleted thread no longer fails its channel.
+  workspace, where Slack sends Aurora message events for them, and a deleted
+  thread no longer fails its channel. Aurora's other reads of Slack messages
+  (the agent's channel history and thread tools, alert threading) go ahead of
+  this background reading, which shares the same limit.
 - Change gating reviews a pull request stacked on another open pull request's
   branch. It was skipped as not targeting the default branch.
 - Actions are scoped to their own organization in the query itself. Where the

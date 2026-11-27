@@ -33,6 +33,7 @@ A report counts for nothing in a check's record. A check is credited by
 incidents; a report reaches the record only by becoming one.
 """
 
+import time
 from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from services.detection import STATE_RETIRED
@@ -226,8 +227,11 @@ def claim_channels(cursor, org_id: str, team_id: str, company: str,
 
     A channel where a message just arrived (see note_activity) goes first, then
     the one read longest ago. A channel where none arrived is left alone until
-    it was last read *quiet_after* seconds ago. The claim keeps two overlapping
-    turns off the same channel and expires by itself.
+    it was last read *quiet_after* seconds ago, but only a channel Aurora has
+    been told of a message in before: where Slack sends no message events (a
+    private channel, an app without the subscription) silence says nothing,
+    and the channel keeps its turn. The claim keeps two overlapping turns off
+    the same channel and expires by itself.
     """
     params = _channel_params(org_id, team_id, company)
     cursor.execute(
@@ -243,7 +247,7 @@ def claim_channels(cursor, org_id: str, team_id: str, company: str,
                JOIN readable r ON r.channel_id = c.channel_id
                WHERE c.org_id = %s
                  AND (c.claimed_at IS NULL OR c.claimed_at <= NOW() - %s * INTERVAL '1 second')
-                 AND (c.pending_since IS NOT NULL OR c.updated_at IS NULL
+                 AND (c.pending_since IS NOT NULL OR c.updated_at IS NULL OR c.noted_ts IS NULL
                       OR c.updated_at <= NOW() - %s * INTERVAL '1 second')
                ORDER BY c.pending_since NULLS LAST, c.updated_at NULLS FIRST, c.channel_id
                LIMIT %s
@@ -257,9 +261,14 @@ def claim_channels(cursor, org_id: str, team_id: str, company: str,
                      c.pending_since IS NULL, c.pending_since, c.updated_at IS NOT NULL, c.updated_at""",
         params + (org_id, CHANNEL_CLAIM_SECONDS, quiet_after, limit, org_id),
     )
-    # Read in the order they were chosen in: an UPDATE returns its rows in any order.
-    rows = sorted(cursor.fetchall(), key=lambda row: (row[5], row[6] or 0, row[7], row[8] or 0, row[0]))
-    return [Turn(row[0], row[1], row[2], row[3], dict(row[4] or {})) for row in rows]
+    return [Turn(row[0], row[1], row[2], row[3], dict(row[4] or {})) for row in _as_chosen(cursor.fetchall())]
+
+
+def _as_chosen(rows: List[tuple]) -> List[tuple]:
+    """The claimed rows in the order they were chosen in: an UPDATE returns them
+    in any order. Same order as claim_channels asks for: pending first and the
+    longest pending first, then never read, then read longest ago."""
+    return sorted(rows, key=lambda row: (row[5], row[6] or 0, row[7], row[8] or 0, row[0]))
 
 
 def advance(cursor, org_id: str, channel_id: str, last_ts: str, claim: Any,
@@ -274,9 +283,11 @@ def advance(cursor, org_id: str, channel_id: str, last_ts: str, claim: Any,
     dropped once its reply is no later than that moment: the thread was read
     that far, whether or not the reply was still there. Otherwise after a day.
 
-    The channel still has something to read when a message was noted while
-    this turn held it, or a noted reply is later than the reading. It then
-    stays in line for the next turn.
+    The channel still has something to read when a message noted in it is
+    later than the reading (noted_ts, the message's own Slack time, against
+    *read_upto*: a reading taken up again over several turns has a moment that
+    is minutes old by the time it ends), or a noted reply is. It then stays in
+    line for the next turn.
     """
     unread = """SELECT noted.key, noted.value FROM jsonb_each_text(threads) AS noted
                 WHERE noted.value::float8 > %s::float8
@@ -285,12 +296,12 @@ def advance(cursor, org_id: str, channel_id: str, last_ts: str, claim: Any,
     cursor.execute(
         """UPDATE detection_chat_cursors
            SET last_ts = %s, updated_at = NOW(), claimed_at = NULL, failed_attempts = 0,
-               pending_since = CASE WHEN pending_since > claimed_at THEN pending_since
-                                    WHEN EXISTS (""" + unread + """) THEN NOW() END,
+               pending_since = CASE WHEN noted_ts::float8 > %s::float8 OR EXISTS (""" + unread + """)
+                                    THEN NOW() END,
                threads = COALESCE((SELECT jsonb_object_agg(u.key, u.value) FROM (""" + unread + """) u),
                                   '{}'::jsonb)
            WHERE org_id = %s AND channel_id = %s AND claimed_at = %s""",
-        (last_ts, upto, upto, org_id, channel_id, claim),
+        (last_ts, upto, upto, upto, org_id, channel_id, claim),
     )
 
 
@@ -343,20 +354,22 @@ def note_activity(cursor, org_id: str, channel_id: str, thread_ts: Optional[str]
     """A message just arrived in *channel_id* (a Slack event): read it on the next turn.
 
     The channel keeps its place in line from the first message not yet read.
-    One that arrives while a turn holds the channel is noted as of now: that
-    turn may have taken the channel before the message was there, and must not
-    clear it (see advance).
+    The message's own time is kept as well (noted_ts, the newest noted): a
+    reading that took the channel before the message was there does not clear
+    it (see advance).
 
     A reply in a thread is noted with its thread: the thread's first message can
     be further back than the history the next reading takes, and the reply
     would not be found from there. At most MAX_NOTED_THREADS a channel.
     """
+    # An event without a usable time is taken as of now.
+    noted = ts if ts and _is_ts(ts) else "%.6f" % time.time()
     cursor.execute(
         """UPDATE detection_chat_cursors
-           SET pending_since = CASE WHEN pending_since IS NULL OR pending_since <= claimed_at THEN NOW()
-                                    ELSE pending_since END
+           SET pending_since = COALESCE(pending_since, NOW()),
+               noted_ts = CASE WHEN noted_ts IS NULL OR noted_ts::float8 < %s::float8 THEN %s ELSE noted_ts END
            WHERE org_id = %s AND channel_id = %s""",
-        (org_id, channel_id),
+        (noted, noted, org_id, channel_id),
     )
     if not thread_ts or not ts or thread_ts == ts or not (_is_ts(thread_ts) and _is_ts(ts)):
         return

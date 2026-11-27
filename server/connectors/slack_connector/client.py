@@ -6,7 +6,9 @@ Uses the stored access_token from OAuth to interact with Slack workspace.
 import logging
 import time
 import requests
-from typing import Dict, Any, List, Optional
+from typing import Callable, Dict, Any, List, Optional
+
+from connectors.slack_connector import read_limit
 
 logger = logging.getLogger(__name__)
 
@@ -48,8 +50,12 @@ class SlackClient:
     Handles message sending, channel listing, and message reading.
     """
     
-    def __init__(self, access_token: str):
+    def __init__(self, access_token: str, team_id: Optional[str] = None):
         self.access_token = access_token
+        # The workspace the token belongs to, when the caller knows it. With it,
+        # reads of messages are counted against that workspace's rate limit
+        # together with the chat reader's (see read_limit).
+        self.team_id = team_id
         self.headers = {
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json"
@@ -84,7 +90,31 @@ class SlackClient:
         raise SlackAPIError(error)
 
     def _make_request(self, method: str, endpoint: str, data: Optional[Dict] = None, timeout: int = 30, max_retries: int = 3) -> Dict[str, Any]:
-        """Make a request to Slack API with retry on 429 rate limits."""
+        """Make a request to Slack API with retry on 429 rate limits.
+
+        A read of messages that waits for its answer (max_retries above 0) goes
+        ahead of the chat reader, which shares the same limit and can come back
+        later: the reader is told to keep off the method until this call is
+        over, and learns of any 429 this call gets."""
+        team_id = self.team_id if endpoint in read_limit.METHODS and max_retries > 0 else None
+        if not team_id:
+            return self._request(method, endpoint, data, timeout, max_retries)
+
+        def _limited(retry_after: Optional[int]) -> None:
+            read_limit.was_limited(team_id, endpoint, retry_after)
+            read_limit.waiting(team_id, endpoint)
+
+        read_limit.waiting(team_id, endpoint)
+        try:
+            result = self._request(method, endpoint, data, timeout, max_retries, _limited)
+        except Exception:
+            read_limit.answered(team_id, endpoint, used=False)
+            raise
+        read_limit.answered(team_id, endpoint)
+        return result
+
+    def _request(self, method: str, endpoint: str, data: Optional[Dict], timeout: int, max_retries: int,
+                 limited: Optional[Callable[[Optional[int]], None]] = None) -> Dict[str, Any]:
         url = f"{SLACK_API_BASE}/{endpoint}"
         
         for attempt in range(max_retries + 1):
@@ -95,6 +125,8 @@ class SlackClient:
                     response = requests.post(url, headers=self.headers, json=data, timeout=timeout)
                 
                 if response.status_code == 429:
+                    if limited:
+                        limited(self._retry_after(response))
                     if attempt >= max_retries:
                         raise SlackRateLimited(endpoint, self._retry_after(response))
                     retry_after = self._get_retry_delay(attempt, response)
@@ -392,7 +424,7 @@ def get_slack_client_for_user(user_id: str) -> Optional[SlackClient]:
             logger.debug("No Slack credentials for user %s", user_id)
             return None
         
-        return SlackClient(slack_creds["access_token"])
+        return SlackClient(slack_creds["access_token"], slack_creds.get("team_id"))
     except Exception:
         logger.exception("Failed to get Slack client")
         return None

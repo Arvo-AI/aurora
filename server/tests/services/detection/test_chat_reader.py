@@ -423,10 +423,10 @@ def _read_over_turns(slack, redis, last_ts, threads=None):
 
 
 def _paced(monkeypatch):
-    from services.detection import chat_pace
+    from connectors.slack_connector import read_limit
 
     redis = _Redis()
-    monkeypatch.setattr(chat_pace, "get_redis_client", lambda: redis)
+    monkeypatch.setattr(read_limit, "get_redis_client", lambda: redis)
     return redis
 
 
