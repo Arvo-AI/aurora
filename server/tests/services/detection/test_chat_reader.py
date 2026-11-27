@@ -461,3 +461,18 @@ def test_a_deleted_thread_is_asked_about_once_and_the_thread_after_it_is_still_r
 
     assert [m["text"] for m in new] == ["checkout is failing again"]
     assert [call for call in slack.calls if call[1] == gone] == [("conversations.replies", gone)]
+
+
+def test_a_reading_whose_kept_answers_are_gone_before_it_was_finished_says_it_starts_over(monkeypatch, caplog):
+    from services.detection import chat_pace
+
+    redis = _paced(monkeypatch)
+    progress = chat_pace.resume("org", "C1", "1795100200.000000", "1795100400.000000")
+    progress.answers["conversations.history {}"] = {"messages": []}
+    chat_pace.keep("org", "C1", progress)
+    redis.delete("detection:chat:progress:org:C1")
+
+    with caplog.at_level("WARNING"):
+        again = chat_pace.resume("org", "C1", "1795100200.000000", "1795100460.000000")
+    assert again.answers == {} and again.upto == "1795100460.000000"
+    assert "starts over" in caplog.text

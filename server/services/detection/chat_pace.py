@@ -23,7 +23,6 @@ from typing import Any, Dict, Optional
 
 from connectors.slack_connector import read_limit
 from connectors.slack_connector.client import SlackAPIError, SlackRateLimited
-from connectors.slack_connector.read_limit import HISTORY, REPLIES, limited  # noqa: F401  (the reader's names)
 from utils.log_sanitizer import sanitize
 
 logger = logging.getLogger(__name__)
@@ -32,6 +31,9 @@ _LOG = "[DetectionChat]"
 # How long what Slack already gave for an unfinished reading is kept, counted
 # from when the reading began. A reading not finished by then starts over.
 PROGRESS_SECONDS = 30 * 60
+# How long it is remembered that a reading was begun, to say so when what was
+# kept for it is gone before it was taken up again. No message text in this.
+BEGUN_SECONDS = 2 * PROGRESS_SECONDS
 
 
 class Busy(Exception):
@@ -88,7 +90,7 @@ class Progress:
                 # A thread that was deleted has no replies. Kept as an answer
                 # like any other, so a reading taken up again does not spend
                 # its next call asking for it once more.
-                if endpoint != REPLIES or gone.error != "thread_not_found":
+                if endpoint != read_limit.REPLIES or gone.error != "thread_not_found":
                     raise
                 result = {}
             self.answers[key] = {
@@ -112,6 +114,14 @@ def resume(org_id: str, channel_id: str, last_ts: str, upto: str) -> Progress:
         kept = None
     if isinstance(kept, dict) and kept.get("last_ts") == last_ts and kept.get("upto"):
         return Progress(last_ts, kept["upto"], kept.get("answers") or {}, kept.get("began"))
+    try:
+        if redis and redis.get(_key("begun", org_id, channel_id)) == last_ts:
+            logger.warning("%s What was kept of the reading of channel %s is gone before it was finished: "
+                           "it starts over", _LOG, sanitize(channel_id))
+            redis.delete(_key("begun", org_id, channel_id))
+    except Exception:
+        logger.warning("%s Could not tell whether a reading of channel %s was begun: Redis did not answer",
+                       _LOG, sanitize(channel_id))
     return Progress(last_ts, upto)
 
 
@@ -124,19 +134,19 @@ def keep(org_id: str, channel_id: str, progress: Progress) -> None:
     redis = read_limit.redis()
     if redis is None or not progress.answers:
         return
-    left = int(progress.began + PROGRESS_SECONDS - time.time())
+    kept = json.dumps({"last_ts": progress.last_ts, "upto": progress.upto, "began": progress.began,
+                       "answers": progress.answers})
     try:
+        # Counted last, with nothing left to do but the write itself.
+        left = int(progress.began + PROGRESS_SECONDS - time.time())
         if left <= 0:
             logger.warning("%s The reading of channel %s was not finished in %d minutes and starts over",
                            _LOG, sanitize(channel_id), PROGRESS_SECONDS // 60)
             redis.delete(_key("progress", org_id, channel_id))
+            redis.delete(_key("begun", org_id, channel_id))
             return
-        redis.set(
-            _key("progress", org_id, channel_id),
-            json.dumps({"last_ts": progress.last_ts, "upto": progress.upto, "began": progress.began,
-                        "answers": progress.answers}),
-            ex=left,
-        )
+        redis.set(_key("progress", org_id, channel_id), kept, ex=left)
+        redis.set(_key("begun", org_id, channel_id), progress.last_ts, ex=BEGUN_SECONDS)
     except Exception:
         logger.warning("%s Could not keep the unfinished reading of channel %s: Redis did not answer",
                        _LOG, sanitize(channel_id))
@@ -148,6 +158,7 @@ def done(org_id: str, channel_id: str) -> None:
     try:
         if redis:
             redis.delete(_key("progress", org_id, channel_id))
+            redis.delete(_key("begun", org_id, channel_id))
     except Exception:
         # It expires by itself, and is not used once the cursor has moved.
         logger.warning("%s Could not drop the finished reading of channel %s: Redis did not answer",

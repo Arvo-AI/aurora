@@ -57,6 +57,7 @@ def redis():
     try:
         return get_redis_client()
     except Exception:
+        logger.warning("%s Redis could not be reached: Slack calls are not paced", _LOG)
         return None
 
 

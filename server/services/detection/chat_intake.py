@@ -26,6 +26,7 @@ import time
 from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from celery_config import celery_app
+from connectors.slack_connector import read_limit
 from services.detection import chat_intake_enabled, chat_memory, chat_pace, chat_reader, chat_signals
 from services.detection.runner import _for_each_org, _org_cursor
 from utils.log_sanitizer import sanitize
@@ -150,7 +151,7 @@ def _turn_size(team_id: str) -> Tuple[int, int]:
     takes two channels, so that one waiting on a thread does not keep the next
     from being started, and quiet channels are left for QUIET_CHANNEL_SECONDS.
     """
-    if chat_pace.limited(team_id, chat_pace.HISTORY) or chat_pace.limited(team_id, chat_pace.REPLIES):
+    if read_limit.limited(team_id, read_limit.HISTORY) or read_limit.limited(team_id, read_limit.REPLIES):
         return LIMITED_CHANNELS_PER_TURN, QUIET_CHANNEL_SECONDS
     return CHANNELS_PER_TURN, 0
 
@@ -174,7 +175,7 @@ def _latest(ask, channel_id: str, last_ts: str, upto: str) -> Tuple[List[dict], 
         params: Dict[str, Any] = {"channel": channel_id, "limit": _PAGE, "latest": upto}
         if page_cursor:
             params["cursor"] = page_cursor
-        result = ask(chat_pace.HISTORY, params)
+        result = ask(read_limit.HISTORY, params)
         page = [m for m in result.get("messages", []) if m.get("ts")]
         messages.extend(page)
         page_cursor = (result.get("response_metadata") or {}).get("next_cursor")
@@ -206,7 +207,7 @@ def _thread_replies(ask, channel_id: str, thread_ts: str, last_ts: str, upto: st
                   "limit": _REPLY_PAGE}
         if page_cursor:
             params["cursor"] = page_cursor
-        result = ask(chat_pace.REPLIES, params)
+        result = ask(read_limit.REPLIES, params)
         replies.extend(m for m in result.get("messages", [])
                        if m.get("ts") and m["ts"] != thread_ts and float(m["ts"]) > float(last_ts))
         page_cursor = (result.get("response_metadata") or {}).get("next_cursor")
