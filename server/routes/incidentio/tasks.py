@@ -687,6 +687,8 @@ def _extract_alert_attributes(incident: Dict[str, Any]) -> Dict[str, str]:
 def _build_alert_metadata(fields: Dict[str, Any], event_type: str) -> Dict[str, Any]:
     meta: Dict[str, Any] = {
         "permalink": fields["permalink"],
+        "incidentId": fields.get("incident_id"),
+        "source_post_at": fields.get("created_at"),
         "summary": fields["summary"],
         "event_type": event_type,
     }

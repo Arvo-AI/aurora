@@ -22,7 +22,6 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 from connectors.slack_connector.client import get_slack_client_for_user, SlackAPIError
-from utils.cloud.cloud_utils import get_state_context
 
 logger = logging.getLogger(__name__)
 
@@ -439,9 +438,6 @@ def post_slack_message(
     """
     if not user_id:
         return json.dumps({"error": _ERR_NO_USER})
-    meta = getattr(get_state_context(), "trigger_metadata", None) or {}
-    if meta.get("slack_source_thread_only"):
-        return json.dumps({"error": "Slack delivery is reserved for the completed RCA in the source alert thread."})
     if not channel_id:
         return json.dumps({"error": "channel_id is required."})
 

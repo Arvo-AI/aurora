@@ -410,17 +410,6 @@ def notify_investigation_started(user_id: str, incident_id: str) -> None:
         if email_general and email_start:
             _send_emails(org_id, user_id, 'send_investigation_started_email', incident_data)
 
-        # --- Slack ---
-        slack_enabled = bool(get_org_preference(org_id, 'slack_investigation_start_notifications', default=True))
-        if not uses_source_thread(incident_data.get('source_type')) and slack_enabled and _has_slack_connected(user_id):
-            try:
-                from utils.notifications.slack_notification_service import (
-                    send_slack_investigation_started_notification,
-                )
-                send_slack_investigation_started_notification(user_id, incident_data)
-            except Exception:
-                logger.exception("[Dispatcher] Slack started notification failed")
-
         # --- Google Chat ---
         google_chat_enabled = bool(get_org_preference(org_id, 'google_chat_investigation_notifications', default=True))
         if google_chat_enabled and _has_google_chat_connected(user_id):
@@ -478,22 +467,15 @@ def notify_investigation_completed(user_id: str, incident_id: str, session_id: O
         if email_enabled and not refresh_only:
             _send_emails(org_id, user_id, 'send_investigation_completed_email', incident_data)
 
-        # --- Slack ---
-        # Provider-originated alerts have a single Slack destination: the final
-        # report goes in the provider's original thread.
-        source_thread = uses_source_thread(incident_data.get("source_type"))
-        card_enabled = bool(get_org_preference(org_id, 'slack_investigation_complete_notifications', default=True))
+        # The completed RCA belongs in the original alert thread when one can be matched.
         if not refresh_only and _has_slack_connected(user_id):
-            try:
-                if source_thread:
-                    if concluded and card_enabled:
+            if concluded and uses_source_thread(incident_data.get("source_type")):
+                try:
+                    if get_org_preference(org_id, "slack_investigation_complete_notifications", default=True):
                         from tasks.slack_source_reply import queue_source_reply
                         queue_source_reply(user_id, incident_id)
-                else:
-                    from utils.notifications.slack_notification_service import send_slack_investigation_completed_notification
-                    send_slack_investigation_completed_notification(user_id, incident_data, post_primary_card=card_enabled)
-            except Exception:
-                logger.exception("[Dispatcher] Slack completed notification failed")
+                except Exception:
+                    logger.exception("[Dispatcher] Could not queue the Slack RCA reply")
             _finish_continue_notice(user_id, incident_data)
 
         # --- Microsoft Teams ---
@@ -560,7 +542,7 @@ def notify_investigation_completed(user_id: str, incident_id: str, session_id: O
                 logger.exception("[Dispatcher] ServiceNow work note failed")
 
         # --- Team-channel routing (once per incident, any connected chat platform) ---
-        if not refresh_only and concluded and ((not source_thread and _has_slack_connected(user_id)) or _has_teams_connected(user_id)):
+        if not refresh_only and concluded and (_has_slack_connected(user_id) or _has_teams_connected(user_id)):
             try:
                 from utils.notifications.team_routing import trigger_team_routing_agent
                 trigger_team_routing_agent(user_id, incident_data)
@@ -592,16 +574,6 @@ def notify_investigation_failed(user_id: str, incident_id: str, error_message: O
             logger.error(f"[Dispatcher] Incident {incident_id} not found for failed notification")
             return
 
-        # --- Slack ---
-        slack_enabled = bool(get_org_preference(org_id, 'slack_investigation_complete_notifications', default=True))
-        if not uses_source_thread(incident_data.get('source_type')) and slack_enabled and _has_slack_connected(user_id):
-            try:
-                from utils.notifications.slack_notification_service import (
-                    send_slack_investigation_failed_notification,
-                )
-                send_slack_investigation_failed_notification(user_id, incident_data, error_message=error_message)
-            except Exception:
-                logger.exception("[Dispatcher] Slack failed notification failed")
         if _has_slack_connected(user_id):
             _finish_continue_notice(user_id, incident_data, failed=True)
 

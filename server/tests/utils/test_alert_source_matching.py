@@ -87,3 +87,40 @@ def test_event_permalink_distinguishes_two_occurrences_of_a_sentry_issue():
     event_b = dict(SENTRY, alert_metadata={"issueId": "55", "eventId": "b"*32})
     client._make_request.return_value = page({**POST, "attachments": [{"title_link": "/issues/55/events/" + "a"*32 + "/"}]})
     assert find_source_thread(client, ["C"], "T1", event_a, competing=[event_b]) == ("C", POST["ts"])
+
+
+@pytest.mark.parametrize("source,app_id,metadata,url", [
+    ("pagerduty", "A1FKYAUUX", {"incidentId": "PI123"}, "https://acme.pagerduty.com/incidents/PI123"),
+    ("pagerduty", "A0238CWMJDB", {"incidentId": "PI123"}, "https://acme.eu.pagerduty.com/incidents/PI123"),
+    ("incidentio", "A01DEGPUHHC", {"permalink": "https://app.incident.io/acme/incidents/13"},
+     "https://app.incident.io/acme/incidents/13/?utm_source=slack"),
+    ("incidentio", "A01DEGPUHHC", {"event_type": "private_alert.alert_created_v1", "incidentId": "A123",
+                                    "permalink": "https://monitor.example.com/dashboard"},
+     "https://app.incident.io/acme/alerts/A123"),
+])
+@pytest.mark.parametrize("channel", ["C-main", "C-service"])
+def test_original_provider_post_can_be_in_any_channel(source, app_id, metadata, url, channel):
+    data = {"source_type": source, "created_at": 1700000000, "alert_metadata": metadata}
+    post = {"ts": POST["ts"], "bot_profile": {"app_id": app_id, "team_id": "T1"},
+            "blocks": [{"type": "section", "text": {"text": f"<{url}|View incident>"}}]}
+    client = Mock()
+    client._make_request.side_effect = lambda method, endpoint, params, **kwargs: (
+        page(post) if params["channel"] == channel else page()
+    )
+    assert find_source_thread(client, ["C-main", "C-service"], "T1", data) == (channel, POST["ts"])
+
+
+@pytest.mark.parametrize("url,app_id,parent", [
+    ("https://acme.pagerduty.com/incidents/PI1234", "A1FKYAUUX", None),
+    ("https://acme.pagerduty.com.invalid/incidents/PI123", "A1FKYAUUX", None),
+    ("https://other.pagerduty.com/incidents/PI123", "A1FKYAUUX", None),
+    ("https://acme.pagerduty.com/incidents/PI123", "unrelated-app", None),
+    ("https://acme.pagerduty.com/incidents/PI123", "A1FKYAUUX", "1699999999.0"),
+])
+def test_shared_title_wrong_provider_or_reply_is_not_an_original_alert(url, app_id, parent):
+    data = {"source_type": "pagerduty", "created_at": 1700000000, "alert_title": "API down",
+            "alert_metadata": {"incidentId": "PI123", "incidentUrl": "https://acme.pagerduty.com/incidents/PI123"}}
+    client = Mock()
+    client._make_request.return_value = page({"ts": POST["ts"], "app_id": app_id, "text": f"API down {url}",
+                                             "thread_ts": parent})
+    assert find_source_thread(client, ["C-main"], "T1", data) is None

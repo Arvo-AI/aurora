@@ -127,10 +127,24 @@ _MULTI_PLATFORM_SCOPE = (
 )
 
 
-def _policy_section(spec: PlatformRoutingSpec) -> str:
+def _policy_section(spec: PlatformRoutingSpec, source_type: str) -> str:
     """One platform's instructions: its policy memory, its tools and the steps
     to follow there. Trusted scaffolding only — nothing untrusted is interpolated."""
     memory_ref = _memory_ref(spec)
+    if spec.platform != "slack":
+        channel_rule = "Do not post to the main incidents channel — that card is already handled."
+    elif uses_source_thread(source_type):
+        channel_rule = (
+            "Aurora handles the original provider alert thread separately in every Slack channel, "
+            "including the main incidents channel. Skip the channel containing that alert for this "
+            "incident to avoid duplicating the RCA. Route separate team updates according to policy."
+        )
+    else:
+        channel_rule = (
+            "The main incidents channel is eligible for a reply under the original provider alert. "
+            "If you identify that post, reply there with the completed RCA. Never create a substitute "
+            "top-level alert in the main incidents channel."
+        )
     return (
         f"IMPORTANT — the {spec.display_name} behaviour memory ({memory_ref}) is your policy. "
         "Read it FIRST and treat it as authoritative: it holds the org's/team's "
@@ -175,8 +189,7 @@ def _policy_section(spec: PlatformRoutingSpec) -> str:
         "it; remove or correct the mapping only when the channel is inactive or "
         "no longer owns the service. "
         "Do not post the same thing to multiple channels unless the memory says "
-        "to. Do not post to the main incidents channel — that card is already "
-        "handled."
+        f"to. {channel_rule}"
     )
 
 
@@ -226,7 +239,7 @@ def _build_prompt(incident_data: Dict[str, Any], incident_index: str,
         + index_block
         + "\n\n"
         + (_MULTI_PLATFORM_SCOPE if len(specs) > 1 else "")
-        + "\n\n".join(_policy_section(s) for s in specs)
+        + "\n\n".join(_policy_section(s, incident_data.get("source_type", "")) for s in specs)
     )
 
 
@@ -263,9 +276,7 @@ def trigger_team_routing_agent(user_id: str, incident_data: Dict[str, Any]) -> b
             return False
 
         # Only worth running if a chat platform is actually connected.
-        source_thread = uses_source_thread(incident_data.get("source_type"))
-        specs = [spec for spec in SPECS.values()
-                 if not (source_thread and spec.platform == "slack") and _is_connected(spec, user_id)]
+        specs = [spec for spec in SPECS.values() if _is_connected(spec, user_id)]
         if not specs:
             return False
 
@@ -320,8 +331,6 @@ def trigger_team_routing_agent(user_id: str, incident_data: Dict[str, Any]) -> b
             "source": TEAM_ROUTING_SOURCE,
             "incident_id": str(incident_id),
         }
-        if source_thread:
-            trigger_metadata["slack_source_thread_only"] = True
         session_id = create_background_chat_session(
             user_id=user_id,
             title=title,

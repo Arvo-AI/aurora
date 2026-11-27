@@ -117,15 +117,15 @@ def test_a_failing_connection_check_only_drops_that_platform():
     assert run_mock.delay.call_args.kwargs["initial_message"] == golden.STANDALONE_NO_INDEX
 
 
-def test_provider_thread_reserves_slack_delivery_and_retains_teams_routing():
+def test_provider_thread_sources_can_still_route_to_slack_and_teams():
     with patch.object(tr, "_is_connected", return_value=True):
-        for source in ("cloudwatch", "sentry"):
+        for source in ("cloudwatch", "sentry", "incidentio", "pagerduty"):
             dispatched, run, _ = _dispatch(tr.trigger_team_routing_agent, source_type=source)
             assert dispatched
             kwargs = run.delay.call_args.kwargs
-            assert kwargs["trigger_metadata"]["slack_source_thread_only"] is True
+            assert "original provider alert thread separately in every Slack channel" in kwargs["initial_message"]
             assert "post_teams_message" in kwargs["initial_message"]
-            assert "post_slack_message" not in kwargs["initial_message"]
+            assert "post_slack_message" in kwargs["initial_message"]
 
 
 def test_platform_registries_stay_in_step():

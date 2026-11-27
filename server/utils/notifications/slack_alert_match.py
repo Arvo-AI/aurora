@@ -6,15 +6,22 @@ import json
 import logging
 import time
 import re
+from urllib.parse import urlsplit
 
 # Slack Marketplace application IDs. Bot IDs and display names vary by installation.
-_APP_IDS = {"cloudwatch": "A6L22LZNH", "sentry": "A011MFBJEUU"}
+_APP_SOURCES = {
+    "A6L22LZNH": "cloudwatch",
+    "A011MFBJEUU": "sentry",
+    "A1FKYAUUX": "pagerduty",
+    "A0238CWMJDB": "pagerduty",
+    "A01DEGPUHHC": "incidentio",
+}
 _WINDOW = 180
 logger = logging.getLogger(__name__)
 
 
 def uses_source_thread(source_type):
-    return source_type in _APP_IDS
+    return source_type in _APP_SOURCES.values()
 
 
 def _strings(value):
@@ -32,10 +39,30 @@ def _normal(text):
     return " ".join(re.findall(r"\w+", text.casefold()))
 
 
+def _incident_link(url, source):
+    """Identify a native provider object, ignoring tracking parameters and Slack link labels."""
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname or ""
+    except ValueError:
+        return None
+    if parts.scheme != "https":
+        return None
+    if source == "pagerduty" and (host == "pagerduty.com" or host.endswith(".pagerduty.com")):
+        match = re.fullmatch(r"/(incidents)/([A-Za-z0-9_-]+)/?", parts.path)
+    elif source == "incidentio" and host == "app.incident.io":
+        match = re.fullmatch(r"/(?:[\w-]+/)?(incidents|alerts)/([\w-]+)/?", parts.path)
+    else:
+        return None
+    if match:
+        return host, parts.path.rstrip("/"), match[1], match[2]
+    return None
+
+
 def _matches(message, data, team):
     source = data["source_type"]
     profile = message.get("bot_profile") or {}
-    if (message.get("app_id") or profile.get("app_id")) != _APP_IDS[source]:
+    if _APP_SOURCES.get(message.get("app_id") or profile.get("app_id")) != source:
         return False
     if (profile.get("team_id") or message.get("team") or team) != team:
         return False
@@ -48,6 +75,16 @@ def _matches(message, data, team):
         link = re.compile(r"/issues/" + re.escape(issue) + r"(?:/events/([a-fA-F0-9]{32}))?(?=[/?#|>\s]|$)")
         event = str(meta.get("eventId") or "").lower()
         return any(not match[1] or not event or match[1].lower() == event for match in link.finditer(text))
+    if source in ("incidentio", "pagerduty"):
+        expected = _incident_link(meta.get("incidentUrl") or meta.get("permalink") or "", source)
+        native_id = meta.get("incidentId")
+        kind = "alerts" if str(meta.get("event_type", "")).startswith(("public_alert.", "private_alert.")) else "incidents"
+        for url in re.findall(r"https://[^\s<>|]+", text):
+            link = _incident_link(url, source)
+            if link and link[2] == kind:
+                if link == expected or (expected is None and link[3] == native_id):
+                    return True
+        return False
     arn = meta.get("alarm_arn")
     if arn and re.search(re.escape(arn) + r"(?=[|>\s]|$)", text):
         return True
@@ -83,7 +120,7 @@ def _channel_page(client, params, team, cache, org):
     key = None
     if cache is not None and float(params["latest"]) < time.time():
         identity = json.dumps([org, team, params], sort_keys=True).encode()
-        key = "rca:slack-app-history:" + hashlib.sha256(identity).hexdigest()
+        key = "rca:slack-app-history:v2:" + hashlib.sha256(identity).hexdigest()
         try:
             saved = cache.get(key)
             if saved:
@@ -93,7 +130,7 @@ def _channel_page(client, params, team, cache, org):
     page = client._make_request("GET", "conversations.history", params, timeout=10, max_retries=0)
     if key:
         keep = [msg for msg in page.get("messages", []) if
-                (msg.get("app_id") or (msg.get("bot_profile") or {}).get("app_id")) in _APP_IDS.values()]
+                (msg.get("app_id") or (msg.get("bot_profile") or {}).get("app_id")) in _APP_SOURCES]
         try:
             cache.setex(key, 900, json.dumps({**page, "messages": keep}))
         except Exception:
@@ -122,10 +159,12 @@ def find_source_thread(client, channels, team, data, *, competing=(), cache=None
             for msg in page.get("messages", []):
                 if not msg.get("ts") or abs(float(msg["ts"]) - when) > _WINDOW:
                     continue
+                if msg.get("thread_ts") and msg["thread_ts"] != msg["ts"]:
+                    continue
                 if _matches(msg, data, team):
                     if any(_matches(msg, other, team) for other in competing):
                         return None
-                    matches.add((channel, msg.get("thread_ts") or msg["ts"]))
+                    matches.add((channel, msg["ts"]))
                     if len(matches) > 1:
                         return None
             cursor = (page.get("response_metadata") or {}).get("next_cursor")

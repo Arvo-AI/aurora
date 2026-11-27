@@ -380,15 +380,15 @@ def dispatch(monkeypatch):
     return _run
 
 
-def test_a_partial_report_updates_the_cards_only(dispatch):
+def test_a_partial_report_sends_email_without_slack_or_writeback(dispatch):
     sent = dispatch("time_limit")
-    assert "slack" in sent and "email" in sent
+    assert "slack" not in sent and "email" in sent
     assert "pagerduty" not in sent and "routing" not in sent
 
 
 def test_a_finished_report_is_posted_back_and_routed(dispatch):
     sent = dispatch(None)
-    assert {"slack", "email", "pagerduty", "routing"} <= set(sent)
+    assert set(sent) == {"email", "pagerduty", "routing"}
 
 
 def test_an_unreadable_unfinished_state_raises_so_the_summary_retries(monkeypatch):

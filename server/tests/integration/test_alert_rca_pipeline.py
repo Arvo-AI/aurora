@@ -94,7 +94,7 @@ class AlertPipeline(unittest.TestCase):
             }).status_code, 202)
 
         findings = "Evidence from the test sensor shows the service lost power."
-        contexts, replies, messages = [], [], {"C-alert": [], "C-sentry": []}
+        contexts, replies, messages = [], [], {"C-alert": [], "C-sentry": [], "C-configured": []}
         def add_post(channel, app_id, title, detail):
             parent = f"{int(time.time())}.{len(messages[channel])+1:06d}"
             messages[channel].append(dict(ts=parent, app_id=app_id, team="T-test", text=title,
@@ -116,6 +116,8 @@ class AlertPipeline(unittest.TestCase):
         post_attempts = []
         fail_post = [True]
         def slack_http(client, method, endpoint, data=None, **kwargs):
+            if endpoint == "users.conversations":
+                return {"ok": True, "channels": [{"id": channel} for channel in messages]}
             if endpoint == "conversations.history":
                 return {"ok": True, "messages": list(messages[data["channel"]])}
             if endpoint == "chat.postMessage":
@@ -309,7 +311,38 @@ class AlertPipeline(unittest.TestCase):
                              [("created", 1), ("resolved", 2)])
             self.assertEqual(len(contexts), before + 1)
             self.assertCountEqual(replies, expected)
-            routing.assert_not_called()
+            completed = sql("SELECT id FROM incidents WHERE org_id=%s AND aurora_status='complete' "
+                            "AND rca_unfinished_reason IS NULL", (org,))
+            self.assertCountEqual(
+                [call.args[1]["incident_id"] for call in routing.call_args_list],
+                [str(incident_id) for (incident_id,) in completed],
+            )
+
+            # The configured main channel has no local registry row or description.
+            # Verify completed incidents against Slack's actual bot memberships.
+            from utils.notifications.dispatcher import notify_investigation_completed
+            for source, app_id, url, metadata in (
+                ("pagerduty", "A1FKYAUUX", "https://acme.pagerduty.com/incidents/P001",
+                 {"incidentId": "P001"}),
+                ("incidentio", "A01DEGPUHHC", "https://app.incident.io/acme/incidents/42",
+                 {"permalink": "https://app.incident.io/acme/incidents/42"}),
+            ):
+                parent = add_post("C-configured", app_id, "API is down", url)
+                [(incident_id,)] = sql(
+                    "INSERT INTO incidents (org_id,user_id,source_type,source_alert_id,alert_title,"
+                    "started_at,aurora_status,aurora_summary,alert_metadata) "
+                    "VALUES (%s,%s,%s,42,'API is down',NOW(),'complete',%s,%s) RETURNING id",
+                    (org, user, source, findings, json.dumps(metadata)),
+                )
+                for _ in range(2):
+                    notify_investigation_completed(user, str(incident_id))
+                expected.append(("C-configured", parent))
+                wait_for(lambda: sorted(replies) == sorted(expected), f"{source} RCA under its main-channel alert")
+                [(target, reply_ts)] = sql(
+                    "SELECT slack_source_target,slack_source_reply_ts FROM incidents WHERE id=%s", (incident_id,)
+                )
+                self.assertEqual((target["channel"], target["ts"]), ("C-configured", parent))
+                self.assertTrue(reply_ts)
 
             self.assertEqual(saved_connection, {"approved_topic_arn": topic})
             save_connection.assert_called_once()

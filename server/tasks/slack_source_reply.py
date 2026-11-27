@@ -44,10 +44,9 @@ def retry_due_source_replies():
 
 def _find_target(cur, client, org, team, data, target):
     incident_id = data["incident_id"]
-    cur.execute("""SELECT DISTINCT channel_id FROM slack_channels WHERE org_id=%s AND team_id=%s
-                   AND provider='slack' AND is_member AND NOT is_archived ORDER BY channel_id""",
-                (org, team))
-    channels = [row[0] for row in cur.fetchall()]
+    # users.conversations is scoped to the connected bot. A newly invited channel
+    # can receive an alert before our channel registry has finished syncing.
+    channels = [ch["id"] for ch in client.list_bot_channels() if not ch.get("is_archived")]
     if target and target["channel"] not in channels:
         target = None
     if not target and channels:
@@ -56,7 +55,7 @@ def _find_target(cur, client, org, team, data, target):
         cur.execute("""SELECT alert_title, alert_metadata FROM incidents
                        WHERE org_id=%s AND source_type=%s AND id<>%s
                        AND created_at BETWEEN %s - interval '6 minutes' AND %s + interval '6 minutes'
-                       AND alert_metadata->>'correlation_key' = %s""",
+                       AND (alert_metadata->>'correlation_key') IS NOT DISTINCT FROM %s""",
                     (org, data["source_type"], incident_id, data["created_at"], data["created_at"],
                      data["alert_metadata"].get("correlation_key")))
         competing = [dict(source_type=data["source_type"], alert_title=title, alert_metadata=meta)
@@ -120,7 +119,8 @@ def deliver_source_reply(user_id, incident_id):
                 team = creds["team_id"]
                 if target and target.get("team") != team:
                     raise ValueError("Source Slack workspace changed")
-                target = _find_target(cur, client, org, team, data, target)
+                if not cleanup_pending:
+                    target = _find_target(cur, client, org, team, data, target)
                 if cleanup_pending:
                     _remove_unthreaded_message(client, target)
                     finished = True

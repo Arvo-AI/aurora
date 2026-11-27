@@ -573,6 +573,7 @@ def process_pagerduty_event(
                 alert_metadata = {
                     "incidentId": incident_id,  # Store incident ID for matching custom field updates
                     "incidentUrl": incident.get("html_url"),
+                    "source_post_at": pd_created_at,
                     "urgency": incident_urgency,
                 }
                 if incident_key := incident.get("incident_key"):

@@ -5,7 +5,6 @@ a follow-up under an existing message. Uses the shared FakeSlackClient.
 """
 
 import json
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from tests.utils.notifications.slack_fakes import FakeSlackClient, CHAN
@@ -22,15 +21,6 @@ def _run(client, active=True, **kwargs):
     with patch.object(slack_tool, "get_slack_client_for_user", return_value=client), \
             patch.object(slack_tool, "_is_member_channel", return_value=active):
         return json.loads(slack_tool.post_slack_message(user_id="u1", **kwargs))
-
-
-def test_source_thread_delivery_prevents_the_routing_agent_from_posting_again():
-    client = FakeSlackClient()
-    state = SimpleNamespace(trigger_metadata={"slack_source_thread_only": True})
-    with patch.object(slack_tool, "get_state_context", return_value=state):
-        result = _run(client, channel_id=CHAN, text="Duplicate report")
-    assert "error" in result
-    assert not client.sent
 
 
 def test_new_top_level_post():
