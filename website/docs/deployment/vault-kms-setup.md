@@ -322,11 +322,15 @@ kubectl exec -n aurora-oss statefulset/aurora-oss-vault -- vault status
 
 ## Azure Key Vault Setup
 
-Requires Vault 1.15.6 or later (the chart's `hashicorp/vault:1.15` tag), and an AKS cluster with the OIDC issuer and Workload Identity enabled.
+Requires Vault 1.15.6 or later (the chart's `hashicorp/vault:1.15` tag), and an AKS cluster with the OIDC issuer and Workload Identity enabled. The Vault pod needs outbound HTTPS to `login.microsoftonline.com` and `<key vault name>.vault.azure.net`.
 
 ### 1. Create the Key Vault and Key
 
 ```bash
+# Signed in to more than one tenant? Select the subscription first, or the
+# signed-in-user lookup below returns your id from the wrong tenant.
+az account set --subscription <subscription id>
+
 RG=my-resource-group
 KV=my-aurora-keyvault          # globally unique
 LOCATION=northeurope
@@ -352,7 +356,12 @@ If this key is deleted or purged, Vault data is permanently unrecoverable. Keep 
 ```bash
 CLUSTER=my-aks-cluster
 NAMESPACE=aurora-oss
-SA=aurora-oss-vault            # <release fullname>-vault
+# The Vault ServiceAccount is <fullname>-vault, and the fullname depends on the
+# Helm release name: release "aurora-oss" gives aurora-oss-vault, release "aurora"
+# gives aurora-aurora-oss-vault, and fullnameOverride "x" gives x-vault.
+# If Aurora is already installed, read it from the cluster instead of guessing:
+#   kubectl -n $NAMESPACE get sa -o name | grep -- '-vault$'
+SA=aurora-oss-vault
 
 az aks update -g $RG -n $CLUSTER --enable-oidc-issuer --enable-workload-identity
 ISSUER=$(az aks show -g $RG -n $CLUSTER --query oidcIssuerProfile.issuerUrl -o tsv)
@@ -373,6 +382,10 @@ az identity federated-credential create -g $RG --identity-name aurora-vault-unse
 Scoping the role to the whole Key Vault (drop `/keys/vault-unseal-key`) also works.
 
 ### 3. Configure Helm Values
+
+:::warning
+Finish steps 1 and 2 before deploying with these values. Vault reads the key at startup and exits when it cannot, so the pod restarts until the identity, role assignment and federated credential all exist. A new role assignment can take a few minutes to apply, so a few restarts right after setup are expected.
+:::
 
 ```yaml
 serviceAccount:
@@ -398,19 +411,22 @@ The chart adds the `azure.workload.identity/use: "true"` label to the Vault pod.
 
 ### 5. Verify
 
+The Vault StatefulSet has the same name as its ServiceAccount (`$SA` from step 2).
+
 ```bash
-kubectl -n aurora-oss exec statefulset/aurora-oss-vault -- vault status
+kubectl -n $NAMESPACE exec statefulset/$SA -- vault status
 # Seal Type: azurekeyvault | Sealed: false
-kubectl -n aurora-oss delete pod aurora-oss-vault-0   # comes back unsealed on its own
+kubectl -n $NAMESPACE delete pod $SA-0   # comes back unsealed on its own
 ```
 
 ### Azure Key Vault Troubleshooting
 
 | Symptom | Fix |
 |---------|-----|
-| `DefaultAzureCredential: failed to acquire a token` | Pod is missing `AZURE_FEDERATED_TOKEN_FILE`. Check Workload Identity is enabled on the cluster and the pod has the `azure.workload.identity/use` label. |
-| `AADSTS70021: No matching federated identity record` | The federated credential subject must be `system:serviceaccount:<namespace>:<release>-vault`. |
-| `403 Forbidden` from Key Vault | The identity needs **Key Vault Crypto User** on the key or vault (RBAC mode), or wrapKey/unwrapKey/get access-policy permissions. |
+| `DefaultAzureCredential authentication failed` with no `AADSTS` code | Pod is missing `AZURE_FEDERATED_TOKEN_FILE`. Check Workload Identity is enabled on the cluster, the pod has the `azure.workload.identity/use` label, and the ServiceAccount has the `azure.workload.identity/client-id` annotation. Delete the pod after fixing so the webhook injects the token. |
+| `AADSTS70021: No matching federated identity record` | The federated credential subject does not match the pod. It must be `system:serviceaccount:<namespace>:<Vault ServiceAccount>`; get the name with `kubectl -n <namespace> get sa -o name \| grep -- '-vault$'` (step 2 explains why it varies with the release name). |
+| `403 Forbidden` from Key Vault | The identity needs **Key Vault Crypto User** on the key or vault (RBAC mode), or wrapKey/unwrapKey/get access-policy permissions. A new role assignment can take a few minutes to apply. |
+| `403` with `ForbiddenByFirewall`, or `i/o timeout` / `no such host` | The pod cannot reach Key Vault. Allow outbound HTTPS from the cluster to `login.microsoftonline.com` and `<key vault name>.vault.azure.net`. If the Key Vault firewall is on, allow the AKS subnet or add a private endpoint. |
 
 ---
 
@@ -422,6 +438,7 @@ If Vault is already running with manual (Shamir) seals, migrate it in place. Sec
 2. Set up the KMS (steps 1-3 for your provider) and run `helm upgrade` with the new seal values. The Vault pod restarts sealed.
 3. Unseal with the existing Shamir keys, adding `-migrate` to every call. Run it once per distinct key share until the existing threshold is reached (Aurora's default install uses a single share, so once):
    ```bash
+   # statefulset/<fullname>-vault: aurora-oss-vault when the release is named aurora-oss
    kubectl -n aurora-oss exec -it statefulset/aurora-oss-vault -- vault operator unseal -migrate
    ```
 4. `vault status` shows the new seal type. From then on the old unseal key acts as a recovery key, and restarts unseal automatically.
