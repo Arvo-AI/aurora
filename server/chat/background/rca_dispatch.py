@@ -89,7 +89,7 @@ ABANDONED = "abandoned"
 
 # Failed starts in a row (e.g. an owner who left the org) before the queue
 # gives up on an incident instead of retrying it every minute.
-MAX_START_ATTEMPTS = 5
+MAX_START_ATTEMPTS = 3
 # An RCA already running for the incident: a re-fired alert does not start another.
 _IN_FLIGHT_STATES = ("running", "summarizing")
 
