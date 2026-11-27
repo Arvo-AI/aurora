@@ -281,7 +281,7 @@ def test_no_admin_means_no_scan(monkeypatch):
 def test_the_reassignment_runs_under_the_orgs_rls_context(monkeypatch):
     import utils.auth.stateless_auth as auth
 
-    cursor = _owner_setup(monkeypatch, {"admin-1"}, ("admin-1",))
+    _owner_setup(monkeypatch, {"admin-1"}, ("admin-1",))
     seen = []
     monkeypatch.setattr(auth, "set_rls_context", lambda _c, _n, user, **_kw: seen.append(user) or "org-1")
     scan.owner_to_run_as("act-1", "org-1", "viewer-1")
