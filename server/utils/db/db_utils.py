@@ -818,6 +818,11 @@ def initialize_tables():
                          rca_unfinished_reason VARCHAR(20),
                          rca_continuations INTEGER NOT NULL DEFAULT 0,
                          rca_run_task_id VARCHAR(255),
+                         rca_dispatched_at TIMESTAMP,
+                         rca_queue_reason VARCHAR(20),
+                         rca_queued_at TIMESTAMP,
+                         rca_queued_request JSONB,
+                         rca_start_attempts INTEGER NOT NULL DEFAULT 0,
                          started_at TIMESTAMP NOT NULL,
                          analyzed_at TIMESTAMP,
                          slack_message_ts VARCHAR(50),
@@ -2130,6 +2135,24 @@ def initialize_tables():
                 logging.warning(f"Error adding RCA continuation columns to incidents: {e}")
                 conn.rollback()
 
+            # Migration: alert RCAs over the org's budget wait on the incident
+            # (aurora_status 'queued') instead of being dropped; see
+            # chat/background/rca_dispatch.py.
+            try:
+                cursor.execute("""
+                    ALTER TABLE incidents
+                    ADD COLUMN IF NOT EXISTS rca_dispatched_at TIMESTAMP,
+                    ADD COLUMN IF NOT EXISTS rca_queue_reason VARCHAR(20),
+                    ADD COLUMN IF NOT EXISTS rca_queued_at TIMESTAMP,
+                    ADD COLUMN IF NOT EXISTS rca_queued_request JSONB,
+                    ADD COLUMN IF NOT EXISTS rca_start_attempts INTEGER NOT NULL DEFAULT 0;
+                """)
+                conn.commit()
+            except Exception as e:
+                # Table may not exist yet (new install); CREATE TABLE includes the columns.
+                logging.warning(f"Error adding RCA queue columns to incidents: {e}")
+                conn.rollback()
+
             # Migration: Add merged_into_incident_id column to incidents table if it exists
             # This must run BEFORE table creation scripts because the incidents creation
             # script includes a CREATE INDEX on this column, which fails if the table
@@ -2206,6 +2229,31 @@ def initialize_tables():
             for table_name, create_script in create_tables.items():
                 cursor.execute(create_script)
                 logging.info(f"Table '{table_name}' initialized successfully.")
+            # Committed first, so a rollback in the warn-and-rollback block below
+            # cannot undo the tables just created.
+            conn.commit()
+
+            # RCA queue columns and their indexes, once the incidents table exists.
+            # The columns are added again here because the pre-creation migration
+            # above may have rolled back (e.g. a lock timeout on a busy table);
+            # the indexes are built only after the columns are known to exist.
+            try:
+                cursor.execute("""
+                    ALTER TABLE incidents
+                    ADD COLUMN IF NOT EXISTS rca_dispatched_at TIMESTAMP,
+                    ADD COLUMN IF NOT EXISTS rca_queue_reason VARCHAR(20),
+                    ADD COLUMN IF NOT EXISTS rca_queued_at TIMESTAMP,
+                    ADD COLUMN IF NOT EXISTS rca_queued_request JSONB,
+                    ADD COLUMN IF NOT EXISTS rca_start_attempts INTEGER NOT NULL DEFAULT 0;
+                    CREATE INDEX IF NOT EXISTS idx_incidents_rca_queue
+                        ON incidents(org_id, rca_queued_at) WHERE aurora_status = 'queued';
+                    CREATE INDEX IF NOT EXISTS idx_incidents_rca_dispatched
+                        ON incidents(org_id, rca_dispatched_at) WHERE rca_dispatched_at IS NOT NULL;
+                """)
+                conn.commit()
+            except Exception as e:
+                logging.warning(f"Error completing RCA queue columns on incidents: {e}")
+                conn.rollback()
 
             # Existing installs predate team_id. The CREATE above includes it,
             # so this only rewrites the primary key on a table that already existed.

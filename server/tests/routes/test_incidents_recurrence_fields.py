@@ -101,3 +101,18 @@ def test_source_url_cache_is_keyed_by_user(monkeypatch):
 
     assert urls == ["https://user-a.example", "https://user-b.example", "https://user-a.example"]
     assert calls == [("datadog", "user-a"), ("datadog", "user-b")]  # second user-a row served from cache
+
+
+def test_the_rca_dispatch_time_is_emitted_for_the_stall_check(fmt):
+    dispatched = datetime(2026, 9, 1, 12, 40)
+    row = _merge_target_row() + ("rate_limited", dispatched)
+    result = fmt(row, include_metadata=True, include_correlation=True, include_merge_target=True)
+    assert result["queueReason"] == "rate_limited"
+    # The client measures a stalled investigation from here, not from startedAt.
+    assert result["rcaDispatchedAt"].startswith("2026-09-01T12:40:00")
+
+
+def test_an_incident_never_dispatched_has_no_rca_dispatch_time(fmt):
+    row = _merge_target_row() + (None, None)
+    result = fmt(row, include_metadata=True, include_correlation=True, include_merge_target=True)
+    assert result["rcaDispatchedAt"] is None

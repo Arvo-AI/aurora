@@ -457,46 +457,23 @@ def _process_with_cursor(cursor, conn, user_id: str, org_id: str, normalized: Di
     )
 
     try:
-        from chat.background.task import (
-            create_background_chat_session,
-            is_background_chat_allowed,
-            run_background_chat,
-        )
+        from chat.background.rca_dispatch import dispatch_alert_rca
 
-        if not is_background_chat_allowed(user_id):
-            logger.info("[ELASTIC][ALERT] Skipping background RCA - rate limited for user %s", user_id)
-            return
-
-        session_id = create_background_chat_session(
-            user_id=user_id,
-            title=f"RCA: {alert_title}",
-            trigger_metadata={
-                "source": SOURCE,
-                "alert_id": normalized["alert_id"],
-                "alert_uuid": alert_uuid,
-                "rule_name": normalized["rule_name"],
-            },
-            incident_id=str(incident_id),
-        )
         rca_prompt, rail_text = build_rca_prompt(SOURCE, alert_title, payload, user_id=user_id)
-        task = run_background_chat.delay(
+        dispatch_alert_rca(
             user_id=user_id,
-            session_id=session_id,
-            initial_message=rca_prompt,
+            incident_id=incident_id,
+            source=SOURCE,
+            prompt=rca_prompt,
+            rail_text=rail_text,
             trigger_metadata={
                 "source": SOURCE,
                 "alert_id": normalized["alert_id"],
                 "alert_uuid": alert_uuid,
                 "alert_title": alert_title,
             },
-            incident_id=str(incident_id),
-            rail_text=rail_text,
+            session_title=f"RCA: {alert_title}",
+            log_prefix="[ELASTIC][ALERT]",
         )
-        cursor.execute(
-            "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
-            (task.id, str(incident_id)),
-        )
-        conn.commit()
-        logger.info("[ELASTIC][ALERT] Triggered background RCA chat for session %s (task_id=%s)", session_id, task.id)
     except Exception as chat_exc:
         logger.exception("[ELASTIC][ALERT] Failed to trigger background chat: %s", chat_exc)

@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Investigations: a burst of alerts no longer drops RCAs. Before, an alert over
+  the background-chat limit (5 per user per 5 minutes, shared with actions and
+  other background runs) got no investigation at all, and 20 minutes later
+  showed "Investigation Failed". Every alert webhook now starts its RCA
+  through one shared helper with a per-org budget for alert RCAs (5 per
+  5 minutes, 30 per hour, 6 running at once). An alert over budget is queued
+  on its incident ("Not investigated yet", with the reason) and started
+  automatically when budget frees up, each with its own investigation, most
+  severe first and then oldest first. Any queued incident can be started by
+  hand with "Run investigation now". The stale-investigation sweep no longer
+  fails incidents that are deliberately waiting. Actions, team routing and
+  other background runs keep their own limit and no longer use up the alert
+  budget.
+- Investigations: that per-user limit for manual RCAs, actions and other
+  non-alert background runs is now 20 per 5 minutes instead of 5. Set
+  `BACKGROUND_CHAT_RATE_LIMIT_MAX` to change it (clamped to 1–1000).
+
 ## [1.5.28] - 2026-11-27
 
 ### Fixed
