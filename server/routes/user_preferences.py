@@ -12,11 +12,14 @@ from utils.auth.stateless_auth import (
     set_rls_context,
 )
 from utils.log_sanitizer import sanitize
+from utils.notifications.slack_alert_match import SOURCE_REPLY_PREFERENCES
 from utils.auth.rbac_decorators import require_permission
 from utils.auth.enforcer import enforce_with_reload
 import json
 
+SOURCE_REPLY_KEYS = frozenset(SOURCE_REPLY_PREFERENCES.values())
 ORG_SCOPED_PREFERENCE_KEYS = frozenset({
+    *SOURCE_REPLY_KEYS,
     'rca_email_notifications',
     'rca_email_start_notifications',
     'action_email_notifications',
@@ -75,7 +78,7 @@ def get_user_preferences(user_id):
 
     if key in ORG_SCOPED_PREFERENCE_KEYS:
         org_id = get_org_id_from_request() or get_org_id_for_user(user_id)
-        value = get_org_preference(org_id, key) if org_id else None
+        value = get_org_preference(org_id, key, strict=key in SOURCE_REPLY_KEYS) if org_id else None
     else:
         value = get_user_preference(user_id, key)
 
@@ -95,6 +98,8 @@ def set_user_preferences(user_id):
         logger.warning(f"Missing preference key for user {user_id}")
         return jsonify({"error": "Missing preference key"}), 400
 
+    if key in SOURCE_REPLY_KEYS and not isinstance(value, bool):
+        return jsonify({"error": "Alert thread reply preference must be a boolean"}), 400
     if key in ENABLE_VIA_DEDICATED_ENDPOINT and value:
         return jsonify({"error": ENABLE_VIA_DEDICATED_ENDPOINT[key]}), 400
 
@@ -103,7 +108,7 @@ def set_user_preferences(user_id):
         if denied:
             return denied
         org_id = get_org_id_from_request() or get_org_id_for_user(user_id)
-        store_org_preference(org_id, key, value)
+        store_org_preference(org_id, key, value, strict=key in SOURCE_REPLY_KEYS)
         logger.info("Stored org preference %s", key)
     else:
         store_user_preference(user_id, key, value)
@@ -233,6 +238,8 @@ def set_batch_preferences(user_id):
         return jsonify({"error": "preferences must be a dictionary"}), 400
 
     for key, value in preferences.items():
+        if key in SOURCE_REPLY_KEYS and not isinstance(value, bool):
+            return jsonify({"error": "Alert thread reply preference must be a boolean"}), 400
         if key in ENABLE_VIA_DEDICATED_ENDPOINT and value:
             return jsonify({"error": ENABLE_VIA_DEDICATED_ENDPOINT[key]}), 400
 
@@ -247,7 +254,7 @@ def set_batch_preferences(user_id):
                 if not org_id:
                     org_id = get_org_id_from_request() or get_org_id_for_user(user_id)
                 if org_id:
-                    store_org_preference(org_id, key, value)
+                    store_org_preference(org_id, key, value, strict=key in SOURCE_REPLY_KEYS)
             else:
                 store_user_preference(user_id, key, value)
 

@@ -408,7 +408,7 @@ def _set_org_rls(cursor, org_id: str) -> None:
     cursor.execute("SET myapp.current_org_id = %s;", (org_id,))
 
 
-def store_org_preference(org_id: str, key: str, value: Any, *, cursor=None) -> None:
+def store_org_preference(org_id: str, key: str, value: Any, *, cursor=None, strict: bool = False) -> None:
     """Upsert an org-scoped preference row.
 
     Org-scoped preferences are stored with a synthetic user_id of
@@ -435,6 +435,8 @@ def store_org_preference(org_id: str, key: str, value: Any, *, cursor=None) -> N
             conn.commit()
     except Exception:
         logger.exception("Error storing org preference %s for org %s", sanitize(key), sanitize(org_id))
+        if strict:
+            raise
 
 
 def get_org_preference(org_id: str, key: str, default=None, *, strict: bool = False):

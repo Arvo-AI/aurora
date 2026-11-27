@@ -30,6 +30,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
+import { AlertThreadReplyToggle } from "@/components/connectors/AlertThreadReplyToggle";
 import { copyToClipboard } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
 import { Switch } from '@/components/ui/switch';
@@ -194,6 +195,9 @@ function CloudWatchAlertToggle() {
 
       {enabled && (
         <div className="space-y-2 pt-2 border-t border-white/10">
+          <div className="rounded-lg bg-card text-card-foreground">
+            <AlertThreadReplyToggle source="cloudwatch" />
+          </div>
           {webhookUrl ? (
             <>
               <p className="text-xs text-white/50">SNS subscription endpoint</p>

@@ -11,7 +11,7 @@ from connectors.slack_connector.client import SlackAPIError, SlackClient
 from utils.auth.stateless_auth import get_credentials_from_db, get_org_preference, set_rls_context
 from utils.cache.redis_client import get_redis_client
 from utils.db.connection_pool import db_pool
-from utils.notifications.slack_alert_match import find_source_thread, source_thread_window_end
+from utils.notifications.slack_alert_match import SOURCE_REPLY_PREFERENCES, find_source_thread, source_thread_window_end
 from utils.notifications.slack_threading import placed_thread_ts
 
 logger = logging.getLogger(__name__)
@@ -102,8 +102,12 @@ def _find_target(cur, client, org, team, data, target):
                      data["alert_metadata"].get("correlation_key")))
         competing = [dict(source_type=data["source_type"], alert_title=title, alert_metadata=meta)
                      for title, meta in cur.fetchall()]
+        # PagerDuty can announce the same incident in several Slack channels.
+        preferred_channel = None
+        if data["source_type"] == "pagerduty":
+            preferred_channel = get_org_preference(org, "slack_incidents_channel_id", strict=True)
         match = find_source_thread(client, channels, team, data, competing=competing,
-                                   cache=get_redis_client(), org=org)
+                                   cache=get_redis_client(), org=org, preferred_channel=preferred_channel)
         if match:
             target = dict(team=team, channel=match[0], ts=match[1])
     return target
@@ -147,9 +151,13 @@ def deliver_source_reply(user_id, incident_id):
             data = _get_incident_data(incident_id, user_id)
             if not data:
                 raise ValueError("Incident unavailable for Slack reply")
-            enabled = get_org_preference(org, "slack_investigation_complete_notifications", default=True, strict=True)
             cleanup_pending = target and target.get("unthreaded_ts")
-            if cleanup_pending or (enabled and data["aurora_status"] == "complete" and not data.get("unfinished_reason")):
+            reply_pref = SOURCE_REPLY_PREFERENCES.get(data.get("source_type"))
+            if cleanup_pending or (
+                reply_pref and data["aurora_status"] == "complete" and not data.get("unfinished_reason")
+                and get_org_preference(org, "slack_investigation_complete_notifications", default=True, strict=True)
+                and get_org_preference(org, reply_pref, default=True, strict=True)
+            ):
                 creds = get_credentials_from_db(user_id, "slack") or {}
                 if not creds.get("access_token") or not creds.get("team_id"):
                     raise ValueError("Slack workspace credentials unavailable")

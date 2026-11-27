@@ -126,6 +126,7 @@ class AlertPipeline(unittest.TestCase):
         from celery_config import celery_app, _prewarm_ready
         from utils.db.connection_pool import db_pool
         from routes.aws import cloudwatch_routes as aws
+        from routes.incidentio import incidentio_routes as incidentio
         from routes.sentry import sentry_routes as sentry
         from tasks.slack_source_reply import retry_due_source_replies
         from utils.cache.redis_client import get_redis_client
@@ -147,6 +148,7 @@ class AlertPipeline(unittest.TestCase):
             "(%s,%s,'C-alert','T-test',true),(%s,%s,'C-sentry','T-test',true)", (user, org, user, org))
         application = Flask(__name__)
         application.register_blueprint(aws.cloudwatch_bp)
+        application.register_blueprint(incidentio.incidentio_bp, url_prefix="/incidentio")
         application.register_blueprint(sentry.sentry_bp, url_prefix="/sentry")
         http = application.test_client()
         key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -228,7 +230,7 @@ class AlertPipeline(unittest.TestCase):
             replace("tasks.slack_source_reply.get_credentials_from_db", return_value=slack_creds)
             replace("utils.auth.stateless_auth.get_credentials_from_db", side_effect=lambda u,p: slack_creds if p=="slack" else None)
             replace("utils.notifications.dispatcher.get_org_preference",
-                    side_effect=lambda org, key, default=None: key in {"slack_investigation_start_notifications", "slack_investigation_complete_notifications"})
+                    side_effect=lambda org, key, default=None: default if key.startswith("slack_") else False)
             replace("connectors.slack_connector.client.SlackClient._make_request", new=slack_http)
             replace("utils.notifications.slack_notification_service._get_incidents_channel_id", return_value="C-configured")
             routing = replace("utils.notifications.team_routing.trigger_team_routing_agent")
@@ -409,29 +411,67 @@ class AlertPipeline(unittest.TestCase):
 
             # The configured main channel has no local registry row or description.
             # Verify completed incidents against Slack's actual bot memberships.
+            from utils.auth.stateless_auth import store_org_preference
             from utils.notifications.dispatcher import notify_investigation_completed
-            for source, app_id, url, metadata in (
-                ("pagerduty", "A1FKYAUUX", "https://acme.pagerduty.com/incidents/P001",
-                 {"incidentId": "P001"}),
-                ("incidentio", "A01DEGPUHHC", "https://app.incident.io/acme/incidents/42",
-                 {"permalink": "https://app.incident.io/acme/incidents/42"}),
+            store_org_preference(org, "slack_incidents_channel_id", "C-configured", strict=True)
+            pd_url = "https://acme.pagerduty.com/incidents/P001"
+            add_post("C-alert", "A1FKYAUUX", "API is down", pd_url)
+            parent = add_post("C-configured", "A1FKYAUUX", "API is down", pd_url)
+            [(incident_id,)] = sql(
+                "INSERT INTO incidents (org_id,user_id,source_type,source_alert_id,alert_title,"
+                "started_at,aurora_status,aurora_summary,alert_metadata) "
+                "VALUES (%s,%s,'pagerduty',42,'API is down',NOW(),'complete',%s,%s) RETURNING id",
+                (org, user, findings, json.dumps({"incidentId": "P001"})),
+            )
+            for _ in range(2):
+                notify_investigation_completed(user, str(incident_id))
+            expected.append(("C-configured", parent))
+            wait_for(lambda: sorted(replies) == sorted(expected), "PagerDuty RCA under its main-channel alert")
+            [(target, reply_ts)] = sql(
+                "SELECT slack_source_target,slack_source_reply_ts FROM incidents WHERE id=%s", (incident_id,)
+            )
+            self.assertEqual((target["channel"], target["ts"]), ("C-configured", parent))
+            self.assertTrue(reply_ts)
+
+            # Exercise incident.io from signed HTTP intake. The incident webhook uses an
+            # internal ID, its Slack announcement uses a number, and alerts have their own URLs.
+            get_redis_client().delete(f"background_chat_rate_limit:{user}")
+            summarize.side_effect = None
+            secret = "incidentio-test-secret"
+            replace("routes.incidentio.incidentio_routes.get_token_data", return_value={"webhook_secret": secret})
+            native_postback = replace("utils.notifications.incidentio_notification_service.send_incidentio_incident_update")
+            base = "https://app.incident.io/acme"
+            for topic_name, webhook_object, slack_url in (
+                ("public_incident.incident_created_v2", {"incident": {
+                    "id": "01INCIDENT", "reference": "INC-42", "name": "QA refrigeration failure",
+                    "permalink": f"{base}/incidents/01INCIDENT", "created_at": ts,
+                }}, f"{base}/incidents/42"),
+                ("public_alert.alert_created_v1", {
+                    "id": "01ALERT", "title": "QA tunnel queue stalled", "created_at": ts,
+                    "source_url": "https://monitor.example.test/alerts/10",
+                }, f"{base}/alerts/01ALERT"),
             ):
-                parent = add_post("C-configured", app_id, "API is down", url)
-                [(incident_id,)] = sql(
-                    "INSERT INTO incidents (org_id,user_id,source_type,source_alert_id,alert_title,"
-                    "started_at,aurora_status,aurora_summary,alert_metadata) "
-                    "VALUES (%s,%s,%s,42,'API is down',NOW(),'complete',%s,%s) RETURNING id",
-                    (org, user, source, findings, json.dumps(metadata)),
-                )
-                for _ in range(2):
-                    notify_investigation_completed(user, str(incident_id))
+                parent = add_post("C-configured", "A01DEGPUHHC", "incident.io announcement", slack_url)
                 expected.append(("C-configured", parent))
-                wait_for(lambda: sorted(replies) == sorted(expected), f"{source} RCA under its main-channel alert")
-                [(target, reply_ts)] = sql(
-                    "SELECT slack_source_target,slack_source_reply_ts FROM incidents WHERE id=%s", (incident_id,)
+                body = json.dumps({"event_type": topic_name, topic_name: webhook_object}).encode()
+                msg_id, timestamp = str(uuid4()), str(int(time.time()))
+                signature = hmac.new(secret.encode(), f"{msg_id}.{timestamp}.".encode() + body, hashlib.sha256).digest()
+                response = http.post(f"/incidentio/alerts/webhook/{user}", data=body, content_type="application/json",
+                                     headers={"webhook-id": msg_id, "webhook-timestamp": timestamp,
+                                              "webhook-signature": "v1," + base64.b64encode(signature).decode()})
+                self.assertEqual(response.status_code, 200)
+                wait_for(lambda: sorted(replies) == sorted(expected), f"automatic RCA reply for {topic_name}")
+                [(incident_id, target, reply_ts)] = sql(
+                    "SELECT id, slack_source_target, slack_source_reply_ts FROM incidents WHERE org_id=%s "
+                    "AND source_type='incidentio' AND alert_metadata->>'event_type'=%s AND aurora_status='complete'",
+                    (org, topic_name),
                 )
                 self.assertEqual((target["channel"], target["ts"]), ("C-configured", parent))
                 self.assertTrue(reply_ts)
+                notify_investigation_completed(user, str(incident_id))
+            retry_due_source_replies.delay().get(timeout=20, disable_sync_subtasks=False)
+            self.assertCountEqual(replies, expected)
+            native_postback.assert_not_called()  # Direct delivery works with native postback disabled.
 
             self.assertNotIn(("C-alert", setup_parent), replies)
             self.assertEqual(aws.get_token_data(user, "cloudwatch"),

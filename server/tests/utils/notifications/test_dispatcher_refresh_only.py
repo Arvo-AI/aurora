@@ -180,6 +180,23 @@ def test_routing_still_runs_when_thread_replies_are_off(routing, wired, monkeypa
     routing.assert_called_once()
 
 
+@pytest.mark.parametrize(("source", "postback"), [("pagerduty", "pd"), ("incidentio", "incidentio")])
+def test_connector_reply_opt_out_preserves_native_postback_and_routing(source, postback, routing, wired, monkeypatch):
+    incident = _incident(source_type=source)
+    monkeypatch.setattr(dispatcher, "_get_incident_data", lambda *args: incident)
+    monkeypatch.setattr(dispatcher, "get_org_preference",
+                        lambda org, key, default=None: key != f"slack_{source}_rca_replies")
+
+    dispatcher.notify_investigation_completed("u1", "i1")
+    wired["reply"].assert_not_called()
+    wired[postback].assert_called_once_with("u1", incident)
+    routing.assert_called_once_with("u1", incident)
+
+    incident["source_type"] = "sentry"
+    dispatcher.notify_investigation_completed("u1", "i2")
+    wired["reply"].assert_called_once_with("u1", "i2")
+
+
 def test_routing_runs_for_a_teams_only_org(routing, monkeypatch):
     monkeypatch.setattr(dispatcher, "_has_slack_connected", lambda user_id: False)
     monkeypatch.setattr(dispatcher, "_has_teams_connected", lambda user_id: True)

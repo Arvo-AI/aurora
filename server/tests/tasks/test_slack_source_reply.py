@@ -38,6 +38,14 @@ def delivery(monkeypatch):
     return run, lookup
 
 
+def test_pending_retry_honors_connector_opt_out(delivery, monkeypatch):
+    run, lookup = delivery
+    monkeypatch.setattr(worker, "get_org_preference",
+                        lambda org, key, **kwargs: key != "slack_sentry_rca_replies")
+    assert run(attempts=1) == (None, 0, None)
+    lookup.assert_not_called()
+
+
 @pytest.mark.parametrize("now,attempts,errors,expected_delay", [
     (1001, 0, 0, 30), (1179, 1, 0, 1), (1180, 1, 0, None), (1600, 0, 0, None),
     (1001, 8, 0, 179), (1001, 9, 0, None), (1001, 9, 3, 30),

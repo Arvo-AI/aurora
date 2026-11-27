@@ -573,6 +573,7 @@ def _extract_incident_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     return {
         "incident_id": incident.get("id") or payload.get("id"),
+        "reference": incident.get("reference"),
         "incident_name": incident.get("name") or incident.get("title") or "Untitled Incident",
         "incident_status": incident.get("status") or event.get("status") or "unknown",
         "severity": _safe_name(incident.get("severity"), "unknown"),
@@ -692,6 +693,8 @@ def _build_alert_metadata(fields: Dict[str, Any], event_type: str) -> Dict[str, 
         "summary": fields["summary"],
         "event_type": event_type,
     }
+    if fields.get("reference"):
+        meta["reference"] = fields["reference"]
     # Surface the alert's own priority/service/environment (and any other
     # structured attributes) so the RCA prompt sees them instead of only the
     # permalink/summary. Empty for incident events (no alert attributes).

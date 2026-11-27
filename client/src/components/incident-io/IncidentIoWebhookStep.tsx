@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
+import { AlertThreadReplyToggle } from "@/components/connectors/AlertThreadReplyToggle";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import {
@@ -460,6 +461,8 @@ export function IncidentIoWebhookStep({ onDisconnect, loading }: IncidentIoWebho
             </div>
           </div>
         )}
+
+        <AlertThreadReplyToggle source="incidentio" />
 
         {rcaEnabled && (
           <div className="border-t pt-6">

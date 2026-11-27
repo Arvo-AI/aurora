@@ -16,12 +16,13 @@ _APP_SOURCES = {
     "A0238CWMJDB": "pagerduty",
     "A01DEGPUHHC": "incidentio",
 }
+SOURCE_REPLY_PREFERENCES = {source: f"slack_{source}_rca_replies" for source in _APP_SOURCES.values()}
 _WINDOW = 180
 logger = logging.getLogger(__name__)
 
 
 def uses_source_thread(source_type):
-    return source_type in _APP_SOURCES.values()
+    return source_type in SOURCE_REPLY_PREFERENCES
 
 
 def _strings(value):
@@ -59,6 +60,38 @@ def _incident_link(url, source):
     return None
 
 
+def _incidentio_numbered_link_matches(message, links, expected, meta):
+    """A Slack announcement may use an org-local number instead of the webhook's ID."""
+    if not expected or expected[2] != "incidents":
+        return False
+    org_path = expected[1].rsplit("/", 1)[0]
+    if org_path == "/incidents":
+        return False
+    reference = meta.get("reference")
+    references = {
+        f"INC-{number}" for _, path, _, number in links
+        if re.fullmatch(r"[1-9][0-9]*", number) and path == f"{org_path}/{number}"
+    }
+    if not references or (reference and reference not in references):
+        return False
+
+    # Older incidents lack the reference in alert_metadata. The native Subscribe
+    # button carries the internal ID and also disambiguates links to other incidents.
+    blocks = list(message.get("blocks") or [])
+    for attachment in message.get("attachments") or []:
+        blocks.extend(attachment.get("blocks") or [])
+    subscribed_ids = {
+        button["value"] for block in blocks if block.get("type") == "actions"
+        for button in block.get("elements") or []
+        if button.get("action_id") == "action_subscribe" and isinstance(button.get("value"), str)
+    }
+    native_id = meta.get("incidentId") or expected[3]
+    if subscribed_ids:
+        return subscribed_ids == {native_id}
+    # With no Subscribe button, a second incident link could be a related incident.
+    return bool(reference) and len(links) == 1
+
+
 def _matches(message, data, team):
     source = data["source_type"]
     profile = message.get("bot_profile") or {}
@@ -79,11 +112,15 @@ def _matches(message, data, team):
         expected = _incident_link(meta.get("incidentUrl") or meta.get("permalink") or "", source)
         native_id = meta.get("incidentId")
         kind = "alerts" if str(meta.get("event_type", "")).startswith(("public_alert.", "private_alert.")) else "incidents"
+        links = set()
         for url in re.findall(r"https://[^\s<>|]+", text):
             link = _incident_link(url, source)
             if link and link[2] == kind:
                 if link == expected or (expected is None and link[3] == native_id):
                     return True
+                links.add(link)
+        if source == "incidentio" and kind == "incidents" and links:
+            return _incidentio_numbered_link_matches(message, links, expected, meta)
         return False
     arn = meta.get("alarm_arn")
     if arn and re.search(re.escape(arn) + r"(?=[|>\s]|$)", text):
@@ -143,8 +180,8 @@ def _channel_page(client, params, team, cache, org):
     return page
 
 
-def find_source_thread(client, channels, team, data, *, competing=(), cache=None, org=None):
-    """Only return a unique match after every registered channel has been checked."""
+def find_source_thread(client, channels, team, data, *, competing=(), cache=None, org=None, preferred_channel=None):
+    """Find a unique source post, using the configured channel to disambiguate copies."""
     when = _published_at(data)
     if when is None:
         return None
@@ -170,7 +207,7 @@ def find_source_thread(client, channels, team, data, *, competing=(), cache=None
                     if any(_matches(msg, other, team) for other in competing):
                         return None
                     matches.add((channel, msg["ts"]))
-                    if len(matches) > 1:
+                    if len(matches) > 1 and not preferred_channel:
                         return None
             cursor = (page.get("response_metadata") or {}).get("next_cursor")
             if not cursor:
@@ -179,4 +216,6 @@ def find_source_thread(client, channels, team, data, *, competing=(), cache=None
                     raise ValueError("Incomplete Slack history page")
                 break
             params["cursor"] = cursor
-    return next(iter(matches), None)
+    if len(matches) > 1:
+        matches = {match for match in matches if match[0] == preferred_channel}
+    return next(iter(matches)) if len(matches) == 1 else None

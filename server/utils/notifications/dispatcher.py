@@ -26,7 +26,7 @@ from utils.auth.stateless_auth import (
     set_rls_context,
 )
 from utils.db.connection_pool import db_pool
-from utils.notifications.slack_alert_match import uses_source_thread
+from utils.notifications.slack_alert_match import SOURCE_REPLY_PREFERENCES
 
 logger = logging.getLogger(__name__)
 
@@ -469,9 +469,11 @@ def notify_investigation_completed(user_id: str, incident_id: str, session_id: O
 
         # The completed RCA belongs in the original alert thread when one can be matched.
         if not refresh_only and _has_slack_connected(user_id):
-            if concluded and uses_source_thread(incident_data.get("source_type")):
+            reply_pref = SOURCE_REPLY_PREFERENCES.get(incident_data.get("source_type"))
+            if concluded and reply_pref:
                 try:
-                    if get_org_preference(org_id, "slack_investigation_complete_notifications", default=True):
+                    if (get_org_preference(org_id, "slack_investigation_complete_notifications", default=True)
+                            and get_org_preference(org_id, reply_pref, default=True)):
                         from tasks.slack_source_reply import queue_source_reply
                         queue_source_reply(user_id, incident_id)
                 except Exception:

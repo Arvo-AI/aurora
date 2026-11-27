@@ -62,6 +62,23 @@ def test_non_unique_matches_on_later_pages_or_in_other_channels():
     assert find_source_thread(client, ["C1", "C2"], "T1", SENTRY) is None
 
 
+@pytest.mark.parametrize("preferred,main_posts,expected", [
+    ("C-main", 1, ("C-main", POST["ts"])),
+    ("C-main", 0, ("C-service", POST["ts"])),
+    ("C-main", 2, None),
+    ("C-elsewhere", 1, None),
+    (None, 1, None),
+])
+def test_pagerduty_announcements_in_multiple_channels(preferred, main_posts, expected):
+    url = "https://acme.pagerduty.com/incidents/P123"
+    data = {"source_type": "pagerduty", "created_at": 1700000000, "alert_metadata": {"incidentUrl": url}}
+    post = {"ts": POST["ts"], "app_id": "A1FKYAUUX", "team": "T1", "text": f"<{url}|QA alert>"}
+    main = [post, {**post, "ts": "1700000002.2"}][:main_posts]
+    client = Mock()
+    client._make_request.side_effect = [page(post), page(*main)]
+    assert find_source_thread(client, ["C-service", "C-main"], "T1", data, preferred_channel=preferred) == expected
+
+
 def test_title_and_arrival_time_alone_never_identify_an_amazon_post():
     client = Mock()
     title = "[CRITICAL] Power lost - terminal 42"
@@ -108,6 +125,44 @@ def test_original_provider_post_can_be_in_any_channel(source, app_id, metadata, 
         page(post) if params["channel"] == channel else page()
     )
     assert find_source_thread(client, ["C-main", "C-service"], "T1", data) == (channel, POST["ts"])
+
+
+@pytest.mark.parametrize("reference,subscribe_id,path,matches", [
+    ("INC-3", None, "acme/incidents/3", True),
+    (None, "01INC", "acme/incidents/3", True),  # Previously stored metadata has only a permalink.
+    ("INC-3", "01INC", "acme/incidents/3", True),
+    ("INC-3", "01OTHER", "acme/incidents/3", False),
+    ("INC-3", "01INC", "acme/incidents/30", False),
+    (None, None, "acme/incidents/3", False),
+    ("INC-3", "01INC", "other/incidents/3", False),
+    ("INC-3", None, "incidents/3", False),
+    ("INC-3", None, "acme/alerts/3", False),
+])
+def test_incidentio_numbered_announcement(reference, subscribe_id, path, matches):
+    metadata = {"permalink": "https://app.incident.io/acme/incidents/01INC"}
+    if reference:
+        metadata["reference"] = reference
+    buttons = [{"type": "button", "url": f"https://app.incident.io/{path}"}]
+    if subscribe_id:
+        buttons.append({"type": "button", "action_id": "action_subscribe", "value": subscribe_id})
+    message = {"app_id": "A01DEGPUHHC", "team": "T1", "ts": POST["ts"],
+               "attachments": [{"blocks": [{"type": "actions", "elements": buttons}]}]}
+    client = Mock()
+    client._make_request.return_value = page(message)
+    data = {"source_type": "incidentio", "alert_metadata": metadata, "created_at": 1700000000}
+    assert find_source_thread(client, ["C"], "T1", data) == (("C", POST["ts"]) if matches else None)
+
+
+def test_incidentio_reference_in_a_related_incident_link_does_not_own_the_card():
+    base = "https://app.incident.io/acme/incidents"
+    client = Mock()
+    client._make_request.return_value = page({
+        "app_id": "A01DEGPUHHC", "ts": POST["ts"], "text": f"Related to <{base}/3|INC-3>",
+        "blocks": [{"type": "actions", "elements": [{"type": "button", "url": f"{base}/4"}]}],
+    })
+    data = {"source_type": "incidentio", "created_at": 1700000000,
+            "alert_metadata": {"permalink": f"{base}/01INC", "reference": "INC-3"}}
+    assert find_source_thread(client, ["C"], "T1", data) is None
 
 
 @pytest.mark.parametrize("url,app_id,parent", [
