@@ -6,7 +6,6 @@ with the instruction to save one check, instead of waiting for someone to
 click Resolve.
 """
 
-from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -15,6 +14,7 @@ import pytest
 from chat.backend.agent.prompt import background
 from chat.backend.agent.tools import detection_check_tool as tool
 from services.actions import coverage_scan_action as scan
+from services.actions import system_actions
 from services.detection import store
 
 
@@ -154,9 +154,7 @@ def test_the_agent_is_told_why_it_was_saved_silent(monkeypatch):
 # --- the action ------------------------------------------------------------
 
 def _registered():
-    from services.actions.system_actions import SYSTEM_ACTIONS
-
-    return next(a for a in SYSTEM_ACTIONS if a["system_key"] == scan.SYSTEM_KEY)
+    return next(a for a in system_actions.SYSTEM_ACTIONS if a["system_key"] == scan.SYSTEM_KEY)
 
 
 def test_the_scan_is_its_own_system_action():
@@ -172,9 +170,7 @@ def test_the_scan_runs_in_ask_mode():
 
 
 def test_the_scan_has_default_instructions():
-    from services.actions.system_actions import _get_default_instructions
-
-    assert _get_default_instructions(scan.SYSTEM_KEY) == scan.DEFAULT_COVERAGE_SCAN_INSTRUCTIONS
+    assert system_actions._get_default_instructions(scan.SYSTEM_KEY) == scan.DEFAULT_COVERAGE_SCAN_INSTRUCTIONS
 
 
 def test_the_scan_is_told_not_to_duplicate_working_alerts():
@@ -199,11 +195,11 @@ def test_no_scan_with_the_feature_off(monkeypatch):
     assert not scan.start_after_prediscovery("u1", "new_connector")
 
 
-def test_a_new_connection_dispatches_the_orgs_scan(monkeypatch):
+def _dispatch_setup(monkeypatch, owner_can_save):
+    """start_after_prediscovery with the database and seeding stubbed; returns the dispatch mock."""
     from contextlib import contextmanager
 
     import services.actions.executor as executor
-    import services.actions.system_actions as system_actions
     import utils.auth.stateless_auth as auth
     import utils.db.connection_pool as pool
 
@@ -211,7 +207,7 @@ def test_a_new_connection_dispatches_the_orgs_scan(monkeypatch):
     monkeypatch.setattr(auth, "get_org_id_for_user", lambda _user: "org-1")
     monkeypatch.setattr(auth, "set_rls_context", lambda *_a, **_kw: "org-1")
     monkeypatch.setattr(system_actions, "seed_system_actions", lambda *_a: 0)
-    monkeypatch.setattr(scan, "_owner_can_save_checks", lambda *_a: True)
+    monkeypatch.setattr(scan, "_owner_can_save_checks", lambda *_a: owner_can_save)
     cursor = MagicMock()
     cursor.fetchone.return_value = ("act-1", "owner-1")
     conn = MagicMock()
@@ -224,6 +220,11 @@ def test_a_new_connection_dispatches_the_orgs_scan(monkeypatch):
     monkeypatch.setattr(pool.db_pool, "get_admin_connection", _admin)
     dispatch = MagicMock()
     monkeypatch.setattr(executor, "dispatch_action", dispatch)
+    return dispatch
+
+
+def test_a_new_connection_dispatches_the_orgs_scan(monkeypatch):
+    dispatch = _dispatch_setup(monkeypatch, owner_can_save=True)
     assert scan.start_after_prediscovery("u1", "new_connector")
     dispatch.assert_called_once_with(
         action_id="act-1", user_id="owner-1",
@@ -232,29 +233,6 @@ def test_a_new_connection_dispatches_the_orgs_scan(monkeypatch):
 
 
 def test_no_scan_under_an_owner_who_cannot_save_checks(monkeypatch):
-    from contextlib import contextmanager
-
-    import services.actions.executor as executor
-    import services.actions.system_actions as system_actions
-    import utils.auth.stateless_auth as auth
-    import utils.db.connection_pool as pool
-
-    monkeypatch.delenv("DETECTION_CHECKS_ENABLED", raising=False)
-    monkeypatch.setattr(auth, "get_org_id_for_user", lambda _user: "org-1")
-    monkeypatch.setattr(auth, "set_rls_context", lambda *_a, **_kw: "org-1")
-    monkeypatch.setattr(system_actions, "seed_system_actions", lambda *_a: 0)
-    monkeypatch.setattr(scan, "_owner_can_save_checks", lambda *_a: False)
-    cursor = MagicMock()
-    cursor.fetchone.return_value = ("act-1", "viewer-1")
-    conn = MagicMock()
-    conn.cursor.return_value.__enter__.return_value = cursor
-
-    @contextmanager
-    def _admin():
-        yield conn
-
-    monkeypatch.setattr(pool.db_pool, "get_admin_connection", _admin)
-    dispatch = MagicMock()
-    monkeypatch.setattr(executor, "dispatch_action", dispatch)
+    dispatch = _dispatch_setup(monkeypatch, owner_can_save=False)
     assert not scan.start_after_prediscovery("u1", "new_connector")
     dispatch.assert_not_called()
