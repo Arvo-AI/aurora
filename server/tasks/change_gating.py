@@ -476,6 +476,53 @@ def _run_bitbucket_investigation(
         adapter.close()
 
 
+def _base_is_reviewable(
+    pr: dict[str, Any],
+    is_open_pr_head: Callable[[str], bool],
+    *,
+    stacks_supported: bool = True,
+) -> bool:
+    """Whether a PR's base makes it one Aurora reviews.
+
+    Either the repo's default branch, or the head branch of another open PR:
+    a stacked PR, whose own diff is against that branch. Any other base
+    (release and backport branches) is left alone. ``is_open_pr_head`` is
+    only called for a base that is not the default branch.
+    """
+    base = pr.get("base") or {}
+    base_ref = base.get("ref")
+    default_branch = (base.get("repo") or {}).get("default_branch")
+    if not base_ref or not default_branch:
+        return False
+    if base_ref == default_branch:
+        return True
+    return stacks_supported and bool(is_open_pr_head(base_ref))
+
+
+def _compare_merges_other_history(compare: dict[str, Any]) -> bool:
+    """Whether an ``ahead`` compare also carries changes that are not the PR's.
+
+    A merge commit in the range means another branch was merged into the head
+    since the last review. That is usually the base: the default branch, or
+    the parent of a stacked PR after it moved. The three-dot compare diff then
+    includes that branch's changes, so a finding could land on code this PR
+    does not change. GitHub lists at most 250 commits per compare; a longer
+    range cannot be checked, so it counts as merged too. A compare without a
+    commit list is left alone.
+    """
+    commits = compare.get("commits")
+    if not isinstance(commits, list):
+        return False
+    total = compare.get("total_commits")
+    if isinstance(total, int) and total > len(commits):
+        return True
+    return any(
+        len(commit.get("parents") or []) > 1
+        for commit in commits
+        if isinstance(commit, dict)
+    )
+
+
 def _run_investigation_core(
     task,
     start: float,
@@ -592,8 +639,13 @@ def _run_investigation_core(
         return _skip("draft")
     if pr.get("state") != "open":
         return _skip("not_open")
-    default_branch = ((pr.get("base") or {}).get("repo") or {}).get("default_branch")
-    if not default_branch or ((pr.get("base") or {}).get("ref")) != default_branch:
+    if not _base_is_reviewable(
+        pr,
+        lambda ref: _gh(
+            "stacked_base", lambda: adapter.has_open_pull_request_with_head(ref)
+        ),
+        stacks_supported=hasattr(adapter, "has_open_pull_request_with_head"),
+    ):
         return _skip("non_default_base")
 
     # ------------------------------------------------------------------
@@ -643,7 +695,14 @@ def _run_investigation_core(
         # "diverged" (force-push/rebase) and "behind" (out-of-order delivery)
         # would make the three-dot compare diff against an old merge-base —
         # re-reviewing already-seen code — so those revert to a full-PR review.
-        if compare and compare.get("status") == "ahead":
+        # So does an advance that merges another branch into the head (the
+        # base, most often): the compare diff would carry that branch's
+        # changes, and the PR's own diff does not.
+        if (
+            compare
+            and compare.get("status") == "ahead"
+            and not _compare_merges_other_history(compare)
+        ):
             compare_files = compare.get("files") or []
             diff = _gh(
                 "get_compare_diff",

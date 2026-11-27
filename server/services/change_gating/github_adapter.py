@@ -151,6 +151,26 @@ class GitHubPRAdapter:
         self._raise_for_status(response, path)
         return response.json()
 
+    def has_open_pull_request_with_head(self, branch: str) -> bool:
+        """True when an open PR in this repo has ``branch`` as its head.
+
+        That is what makes a PR "stacked": its base is not the default
+        branch but another branch that is itself under review. Only heads in
+        this repository are matched (``owner:branch``), so a fork's branch of
+        the same name does not count.
+        """
+        owner = self.repo_full_name.split("/", 1)[0]
+        path = "/pulls"
+        response = self._session.get(
+            self._url(path),
+            headers=self._headers(),
+            params={"state": "open", "head": f"{owner}:{branch}", "per_page": 1},
+            timeout=_TIMEOUT_SECONDS,
+        )
+        self._raise_for_status(response, path)
+        batch = response.json()
+        return isinstance(batch, list) and bool(batch)
+
     def _get_diff_text(self, path: str, swallow_statuses: tuple) -> Optional[str]:
         """GET a unified diff (diff media type) at ``path``.
 
