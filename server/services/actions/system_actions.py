@@ -17,6 +17,10 @@ from services.actions.check_review_action import (
     SYSTEM_KEY as CHECK_REVIEW_KEY,
 )
 
+from services.actions.coverage_scan_action import (
+    DEFAULT_COVERAGE_SCAN_INSTRUCTIONS,
+    SYSTEM_KEY as COVERAGE_SCAN_KEY,
+)
 from utils.db.connection_pool import db_pool
 
 logger = logging.getLogger(__name__)
@@ -130,6 +134,20 @@ SYSTEM_ACTIONS = [
         "mode": "agent",
         "instructions": None,
     },
+    {
+        "system_key": COVERAGE_SCAN_KEY,
+        "name": "Monitoring Coverage Scan",
+        "description": "Looks at every asset in your connected infrastructure, finds what "
+                       "nothing monitors, and adds a check Aurora runs itself for each blind "
+                       "spot. Skips anything an existing alert already covers. Runs weekly and "
+                       "when a new integration is connected.",
+        "trigger_type": "on_schedule",
+        "trigger_config": {"interval_seconds": 604800},
+        # Ask: every command it runs is read-only. Saving checks and memory is a
+        # write to Aurora's own store and stays available in ask mode.
+        "mode": "ask",
+        "instructions": None,
+    },
 ]
 
 
@@ -139,6 +157,7 @@ _DEFAULT_INSTRUCTIONS = {
     "hpa_vpa_rightsizing": DEFAULT_HPA_VPA_INSTRUCTIONS,
     "memory_consolidation": DEFAULT_MEMORY_CONSOLIDATION_INSTRUCTIONS,
     CHECK_REVIEW_KEY: DEFAULT_CHECK_REVIEW_INSTRUCTIONS,
+    COVERAGE_SCAN_KEY: DEFAULT_COVERAGE_SCAN_INSTRUCTIONS,
 }
 
 # Fail fast at import if a SYSTEM_ACTIONS entry has no instructions. Deferring

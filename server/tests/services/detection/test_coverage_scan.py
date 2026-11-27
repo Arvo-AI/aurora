@@ -14,8 +14,8 @@ import pytest
 
 from chat.backend.agent.prompt import background
 from chat.backend.agent.tools import detection_check_tool as tool
-from chat.background import coverage_scan_task as scan
-from services.detection import COVERAGE_SCAN_SOURCE, store
+from services.actions import coverage_scan_action as scan
+from services.detection import store
 
 
 def _in_session(monkeypatch, state):
@@ -28,7 +28,7 @@ def _args(unmonitored=True):
     return SimpleNamespace(unmonitored=unmonitored)
 
 
-_SCAN = SimpleNamespace(is_background=True, trigger_source=COVERAGE_SCAN_SOURCE)
+_SCAN = SimpleNamespace(is_background=True, trigger_source="action", is_coverage_scan_action=True)
 
 
 # --- starting active -------------------------------------------------------
@@ -52,7 +52,7 @@ def test_other_origins_cannot_claim_unmonitored(monkeypatch, kind):
 
 @pytest.mark.parametrize("state", [
     SimpleNamespace(is_background=True, trigger_source="grafana"),   # an RCA
-    SimpleNamespace(is_background=True, trigger_source="action"),    # a scheduled action
+    SimpleNamespace(is_background=True, trigger_source="action"),    # another action
     SimpleNamespace(is_background=False),                            # a chat
     None,
 ])
@@ -109,61 +109,152 @@ def test_the_postmortem_no_longer_asks_for_the_check(monkeypatch):
     assert "save_detection_check" not in postmortem_action._build_action_prompt("Write it.", incident)
 
 
-# --- when the scan runs ----------------------------------------------------
+# --- passing now before opening cases --------------------------------------
 
-@pytest.mark.parametrize("trigger", ["new_connector", "manual"])
-def test_a_new_connection_or_a_manual_run_always_scans(trigger):
-    assert scan.scan_is_due("u1", trigger)
-
-
-def test_a_scheduled_run_scans_when_there_was_no_scan(monkeypatch):
-    monkeypatch.setattr(scan, "_last_scan_at", lambda _user: None)
-    assert scan.scan_is_due("u1", "scheduled")
-
-
-def test_a_scheduled_run_skips_a_scan_from_this_week(monkeypatch):
-    monkeypatch.setattr(scan, "_last_scan_at", lambda _user: datetime.now() - timedelta(days=2))
-    assert not scan.scan_is_due("u1", "scheduled")
-
-
-def test_a_scheduled_run_rescans_after_a_week(monkeypatch):
-    monkeypatch.setattr(scan, "_last_scan_at", lambda _user: datetime.now() - timedelta(days=8))
-    assert scan.scan_is_due("u1", "scheduled")
-
-
-def test_an_unreadable_last_scan_skips_rather_than_piling_up_runs(monkeypatch):
-    def _broken(_user):
-        raise RuntimeError("db down")
-
-    monkeypatch.setattr(scan, "_last_scan_at", _broken)
-    assert not scan.scan_is_due("u1", "scheduled")
-
-
-def test_prediscovery_starts_a_due_scan(monkeypatch):
+def _save_capturing(monkeypatch, healthy):
+    """save_detection_check with the store and gate stubbed; returns what _store_check got."""
+    seen = {}
     monkeypatch.delenv("DETECTION_CHECKS_ENABLED", raising=False)
-    delay = MagicMock()
-    monkeypatch.setattr(scan.run_coverage_scan, "delay", delay)
-    assert scan.schedule_after_prediscovery("u1", "new_connector")
-    delay.assert_called_once_with(user_id="u1", trigger="new_connector")
+    monkeypatch.setattr(tool, "_may_write", lambda _user: True)
+    monkeypatch.setattr(tool, "gate_command", lambda **_kw: SimpleNamespace(allowed=True))
+    monkeypatch.setattr(tool, "_try_replay", lambda *_a: (None, ""))
+    monkeypatch.setattr(tool, "_starts_active", lambda *_a: True)
+    monkeypatch.setattr(tool, "_healthy_now", lambda *_a: healthy)
+
+    def _store(user_id, args, definition, origin, replayed, activate=False):
+        seen["activate"] = activate
+        return '{"status": "saved", "state": "silent"}'
+
+    monkeypatch.setattr(tool, "_store_check", _store)
+    answer = tool.save_detection_check(
+        user_id="u1", name="db-up", prediction="db down", asset="orders-db", pattern="replicas",
+        provider="onprem_kubectl", target="c1", command="get statefulset orders-db",
+        expect="text", op="not_empty", origin_kind="graph", unmonitored=True,
+    )
+    return seen, answer
 
 
-def test_no_scan_with_the_feature_off(monkeypatch):
-    monkeypatch.setenv("DETECTION_CHECKS_ENABLED", "false")
-    delay = MagicMock()
-    monkeypatch.setattr(scan.run_coverage_scan, "delay", delay)
-    assert not scan.schedule_after_prediscovery("u1", "new_connector")
-    delay.assert_not_called()
+def test_a_check_that_passes_now_starts_active(monkeypatch):
+    seen, _ = _save_capturing(monkeypatch, healthy=True)
+    assert seen["activate"] is True
 
 
-# --- what the scan is told -------------------------------------------------
+def test_a_check_that_does_not_pass_now_is_saved_silent(monkeypatch):
+    seen, _ = _save_capturing(monkeypatch, healthy=False)
+    assert seen["activate"] is False
+
+
+def test_the_agent_is_told_why_it_was_saved_silent(monkeypatch):
+    import json
+
+    _, answer = _save_capturing(monkeypatch, healthy=False)
+    assert "did not pass" in json.loads(answer)["active_note"]
+
+
+# --- the action ------------------------------------------------------------
+
+def _registered():
+    from services.actions.system_actions import SYSTEM_ACTIONS
+
+    return next(a for a in SYSTEM_ACTIONS if a["system_key"] == scan.SYSTEM_KEY)
+
+
+def test_the_scan_is_its_own_system_action():
+    assert _registered()["name"] == "Monitoring Coverage Scan"
+
+
+def test_the_scan_runs_weekly():
+    assert _registered()["trigger_config"] == {"interval_seconds": 604800}
+
+
+def test_the_scan_runs_in_ask_mode():
+    assert _registered()["mode"] == "ask"
+
+
+def test_the_scan_has_default_instructions():
+    from services.actions.system_actions import _get_default_instructions
+
+    assert _get_default_instructions(scan.SYSTEM_KEY) == scan.DEFAULT_COVERAGE_SCAN_INSTRUCTIONS
+
 
 def test_the_scan_is_told_not_to_duplicate_working_alerts():
     assert "Do NOT save a check for something an existing working alert" in (
-        scan.build_coverage_scan_prompt(["aws"], {"datadog": True})
+        scan.DEFAULT_COVERAGE_SCAN_INSTRUCTIONS
     )
 
 
 def test_the_scan_caps_new_checks_per_run():
-    assert "at most %d new checks" % scan.MAX_NEW_CHECKS_PER_RUN in (
-        scan.build_coverage_scan_prompt([], {})
+    assert "at most %d new checks" % scan.MAX_NEW_CHECKS_PER_RUN in scan.DEFAULT_COVERAGE_SCAN_INSTRUCTIONS
+
+
+# --- started after prediscovery --------------------------------------------
+
+def test_a_routine_prediscovery_leaves_the_scan_to_its_schedule(monkeypatch):
+    monkeypatch.delenv("DETECTION_CHECKS_ENABLED", raising=False)
+    assert not scan.start_after_prediscovery("u1", "scheduled")
+
+
+def test_no_scan_with_the_feature_off(monkeypatch):
+    monkeypatch.setenv("DETECTION_CHECKS_ENABLED", "false")
+    assert not scan.start_after_prediscovery("u1", "new_connector")
+
+
+def test_a_new_connection_dispatches_the_orgs_scan(monkeypatch):
+    from contextlib import contextmanager
+
+    import services.actions.executor as executor
+    import services.actions.system_actions as system_actions
+    import utils.auth.stateless_auth as auth
+    import utils.db.connection_pool as pool
+
+    monkeypatch.delenv("DETECTION_CHECKS_ENABLED", raising=False)
+    monkeypatch.setattr(auth, "get_org_id_for_user", lambda _user: "org-1")
+    monkeypatch.setattr(auth, "set_rls_context", lambda *_a, **_kw: "org-1")
+    monkeypatch.setattr(system_actions, "seed_system_actions", lambda *_a: 0)
+    monkeypatch.setattr(scan, "_owner_can_save_checks", lambda *_a: True)
+    cursor = MagicMock()
+    cursor.fetchone.return_value = ("act-1", "owner-1")
+    conn = MagicMock()
+    conn.cursor.return_value.__enter__.return_value = cursor
+
+    @contextmanager
+    def _admin():
+        yield conn
+
+    monkeypatch.setattr(pool.db_pool, "get_admin_connection", _admin)
+    dispatch = MagicMock()
+    monkeypatch.setattr(executor, "dispatch_action", dispatch)
+    assert scan.start_after_prediscovery("u1", "new_connector")
+    dispatch.assert_called_once_with(
+        action_id="act-1", user_id="owner-1",
+        trigger_context={"source": "prediscovery", "trigger": "new_connector"},
     )
+
+
+def test_no_scan_under_an_owner_who_cannot_save_checks(monkeypatch):
+    from contextlib import contextmanager
+
+    import services.actions.executor as executor
+    import services.actions.system_actions as system_actions
+    import utils.auth.stateless_auth as auth
+    import utils.db.connection_pool as pool
+
+    monkeypatch.delenv("DETECTION_CHECKS_ENABLED", raising=False)
+    monkeypatch.setattr(auth, "get_org_id_for_user", lambda _user: "org-1")
+    monkeypatch.setattr(auth, "set_rls_context", lambda *_a, **_kw: "org-1")
+    monkeypatch.setattr(system_actions, "seed_system_actions", lambda *_a: 0)
+    monkeypatch.setattr(scan, "_owner_can_save_checks", lambda *_a: False)
+    cursor = MagicMock()
+    cursor.fetchone.return_value = ("act-1", "viewer-1")
+    conn = MagicMock()
+    conn.cursor.return_value.__enter__.return_value = cursor
+
+    @contextmanager
+    def _admin():
+        yield conn
+
+    monkeypatch.setattr(pool.db_pool, "get_admin_connection", _admin)
+    dispatch = MagicMock()
+    monkeypatch.setattr(executor, "dispatch_action", dispatch)
+    assert not scan.start_after_prediscovery("u1", "new_connector")
+    dispatch.assert_not_called()

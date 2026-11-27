@@ -259,8 +259,8 @@ def run_prediscovery(
         logger.info(f"[Prediscovery] Completed for user {user_id}, session {session_id}")
         # The infrastructure map is fresh: look for what nothing monitors.
         try:
-            from chat.background.coverage_scan_task import schedule_after_prediscovery
-            schedule_after_prediscovery(user_id, trigger)
+            from services.actions.coverage_scan_action import start_after_prediscovery
+            start_after_prediscovery(user_id, trigger)
         except Exception:
             logger.exception("[Prediscovery] Could not schedule the coverage scan")
         return {"status": "completed", "session_id": session_id, "user_id": user_id}

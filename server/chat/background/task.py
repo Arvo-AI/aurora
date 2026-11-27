@@ -1624,6 +1624,12 @@ async def _execute_background_chat(
             (trigger_metadata or {}).get("action_id"), "hpa_vpa_rightsizing", user_id
         )
 
+        # True only for the built-in coverage scan; lets its checks for unwatched
+        # assets open cases from the start (detection_check_tool._starts_active).
+        _is_coverage_scan_action = _tm_source == "action" and _action_has_system_key(
+            (trigger_metadata or {}).get("action_id"), "monitoring_coverage_scan", user_id
+        )
+
         # Create state with is_background=True and rca_context for system prompt
         # Use centralized model configuration for RCA with provider mode awareness
         _is_pr_review = _tm_source == "change_gating"
@@ -1642,6 +1648,7 @@ async def _execute_background_chat(
             is_background=True,
             is_postmortem_action=_is_postmortem_action,
             is_hpa_vpa_action=_is_hpa_vpa_action,
+            is_coverage_scan_action=_is_coverage_scan_action,
             is_pr_review=_is_pr_review,
             rca_context=rca_context,
             trigger_source=_tm_source or None,

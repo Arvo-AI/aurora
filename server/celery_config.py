@@ -166,7 +166,6 @@ celery_app.conf.update(
         'chat.background.summarization',
         'chat.background.visualization_generator',
         'chat.background.prediscovery_task',
-        'chat.background.coverage_scan_task',
         'services.memory.migration_task',
         'services.memory.collector',
         'services.discovery.tasks',
@@ -359,11 +358,6 @@ try:
     logging.info("Prediscovery task imported successfully")
 except ImportError as e:
     logging.warning(f"Failed to import prediscovery task: {e}")
-
-try:
-    import chat.background.coverage_scan_task  # noqa: F401
-except ImportError as e:
-    logging.warning(f"Failed to import coverage scan task: {e}")
 
 try:
     import utils.aws.credential_refresh

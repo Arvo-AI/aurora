@@ -15,8 +15,8 @@ from typing import Optional
 from pydantic import BaseModel, Field, StrictFloat, StrictInt, StrictStr, ValidationError
 
 from services.detection import (
-    COVERAGE_SCAN_SOURCE,
     DEFAULT_INTERVAL_SECONDS,
+    STATUS_PASS,
     MIN_INTERVAL_SECONDS,
     ORIGIN_KINDS,
     checks_enabled,
@@ -226,7 +226,7 @@ def _starts_active(args, origin: dict) -> bool:
     from utils.cloud.cloud_utils import get_state_context
 
     state = get_state_context()
-    return state is not None and getattr(state, "trigger_source", None) == COVERAGE_SCAN_SOURCE
+    return state is not None and bool(getattr(state, "is_coverage_scan_action", False))
 
 
 def _parse_check(fields: dict):
@@ -325,7 +325,21 @@ def _saved_response(saved: tuple, state: str, vouched: bool, replayed, active: b
     return json.dumps(response)
 
 
-def _store_check(user_id: str, args, definition: dict, origin: dict, replayed) -> str:
+def _healthy_now(user_id: str, definition: dict) -> bool:
+    """Run the check's command once, as the scheduler would, and say whether it passed.
+
+    A check that opens cases from its first run must be known to pass today:
+    one aimed at the wrong namespace or resource would otherwise open a case
+    on its first run. The prompt asks for this; here it is enforced.
+    """
+    from services.detection.execution import judge
+
+    verdict = judge(definition, user_id, "unsaved-%s" % definition["name"])
+    return verdict.status == STATUS_PASS
+
+
+def _store_check(user_id: str, args, definition: dict, origin: dict, replayed,
+                 activate: bool = False) -> str:
     """Write the check and return the tool's answer."""
     with _connection(user_id, "save") as (cursor, conn, org_id):
         # Caught inside the block: an expected refusal must not reach the
@@ -349,9 +363,7 @@ def _store_check(user_id: str, args, definition: dict, origin: dict, replayed) -
             })
         if replayed:
             _keep_replay(cursor, org_id, saved, definition, replayed)
-        active = bool(saved[2] and _starts_active(args, origin))
-        if active:
-            start_active(cursor, org_id, saved[0])
+        active = bool(saved[2] and activate and start_active(cursor, org_id, saved[0]))
         # Read back: an unchanged save of a proven check is still proven.
         cursor.execute(
             "SELECT state, vouched_by IS NOT NULL FROM detection_checks WHERE id = %s", (saved[0],),
@@ -392,8 +404,20 @@ def save_detection_check(user_id: str | None = None, **fields) -> str:
     replayed, refused = _try_replay(user_id, definition, origin)
     if refused:
         return refused
+    # Run before the save's transaction: the command can take seconds.
+    wanted = _starts_active(args, origin)
+    activate = wanted and _healthy_now(user_id, definition)
     try:
-        return _store_check(user_id, args, definition, origin, replayed)
+        response = _store_check(user_id, args, definition, origin, replayed, activate)
+        if wanted and not activate:
+            answer = json.loads(response)
+            if "error" not in answer:
+                answer["active_note"] = (
+                    "Saved silent: the command did not pass when run just now, so it does not "
+                    "open cases yet. Check the command and the healthy condition."
+                )
+                response = json.dumps(answer)
+        return response
     except ValueError:
         return _NO_ORG_CTX
     except Exception:

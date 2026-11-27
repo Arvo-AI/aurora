@@ -48,10 +48,6 @@ MAX_INTERVAL_SECONDS = 7 * 24 * 3600
 # Where a check came from. Answers "why are you watching this?".
 ORIGIN_KINDS = ("incident", "miss", "graph", "explore", "gap", "person")
 
-# The trigger source of a Monitoring Coverage Scan session
-# (chat/background/coverage_scan_task.py).
-COVERAGE_SCAN_SOURCE = "coverage_scan"
-
 # A cluster connected by agent or kubeconfig, reached through on_prem_kubectl.
 # Every other provider value is a cloud_exec provider.
 PROVIDER_ONPREM_KUBECTL = "onprem_kubectl"
