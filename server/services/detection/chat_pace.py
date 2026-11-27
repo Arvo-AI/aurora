@@ -71,8 +71,8 @@ def limited(team_id: str, endpoint: str = HISTORY) -> bool:
     try:
         return bool(redis and redis.exists(_key("limited", team_id, endpoint)))
     except Exception:
-        logger.warning("%s Could not tell whether workspace %s is rate limited: Redis did not answer",
-                       _LOG, sanitize(team_id))
+        logger.warning("%s Could not tell whether the workspace is rate limited on %s: Redis did not answer",
+                       _LOG, endpoint)
         return False
 
 
@@ -105,8 +105,7 @@ def _take(team_id: str, endpoint: str) -> None:
 
 def _was_limited(team_id: str, endpoint: str, retry_after: Optional[int]) -> None:
     wait = SPACING_SECONDS if retry_after is None else min(max(retry_after, 1), MAX_WAIT_SECONDS)
-    logger.info("%s Slack rate limited %s for workspace %s; not asking again for %ds",
-                _LOG, endpoint, sanitize(team_id), wait)
+    logger.info("%s Slack rate limited %s; not asking this workspace again for %ds", _LOG, endpoint, wait)
     redis = _redis()
     if redis is None:
         return
