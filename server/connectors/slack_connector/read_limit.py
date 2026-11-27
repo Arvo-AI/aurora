@@ -16,6 +16,7 @@ Without Redis nothing is known and nothing is held back.
 """
 
 import logging
+import uuid
 from typing import Optional
 
 from utils.cache.redis_client import get_redis_client
@@ -81,7 +82,7 @@ def take(team_id: str, endpoint: str) -> bool:
         return True
     wait = _key("wait", team_id, endpoint)
     try:
-        if client.exists(_key("waiting", team_id, endpoint)):
+        if _anyone_waiting(client, team_id, endpoint):
             return False
         if client.exists(_key("limited", team_id, endpoint)):
             return bool(client.set(wait, "1", nx=True, ex=SPACING_SECONDS))
@@ -108,20 +109,34 @@ def was_limited(team_id: str, endpoint: str, retry_after: Optional[int]) -> None
         logger.warning("%s Could not record the rate limit: Redis did not answer", _LOG)
 
 
-def waiting(team_id: str, endpoint: str) -> None:
+def _anyone_waiting(client, team_id: str, endpoint: str) -> bool:
+    """Whether a caller that said waiting() has neither finished nor run out of time."""
+    key = _key("waiting", team_id, endpoint)
+    client.zremrangebyscore(key, "-inf", client.time()[0])
+    return bool(client.zcard(key))
+
+
+def waiting(team_id: str, endpoint: str, caller: Optional[str] = None) -> Optional[str]:
     """A caller with someone waiting is about to call *endpoint*: the reader
-    leaves it alone until answered() or WAITING_SECONDS, whichever is first.
+    leaves it alone until that caller has answered() or WAITING_SECONDS have
+    passed, whichever is first. Each caller is held for separately, so one that
+    finishes does not let the reader in on another still waiting. Returns the
+    name to give answered(); pass it back as *caller* to wait for longer.
     Only matters where the workspace is limited, and costs nothing elsewhere."""
     client = redis()
     try:
         if client and client.exists(_key("limited", team_id, endpoint)):
-            client.set(_key("waiting", team_id, endpoint), "1", ex=WAITING_SECONDS)
+            caller = caller or uuid.uuid4().hex
+            key = _key("waiting", team_id, endpoint)
+            client.zadd(key, {caller: client.time()[0] + WAITING_SECONDS})
+            client.expire(key, WAITING_SECONDS)
     except Exception:
         logger.warning("%s Could not hold the reader back: Redis did not answer", _LOG)
+    return caller
 
 
-def answered(team_id: str, endpoint: str, used: bool = True) -> None:
-    """The caller that was waiting() is done. With *used*, it got its answer: in
+def answered(team_id: str, endpoint: str, caller: Optional[str] = None, used: bool = True) -> None:
+    """The *caller* that was waiting() is done. With *used*, it got its answer: in
     a limited workspace that was this minute's call, so the reader waits its
     spacing from here."""
     client = redis()
@@ -129,6 +144,7 @@ def answered(team_id: str, endpoint: str, used: bool = True) -> None:
         if client and client.exists(_key("limited", team_id, endpoint)):
             if used:
                 client.eval(_HOLD, 1, _key("wait", team_id, endpoint), SPACING_SECONDS)
-            client.delete(_key("waiting", team_id, endpoint))
+            if caller:
+                client.zrem(_key("waiting", team_id, endpoint), caller)
     except Exception:
         logger.warning("%s Could not let the reader back in: Redis did not answer", _LOG)

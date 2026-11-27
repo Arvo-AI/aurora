@@ -100,17 +100,19 @@ class SlackClient:
         if not team_id:
             return self._request(method, endpoint, data, timeout, max_retries)
 
-        def _limited(retry_after: Optional[int]) -> None:
-            read_limit.was_limited(team_id, endpoint, retry_after)
-            read_limit.waiting(team_id, endpoint)
+        caller = [read_limit.waiting(team_id, endpoint)]
 
-        read_limit.waiting(team_id, endpoint)
+        def _limited(retry_after: Optional[int]) -> None:
+            # The workspace may only now be known as limited: wait from here.
+            read_limit.was_limited(team_id, endpoint, retry_after)
+            caller[0] = read_limit.waiting(team_id, endpoint, caller[0])
+
         try:
             result = self._request(method, endpoint, data, timeout, max_retries, _limited)
         except Exception:
-            read_limit.answered(team_id, endpoint, used=False)
+            read_limit.answered(team_id, endpoint, caller[0], used=False)
             raise
-        read_limit.answered(team_id, endpoint)
+        read_limit.answered(team_id, endpoint, caller[0])
         return result
 
     def _request(self, method: str, endpoint: str, data: Optional[Dict], timeout: int, max_retries: int,

@@ -378,6 +378,26 @@ class _Redis:
     def delete(self, key):
         self.kept.pop(key, None)
 
+    def time(self):
+        return self.now, 0
+
+    def expire(self, _key, _seconds):
+        return True
+
+    def zadd(self, key, scores):
+        self.kept.setdefault(key, ({}, 10 ** 12))[0].update(scores)
+
+    def zrem(self, key, member):
+        self.kept.get(key, ({}, 0))[0].pop(member, None)
+
+    def zremrangebyscore(self, key, _low, high):
+        held = self.kept.get(key, ({}, 0))[0]
+        for member in [m for m, score in held.items() if score <= high]:
+            del held[member]
+
+    def zcard(self, key):
+        return len(self.kept.get(key, ({}, 0))[0])
+
     def eval(self, _script, _keys, key, seconds):
         # The one script there is: hold a key, unless it is held for longer already.
         if self.kept.get(key, (None, 0))[1] < self.now + int(seconds):

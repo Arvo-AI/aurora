@@ -360,7 +360,8 @@ def note_activity(cursor, org_id: str, channel_id: str, thread_ts: Optional[str]
 
     A reply in a thread is noted with its thread: the thread's first message can
     be further back than the history the next reading takes, and the reply
-    would not be found from there. At most MAX_NOTED_THREADS a channel.
+    would not be found from there. The newest reply is the one kept: Slack can
+    deliver an older one after it. At most MAX_NOTED_THREADS a channel.
     """
     # An event without a usable time is taken as of now.
     noted = ts if ts and _is_ts(ts) else "%.6f" % time.time()
@@ -376,8 +377,9 @@ def note_activity(cursor, org_id: str, channel_id: str, thread_ts: Optional[str]
     cursor.execute(
         """UPDATE detection_chat_cursors SET threads = jsonb_set(threads, ARRAY[%s], to_jsonb(%s::text))
            WHERE org_id = %s AND channel_id = %s
-             AND (threads ? %s OR (SELECT COUNT(*) FROM jsonb_object_keys(threads)) < %s)""",
-        (thread_ts, ts, org_id, channel_id, thread_ts, MAX_NOTED_THREADS),
+             AND (threads ? %s OR (SELECT COUNT(*) FROM jsonb_object_keys(threads)) < %s)
+             AND COALESCE((threads ->> %s)::float8, 0) < %s::float8""",
+        (thread_ts, ts, org_id, channel_id, thread_ts, MAX_NOTED_THREADS, thread_ts, ts),
     )
 
 

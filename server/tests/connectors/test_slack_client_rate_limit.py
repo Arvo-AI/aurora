@@ -79,3 +79,34 @@ def test_a_read_that_gave_up_does_not_keep_the_chat_reader_out(monkeypatch):
 
     redis.now += read_limit.SPACING_SECONDS + 1
     assert read_limit.take("T1", read_limit.REPLIES)
+
+
+def test_the_chat_reader_stays_out_until_every_read_someone_waits_for_is_over(monkeypatch):
+    from connectors.slack_connector import read_limit
+    from tests.services.detection.test_chat_reader import _Redis
+
+    redis = _Redis()
+    monkeypatch.setattr(read_limit, "get_redis_client", lambda: redis)
+    read_limit.was_limited("T1", read_limit.HISTORY, 0)
+    redis.now += read_limit.SPACING_SECONDS + 1
+
+    first = read_limit.waiting("T1", read_limit.HISTORY)
+    second = read_limit.waiting("T1", read_limit.HISTORY)
+    read_limit.answered("T1", read_limit.HISTORY, first, used=False)
+    assert not read_limit.take("T1", read_limit.HISTORY)
+
+    read_limit.answered("T1", read_limit.HISTORY, second, used=False)
+    assert read_limit.take("T1", read_limit.HISTORY)
+
+
+def test_a_read_that_never_said_it_was_over_only_keeps_the_chat_reader_out_for_so_long(monkeypatch):
+    from connectors.slack_connector import read_limit
+    from tests.services.detection.test_chat_reader import _Redis
+
+    redis = _Redis()
+    monkeypatch.setattr(read_limit, "get_redis_client", lambda: redis)
+    read_limit.was_limited("T1", read_limit.HISTORY, 0)
+    read_limit.waiting("T1", read_limit.HISTORY)
+
+    redis.now += read_limit.WAITING_SECONDS + 1
+    assert read_limit.take("T1", read_limit.HISTORY)
