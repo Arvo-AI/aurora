@@ -11,11 +11,29 @@ import os
 import sys
 import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from datetime import datetime, timezone
+from threading import Barrier
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from uuid import uuid4
+
+
+def fake_vault(stack):
+    """Keep the production credential-row writes and org lookup, with an in-memory secret backend."""
+    secrets = {}
+    backend = Mock()
+
+    def store_secret(secret_name, secret_value):
+        secrets[secret_name] = secret_value
+        return secret_name
+
+    backend.store_secret.side_effect = store_secret
+    backend.get_secret.side_effect = secrets.__getitem__
+    stack.enter_context(patch("utils.secrets.secret_ref_utils.SecretRefManager.backend", new=backend))
+    stack.enter_context(patch("utils.auth.token_management._schedule_prediscovery"))
+    return backend
 
 
 @unittest.skipUnless(os.getenv("ALERT_PIPELINE_INTEGRATION") == "1", "requires disposable Postgres and Redis")
@@ -34,6 +52,70 @@ class AlertPipeline(unittest.TestCase):
                     citations=citations, source_observations=readings,
                 )
                 self.assertIn(readings, prompt)
+
+    def test_cloudwatch_setup_selects_a_single_notification_per_org(self):
+        self.assertEqual(os.environ["POSTGRES_DB"], "aurora_test")
+        from flask import Flask
+        from routes.aws import cloudwatch_routes as aws
+        from utils.db.connection_pool import db_pool
+
+        app = Flask(__name__)
+        app.register_blueprint(aws.cloudwatch_bp)
+        topic = "arn:aws:sns:us-west-2:111111111111:alerts"
+
+        def post(user, message_id, kind="Notification", topic_arn=topic):
+            return app.test_client().post(f"/aws/cloudwatch/webhook/{user}", json={
+                "Message": "alarm", "MessageId": message_id, "Type": kind, "TopicArn": topic_arn,
+            }).status_code
+
+        def create_users():
+            org, users = str(uuid4()), [str(uuid4()), str(uuid4())]
+            with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+                cur.execute("INSERT INTO organizations(id,name,slug) VALUES (%s,'Setup test',%s)", (org, org))
+                cur.executemany("INSERT INTO users(id,email,password_hash,org_id) VALUES (%s,%s,'unused',%s)",
+                                [(user, user + "@example.test", org) for user in users])
+                conn.commit()
+            return users
+
+        with ExitStack() as stack:
+            vault = fake_vault(stack)
+            stack.enter_context(patch.object(aws, "_verify_sns_signature", return_value=True))
+            queue = stack.enter_context(patch.object(aws.process_cloudwatch_alarm, "delay"))
+            users = create_users()
+            gate = Barrier(2)
+            setup_lock = aws._cloudwatch_setup_lock
+
+            def simultaneous_setup(user):
+                gate.wait(timeout=10)  # Both have observed the same missing connection.
+                return setup_lock(user)
+
+            with patch.object(aws, "_cloudwatch_setup_lock", side_effect=simultaneous_setup):
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    self.assertEqual(list(pool.map(post, users, ["first", "second"])), [200, 200])
+            vault.store_secret.assert_called_once()
+            decisions = {call.args[1]["sns_message_id"]: call.kwargs["skip_rca"] for call in queue.call_args_list}
+            self.assertCountEqual(decisions.values(), [True, False])
+            for user, message_id in zip(users, ["first", "second"]):
+                self.assertEqual(post(user, message_id), 200)
+                self.assertEqual(queue.call_args.kwargs["skip_rca"], decisions[message_id])
+            self.assertEqual(post(users[0], "foreign", topic_arn=topic + "-other"), 403)
+            self.assertEqual(queue.call_count, 4)
+
+            # A confirmation can run before the first real alarm. A manually
+            # connected organization can likewise receive its very first SNS notification.
+            for setup in ("confirmation", "manual"):
+                with self.subTest(setup=setup):
+                    user = create_users()[0]
+                    queue.reset_mock()
+                    if setup == "confirmation":
+                        with patch.object(aws, "_handle_subscription_confirmation") as confirm:
+                            self.assertEqual(post(user, "confirm", "SubscriptionConfirmation"), 200)
+                            confirm.assert_called_once()
+                        queue.assert_not_called()
+                    else:
+                        aws.store_tokens_in_db(user, {}, "cloudwatch")
+                    self.assertEqual(post(user, "first-alarm"), 200)
+                    self.assertFalse(queue.call_args.kwargs["skip_rca"])
 
     def test_from_signed_webhook_to_source_reply(self):
         self.assertEqual(os.environ["POSTGRES_DB"], "aurora_test")
@@ -165,12 +247,7 @@ class AlertPipeline(unittest.TestCase):
             replace("chat.background.task._get_connected_integrations", return_value={})
             replace("chat.background.rca_prompt_builder.get_user_providers", return_value=[])
             replace("routes.aws.cloudwatch_routes._get_sns_certificate", return_value=SimpleNamespace(public_key=key.public_key))
-            saved_connection = {}
-            read_connection = replace("routes.aws.cloudwatch_routes.get_token_data",
-                                      side_effect=lambda *args, **kwargs: dict(saved_connection))
-            save_connection = replace("routes.aws.cloudwatch_routes.store_tokens_in_db",
-                                      side_effect=lambda owner, data, provider: saved_connection.update(data))
-            connection_status = replace("routes.aws.cloudwatch_routes._has_cloudwatch_row", return_value=(False, False))
+            vault = fake_vault(stack)
             replace("routes.sentry.sentry_routes._get_stored_sentry_credentials", return_value={"client_secret":"test-secret"})
             replace("services.detection.runner._org_representatives", return_value=[(user, org)])
             queue = "alert-qa-" + org
@@ -181,6 +258,18 @@ class AlertPipeline(unittest.TestCase):
             # unrelated to delivery (e.g. visualizations) are ancillary.
             stack.enter_context(start_worker(celery_app, pool="solo", perform_ping_check=False,
                                              queues=(queue,), loglevel="INFO", shutdown_timeout=30))
+            # The first signed alarm creates a visible incident, including on redelivery,
+            # without spending an RCA slot or replying to its Slack parent.
+            setup_id = str(uuid4())
+            setup_alarm = {"AlarmName": "Setup alarm", "NewStateValue": "ALARM", "NewStateReason": "Setup check"}
+            setup_parent = add_post("C-alert", "A6L22LZNH", "Setup alarm", "Setup check")
+            with patch.object(aws.process_cloudwatch_alarm, "delay", side_effect=RuntimeError("broker unavailable")):
+                aws_post(setup_alarm, message_id=setup_id, expected_status=500)
+            aws_post(setup_alarm, message_id=setup_id)
+            aws_post(setup_alarm, message_id=setup_id)
+            wait_for(lambda: sql("SELECT rca_celery_task_id, aurora_chat_session_id, aurora_summary FROM incidents "
+                                 "WHERE org_id=%s AND alert_title='Setup alarm'", (org,)) == [(None, None, findings)],
+                     "one visible setup incident with its summary and no investigation")
             expected = []
             for n in range(2):
                 title = f"[CRITICAL] fault {n} on terminal 42"
@@ -250,7 +339,7 @@ class AlertPipeline(unittest.TestCase):
             aws_post(dict(alarm, NewStateValue="INSUFFICIENT_DATA"))
             wait_for(lambda: sql("SELECT count(*) FROM cloudwatch_alarms WHERE org_id=%s AND state_value IN "
                                  "('', 'INSUFFICIENT_DATA')", (org,)) == [(2,)], "non-firing audit rows")
-            self.assertEqual(sql("SELECT count(*) FROM incidents WHERE org_id=%s", (org,)), [(8,)])
+            self.assertEqual(sql("SELECT count(*) FROM incidents WHERE org_id=%s", (org,)), [(9,)])
 
 
             # A v1 worker can still execute its original upsert while v2 workers
@@ -261,7 +350,7 @@ class AlertPipeline(unittest.TestCase):
                 "WHERE issue_id IS NOT NULL DO UPDATE SET payload=EXCLUDED.payload", (org,user,json.dumps(legacy)))
             from routes.sentry.tasks import process_sentry_event
             process_sentry_event.delay(legacy, {"resource": "issue"}, user).get(timeout=20, disable_sync_subtasks=False)
-            self.assertEqual(sql("SELECT count(*) FROM incidents WHERE org_id=%s", (org,)), [(8,)])
+            self.assertEqual(sql("SELECT count(*) FROM incidents WHERE org_id=%s", (org,)), [(9,)])
 
             parent = add_post("C-alert", "A6L22LZNH", "QA stream failure", "Signal unavailable")
             aws_post("Signal unavailable", subject="QA stream failure")
@@ -344,12 +433,13 @@ class AlertPipeline(unittest.TestCase):
                 self.assertEqual((target["channel"], target["ts"]), ("C-configured", parent))
                 self.assertTrue(reply_ts)
 
-            self.assertEqual(saved_connection, {"approved_topic_arn": topic})
-            save_connection.assert_called_once()
-            connection_status.return_value = (True, False)
+            self.assertNotIn(("C-alert", setup_parent), replies)
+            self.assertEqual(aws.get_token_data(user, "cloudwatch"),
+                             {"approved_topic_arn": topic, "setup_notification_id": setup_id})
+            vault.store_secret.assert_called_once()
+            self.assertTrue(aws._set_cloudwatch_active(user, False))
             self.assertEqual(aws_post("Disabled webhook")["reason"], "connection_disabled")
-            save_connection.assert_called_once()
-            connection_status.return_value = (True, True)
-            read_connection.side_effect = OSError("test store unavailable")
-            aws_post("Retry after storage recovery", expected_status=503)
-            save_connection.assert_called_once()
+            self.assertTrue(aws._set_cloudwatch_active(user, True))
+            with patch.object(aws, "get_token_data", side_effect=OSError("test store unavailable")):
+                aws_post("Retry after storage recovery", expected_status=503)
+            vault.store_secret.assert_called_once()

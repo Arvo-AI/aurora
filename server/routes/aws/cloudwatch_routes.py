@@ -14,6 +14,7 @@ import json
 import logging
 import re
 import string
+from contextlib import contextmanager
 from typing import Tuple
 from urllib.parse import urlparse, urlunparse
 
@@ -248,20 +249,49 @@ def _set_cloudwatch_active(user_id: str, active: bool) -> bool:
 # TopicArn binding helpers
 # ---------------------------------------------------------------------------
 
-def _validate_topic_arn(user_id: str, sns_message: dict) -> bool:
-    """Bind the first signed topic and require subsequent deliveries to match it."""
-    topic_arn = sns_message.get("TopicArn")
-    if not topic_arn:
-        return False
-    connection = get_token_data(user_id, "cloudwatch", raise_on_error=True) or {}
-    if not connection.get("approved_topic_arn"):
-        # Storing the binding also creates the connection on its first delivery.
-        connection["approved_topic_arn"] = topic_arn
-        store_tokens_in_db(user_id, connection, "cloudwatch")
-        connection = get_token_data(user_id, "cloudwatch", raise_on_error=True) or {}
-        if not connection.get("approved_topic_arn"):
-            raise RuntimeError("CloudWatch topic binding could not be read after saving")
-    return connection["approved_topic_arn"] == topic_arn
+@contextmanager
+def _cloudwatch_setup_lock(user_id: str):
+    """Serialize changes to the org's CloudWatch connection, including its first SNS delivery."""
+    with db_pool.get_admin_connection() as conn, conn.cursor() as cursor:
+        org_id = set_rls_context(cursor, conn, user_id, log_prefix="[CLOUDWATCH:setup]")
+        if not org_id:
+            raise RuntimeError("Could not resolve CloudWatch connection owner")
+        cursor.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+            (f"cloudwatch-setup:{org_id}",),
+        )
+        yield
+
+
+def _read_cloudwatch_binding(user_id: str) -> tuple[bool, dict | None]:
+    """Return whether the row exists and its binding. None means explicitly disabled."""
+    exists, active = _has_cloudwatch_row(user_id, raise_on_error=True)
+    if not exists:
+        return False, {}
+    if not active:
+        return True, None
+    return True, get_token_data(user_id, "cloudwatch", raise_on_error=True) or {}
+
+
+def _bind_delivery(user_id: str, topic_arn: str, notification_id: str | None) -> dict | None:
+    _, binding = _read_cloudwatch_binding(user_id)
+    if binding is None or binding.get("approved_topic_arn"):
+        return binding
+
+    # A different notification, subscription confirmation or manual connect may
+    # have finished setup since the first read. Only the creator marks its ID.
+    with _cloudwatch_setup_lock(user_id):
+        exists, binding = _read_cloudwatch_binding(user_id)
+        if binding is None or binding.get("approved_topic_arn"):
+            return binding
+        binding["approved_topic_arn"] = topic_arn
+        if not exists and notification_id:
+            binding["setup_notification_id"] = notification_id
+        store_tokens_in_db(user_id, binding, "cloudwatch")
+        saved = get_token_data(user_id, "cloudwatch", raise_on_error=True) or {}
+        if saved != binding:
+            raise RuntimeError("CloudWatch setup binding could not be verified after saving")
+        return saved
 
 
 # ---------------------------------------------------------------------------
@@ -319,17 +349,18 @@ def status(user_id):
 def connect(user_id):
     """Activate (or create) the CloudWatch connection record."""
     try:
-        row_exists, is_active = _has_cloudwatch_row(user_id)
-        if row_exists and is_active:
-            return jsonify({"success": True, "message": "Already connected"}), 200
-        if row_exists:
-            if _set_cloudwatch_active(user_id, True):
-                logger.info("[CLOUDWATCH] Re-activated for user %s", sanitize(user_id))
-                return jsonify({"success": True, "message": "CloudWatch re-activated"}), 200
-            return jsonify({"error": "Failed to activate CloudWatch"}), 500
-        store_tokens_in_db(user_id, {}, "cloudwatch")
-        logger.info("[CLOUDWATCH] Connected for user %s", sanitize(user_id))
-        return jsonify({"success": True, "message": "CloudWatch connected"}), 200
+        with _cloudwatch_setup_lock(user_id):
+            row_exists, is_active = _has_cloudwatch_row(user_id, raise_on_error=True)
+            if row_exists and is_active:
+                return jsonify({"success": True, "message": "Already connected"}), 200
+            if row_exists:
+                if _set_cloudwatch_active(user_id, True):
+                    logger.info("[CLOUDWATCH] Re-activated for user %s", sanitize(user_id))
+                    return jsonify({"success": True, "message": "CloudWatch re-activated"}), 200
+                return jsonify({"error": "Failed to activate CloudWatch"}), 500
+            store_tokens_in_db(user_id, {}, "cloudwatch")
+            logger.info("[CLOUDWATCH] Connected for user %s", sanitize(user_id))
+            return jsonify({"success": True, "message": "CloudWatch connected"}), 200
     except Exception:
         logger.exception("[CLOUDWATCH] Failed to connect")
         return jsonify({"error": "Failed to connect CloudWatch"}), 500
@@ -340,15 +371,16 @@ def connect(user_id):
 def disconnect(user_id):
     """Deactivate (but retain) the CloudWatch connection record."""
     try:
-        row_exists, is_active = _has_cloudwatch_row(user_id)
-        if not row_exists:
-            return jsonify({"success": True, "message": "No connection to disconnect"}), 200
-        if not is_active:
-            return jsonify({"success": True, "message": "Already disconnected"}), 200
-        if _set_cloudwatch_active(user_id, False):
-            logger.info("[CLOUDWATCH] Disconnected for user %s", sanitize(user_id))
-            return jsonify({"success": True, "message": "CloudWatch disconnected successfully"}), 200
-        return jsonify({"error": "Failed to disconnect CloudWatch"}), 500
+        with _cloudwatch_setup_lock(user_id):
+            row_exists, is_active = _has_cloudwatch_row(user_id, raise_on_error=True)
+            if not row_exists:
+                return jsonify({"success": True, "message": "No connection to disconnect"}), 200
+            if not is_active:
+                return jsonify({"success": True, "message": "Already disconnected"}), 200
+            if _set_cloudwatch_active(user_id, False):
+                logger.info("[CLOUDWATCH] Disconnected for user %s", sanitize(user_id))
+                return jsonify({"success": True, "message": "CloudWatch disconnected successfully"}), 200
+            return jsonify({"error": "Failed to disconnect CloudWatch"}), 500
     except Exception:
         logger.exception("[CLOUDWATCH] Failed to disconnect")
         return jsonify({"error": "Failed to disconnect CloudWatch"}), 500
@@ -412,29 +444,31 @@ def cloudwatch_alarm_webhook(user_id: str):
         )
         return jsonify({"error": "Invalid SNS signature"}), 403
 
+    sns_type = sns_message.get("Type") or request.headers.get(_SNS_TYPE_HEADER) or ""
+    is_notification = sns_type in (_SNS_NOTIFICATION, "")
+    topic_arn = sns_message.get("TopicArn")
+    if not topic_arn:
+        return jsonify({"error": "TopicArn not authorized"}), 403
+    message_id = sns_message.get("MessageId")
+    if is_notification and not message_id:
+        return jsonify({"error": "Missing SNS MessageId"}), 400
+
     try:
-        exists, active = _has_cloudwatch_row(user_id, raise_on_error=True)
-        if exists and not active:
-            return jsonify({"received": True, "skipped": True, "reason": "connection_disabled"})
-        topic_matches = _validate_topic_arn(user_id, sns_message)
+        binding = _bind_delivery(user_id, topic_arn, message_id if is_notification else None)
     except Exception:
         logger.exception("[CLOUDWATCH] Could not verify the saved SNS topic for user %s", sanitize(user_id))
         return jsonify({"error": "CloudWatch connection unavailable"}), 503
 
-    if not topic_matches:
+    if binding is None:
+        return jsonify({"received": True, "skipped": True, "reason": "connection_disabled"})
+    if binding.get("approved_topic_arn") != topic_arn:
         return jsonify({"error": "TopicArn not authorized"}), 403
-
-    sns_type = (
-        request.headers.get(_SNS_TYPE_HEADER)
-        or sns_message.get("Type")
-        or ""
-    )
 
     if sns_type == _SNS_SUBSCRIPTION_CONFIRMATION:
         _handle_subscription_confirmation(sns_message, user_id)
         return jsonify({"received": True, "type": "subscription_confirmed"})
 
-    if sns_type not in (_SNS_NOTIFICATION, ""):
+    if not is_notification:
         logger.info(
             "[CLOUDWATCH] Unknown SNS type=%s for user %s, ignoring", sns_type, sanitize(user_id)
         )
@@ -449,13 +483,13 @@ def cloudwatch_alarm_webhook(user_id: str):
         sanitize(user_id), sanitize(alarm_name), sanitize(state_value),
     )
 
-    sns_message_id = sns_message.get("MessageId") or ""
     metadata = {
-        "topic_arn": sns_message.get("TopicArn"),
+        "topic_arn": topic_arn,
         "published_at": sns_message.get("Timestamp"),
-        "sns_message_id": sns_message_id,
+        "sns_message_id": message_id,
     }
 
-    process_cloudwatch_alarm.delay(payload, metadata, user_id)
+    skip_rca = message_id == binding.get("setup_notification_id")
+    process_cloudwatch_alarm.delay(payload, metadata, user_id, skip_rca=skip_rca)
 
     return jsonify({"received": True})
