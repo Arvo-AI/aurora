@@ -207,7 +207,8 @@ def _dispatch_setup(monkeypatch, owner_can_save):
     monkeypatch.setattr(auth, "get_org_id_for_user", lambda _user: "org-1")
     monkeypatch.setattr(auth, "set_rls_context", lambda *_a, **_kw: "org-1")
     monkeypatch.setattr(system_actions, "seed_system_actions", lambda *_a: 0)
-    monkeypatch.setattr(scan, "_owner_can_save_checks", lambda *_a: owner_can_save)
+    monkeypatch.setattr(scan, "owner_to_run_as",
+                        lambda _action, _org, owner: owner if owner_can_save else None)
     cursor = MagicMock()
     cursor.fetchone.return_value = ("act-1", "owner-1")
     conn = MagicMock()
@@ -232,7 +233,42 @@ def test_a_new_connection_dispatches_the_orgs_scan(monkeypatch):
     )
 
 
-def test_no_scan_under_an_owner_who_cannot_save_checks(monkeypatch):
+def test_no_scan_when_no_one_can_save_checks(monkeypatch):
     dispatch = _dispatch_setup(monkeypatch, owner_can_save=False)
     assert not scan.start_after_prediscovery("u1", "new_connector")
     dispatch.assert_not_called()
+
+
+def _owner_setup(monkeypatch, can_save, admin_row):
+    from contextlib import contextmanager
+
+    import utils.db.connection_pool as pool
+
+    monkeypatch.setattr(scan, "_owner_can_save_checks", lambda user, _org: user in can_save)
+    cursor = MagicMock()
+    cursor.fetchone.return_value = admin_row
+    conn = MagicMock()
+    conn.cursor.return_value.__enter__.return_value = cursor
+
+    @contextmanager
+    def _admin():
+        yield conn
+
+    monkeypatch.setattr(pool.db_pool, "get_admin_connection", _admin)
+    return cursor
+
+
+def test_an_owner_who_can_save_checks_runs_it(monkeypatch):
+    _owner_setup(monkeypatch, {"owner-1"}, None)
+    assert scan.owner_to_run_as("act-1", "org-1", "owner-1") == "owner-1"
+
+
+def test_a_viewer_owned_scan_is_handed_to_an_admin(monkeypatch):
+    cursor = _owner_setup(monkeypatch, {"admin-1"}, ("admin-1",))
+    assert scan.owner_to_run_as("act-1", "org-1", "viewer-1") == "admin-1"
+    assert cursor.execute.call_args[0][1] == ("admin-1", "act-1", "org-1")
+
+
+def test_no_admin_means_no_scan(monkeypatch):
+    _owner_setup(monkeypatch, set(), None)
+    assert scan.owner_to_run_as("act-1", "org-1", "viewer-1") is None

@@ -109,6 +109,39 @@ def _owner_can_save_checks(owner_id: str, org_id: str) -> bool:
     return bool(owner_id) and enforce_with_reload(owner_id, org_id, "detection_checks", "write")
 
 
+_FIRST_ADMIN_SQL = """
+    SELECT id FROM users WHERE org_id = %s AND role = %s ORDER BY created_at LIMIT 1
+"""
+
+
+def owner_to_run_as(action_id: str, org_id: str, owner_id: str):
+    """Who the scan runs as: its owner if they may save checks, else the org's first admin.
+
+    The scan's whole output is checks, and save_detection_check refuses a
+    viewer. The action is seeded with whoever triggered the seeding, which
+    can be a viewer, so it is handed to an admin instead (and kept there),
+    the way orphaned actions are (ownership.py). None when the org has no
+    one who can save checks: the run is skipped rather than spent.
+    """
+    if _owner_can_save_checks(owner_id, org_id):
+        return owner_id
+    from utils.auth import ROLE_ADMIN
+    from utils.db.connection_pool import db_pool
+
+    with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+        cur.execute(_FIRST_ADMIN_SQL, (org_id, ROLE_ADMIN))
+        row = cur.fetchone()
+        admin = str(row[0]) if row else None
+        if not admin or not _owner_can_save_checks(admin, org_id):
+            logger.warning("[CoverageScan] No one in org %s can save checks; scan not started", org_id)
+            return None
+        cur.execute("UPDATE actions SET created_by = %s, updated_at = NOW() WHERE id = %s AND org_id = %s",
+                    (admin, action_id, org_id))
+        conn.commit()
+    logger.info("[CoverageScan] Scan action %s now runs as an admin of org %s", action_id, org_id)
+    return admin
+
+
 def start_after_prediscovery(user_id: str, trigger: str) -> bool:
     """Start the org's scan once prediscovery has mapped a new integration.
 
@@ -144,13 +177,11 @@ def start_after_prediscovery(user_id: str, trigger: str) -> bool:
             (org_id, SYSTEM_KEY),
         )
         row = cur.fetchone()
-        if row and not _owner_can_save_checks(row[1], org_id):
-            # Every save would be refused: the run would cost a scan and add nothing.
-            logger.warning("[CoverageScan] Owner of the scan action in org %s cannot save checks; "
-                           "not started", org_id)
-            row = None
-        if row:
-            dispatch_action(action_id=str(row[0]), user_id=row[1],
+        owner = owner_to_run_as(str(row[0]), org_id, row[1]) if row else None
+        # Dispatched under the lock: the run row it creates is what the
+        # second prediscovery's query then sees.
+        if owner:
+            dispatch_action(action_id=str(row[0]), user_id=owner,
                             trigger_context={"source": "prediscovery", "trigger": trigger})
         conn.commit()
-    return bool(row)
+    return bool(owner)

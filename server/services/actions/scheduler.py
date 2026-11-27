@@ -11,7 +11,7 @@ from utils.log_sanitizer import sanitize
 logger = logging.getLogger(__name__)
 
 _ACTIONS_QUERY = """
-    SELECT a.id, a.org_id, a.created_by,
+    SELECT a.id, a.org_id, a.created_by, a.system_key,
            (a.trigger_config->>'interval_seconds')::int AS interval_seconds,
            MAX(r.started_at) AS last_run_at
     FROM actions a
@@ -83,10 +83,15 @@ def run_scheduled_actions():
     now = datetime.now(timezone.utc)
     dispatched = 0
 
-    for action_id, _org_id, created_by, interval_seconds, last_run_at in rows:
+    for action_id, org_id, created_by, system_key, interval_seconds, last_run_at in rows:
         if not _is_due(interval_seconds, last_run_at, now):
             continue
         try:
+            from services.actions import coverage_scan_action
+            if system_key == coverage_scan_action.SYSTEM_KEY:
+                created_by = coverage_scan_action.owner_to_run_as(str(action_id), org_id, created_by)
+                if not created_by:
+                    continue
             from services.actions.executor import dispatch_action
             dispatch_action(
                 action_id=str(action_id),
