@@ -381,8 +381,9 @@ class _Redis:
     def time(self):
         return self.now, 0
 
-    def expire(self, _key, _seconds):
-        return True
+    def expireat(self, key, when):
+        if key in self.kept:
+            self.kept[key] = (self.kept[key][0], min(self.kept[key][1], when))
 
     def zadd(self, key, scores):
         self.kept.setdefault(key, ({}, 10 ** 12))[0].update(scores)
@@ -497,3 +498,17 @@ def test_a_reading_whose_kept_answers_are_gone_before_it_was_finished_says_it_st
     assert again.answers == {}
     assert again.upto == "1795100460.000000"
     assert "starts over" in caplog.text
+
+
+def test_what_is_kept_of_a_reading_is_gone_thirty_minutes_after_it_began_however_late_it_was_kept(monkeypatch):
+    from services.detection import chat_pace
+
+    redis = _paced(monkeypatch)
+    monkeypatch.setattr(chat_pace.time, "time", lambda: 1000.0)
+    progress = chat_pace.Progress("1795100200.000000", "1795100400.000000",
+                                  {"conversations.history {}": {"messages": []}}, began=400.0)
+    redis.now = 1000 + 300   # the write lands five minutes after its time was counted
+    chat_pace.keep("org", "C1", progress)
+
+    redis.now = 400 + chat_pace.PROGRESS_SECONDS
+    assert redis.get("detection:chat:progress:org:C1") is None

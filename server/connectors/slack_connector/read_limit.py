@@ -128,8 +128,12 @@ def waiting(team_id: str, endpoint: str, caller: Optional[str] = None) -> Option
         if client and client.exists(_key("limited", team_id, endpoint)):
             caller = caller or uuid.uuid4().hex
             key = _key("waiting", team_id, endpoint)
-            client.zadd(key, {caller: client.time()[0] + WAITING_SECONDS})
-            client.expire(key, WAITING_SECONDS)
+            now = client.time()[0]
+            # The key itself is given no expiry, which could take a caller just
+            # added with it. Callers out of time are dropped here and in take(),
+            # and Redis drops the key with its last one.
+            client.zremrangebyscore(key, "-inf", now)
+            client.zadd(key, {caller: now + WAITING_SECONDS})
     except Exception:
         logger.warning("%s Could not hold the reader back: Redis did not answer", _LOG)
     return caller

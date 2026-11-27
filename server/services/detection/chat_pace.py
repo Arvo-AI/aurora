@@ -146,6 +146,8 @@ def keep(org_id: str, channel_id: str, progress: Progress) -> None:
             redis.delete(_key("begun", org_id, channel_id))
             return
         redis.set(_key("progress", org_id, channel_id), kept, ex=left)
+        # And to the moment itself, in case the write above was slow to land.
+        redis.expireat(_key("progress", org_id, channel_id), int(progress.began + PROGRESS_SECONDS))
         redis.set(_key("begun", org_id, channel_id), progress.last_ts, ex=BEGUN_SECONDS)
     except Exception:
         logger.warning("%s Could not keep the unfinished reading of channel %s: Redis did not answer",
