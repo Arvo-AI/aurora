@@ -42,8 +42,9 @@ LIMITED_SECONDS = 24 * 3600
 # How long what Slack already gave for an unfinished reading is kept, counted
 # from when the reading began. A reading not finished by then starts over.
 PROGRESS_SECONDS = 30 * 60
-# Slack is taken at its word on how long to wait, up to this.
-MAX_WAIT_SECONDS = 15 * 60
+# Slack is taken at its word on how long to wait. Up to a day: a header that
+# says more is not believed.
+MAX_WAIT_SECONDS = LIMITED_SECONDS
 
 
 class Busy(Exception):
@@ -104,7 +105,8 @@ def _take(team_id: str, endpoint: str) -> None:
 
 
 def _was_limited(team_id: str, endpoint: str, retry_after: Optional[int]) -> None:
-    wait = SPACING_SECONDS if retry_after is None else min(max(retry_after, 1), MAX_WAIT_SECONDS)
+    # As long as Slack asked for, and never less than the reader's own spacing.
+    wait = min(max(retry_after or 0, SPACING_SECONDS), MAX_WAIT_SECONDS)
     logger.info("%s Slack rate limited %s; not asking this workspace again for %ds", _LOG, endpoint, wait)
     redis = _redis()
     if redis is None:
