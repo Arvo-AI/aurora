@@ -192,27 +192,32 @@ def _new_replies(ask, channel_id: str, parents: List[dict], last_ts: str, upto: 
     has one cursor: a reply left for a later turn would be behind it by then,
     and never read. A thread that is gone has nothing to read.
     """
-    active = [m for m in parents
-              if m.get("reply_count") and float(m.get("latest_reply") or 0) > float(last_ts)]
     replies = []
-    for parent in active:
-        page_cursor = None
-        for _ in range(_REPLY_PAGES):
-            params = {"channel": channel_id, "ts": parent["ts"], "oldest": last_ts, "latest": upto,
-                      "limit": _REPLY_PAGE}
-            if page_cursor:
-                params["cursor"] = page_cursor
-            try:
-                result = ask(chat_pace.REPLIES, params)
-            except SlackAPIError as gone:
-                if gone.error != "thread_not_found":
-                    raise
-                break
-            replies.extend(m for m in result.get("messages", [])
-                           if m.get("ts") and m["ts"] != parent["ts"] and float(m["ts"]) > float(last_ts))
-            page_cursor = (result.get("response_metadata") or {}).get("next_cursor")
-            if not result.get("has_more") or not page_cursor:
-                break
+    for parent in parents:
+        if parent.get("reply_count") and float(parent.get("latest_reply") or 0) > float(last_ts):
+            replies.extend(_thread_replies(ask, channel_id, parent["ts"], last_ts, upto))
+    return replies
+
+
+def _thread_replies(ask, channel_id: str, thread_ts: str, last_ts: str, upto: str) -> List[dict]:
+    """The replies of one thread in (*last_ts*, *upto*], without its first message."""
+    replies, page_cursor = [], None
+    for _ in range(_REPLY_PAGES):
+        params = {"channel": channel_id, "ts": thread_ts, "oldest": last_ts, "latest": upto,
+                  "limit": _REPLY_PAGE}
+        if page_cursor:
+            params["cursor"] = page_cursor
+        try:
+            result = ask(chat_pace.REPLIES, params)
+        except SlackAPIError as gone:
+            if gone.error != "thread_not_found":
+                raise
+            break
+        replies.extend(m for m in result.get("messages", [])
+                       if m.get("ts") and m["ts"] != thread_ts and float(m["ts"]) > float(last_ts))
+        page_cursor = (result.get("response_metadata") or {}).get("next_cursor")
+        if not result.get("has_more") or not page_cursor:
+            break
     return replies
 
 
