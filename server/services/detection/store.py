@@ -347,6 +347,22 @@ def vouch_check(cursor, org_id: str, check_id: str, user_id: str) -> bool:
     return cursor.rowcount > 0
 
 
+def start_active(cursor, org_id: str, check_id: str) -> bool:
+    """A new check for an asset nothing else watches opens cases from the start.
+
+    Unlike vouch_check nobody takes responsibility for it, so vouched_by stays
+    empty: it keeps the ordinary record rules and loses ``proven`` the usual
+    way (record.loses_proven).
+    """
+    cursor.execute(
+        """UPDATE detection_checks
+           SET state = %s, consecutive_false_fires = 0, updated_at = NOW()
+           WHERE id = %s AND org_id = %s AND state = %s""",
+        (STATE_PROVEN, check_id, org_id, STATE_SILENT),
+    )
+    return cursor.rowcount > 0
+
+
 def _lock_by_name(cursor, org_id: str, name: str):
     cursor.execute(
         """SELECT id, revision, state, retired_reason, """ + ", ".join(DEFINITION_FIELDS) + """

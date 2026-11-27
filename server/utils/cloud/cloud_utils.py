@@ -152,7 +152,7 @@ def set_provider_preference(provider: Union[str, List[str]]):
         _set_ctx("provider_preference", provider)
 
 
-_NON_RCA_SOURCES = frozenset(("action", "prediscovery"))
+_NON_RCA_SOURCES = frozenset(("action", "prediscovery", "coverage_scan"))
 
 
 def _is_background_rca(state_context, is_background: bool) -> bool:

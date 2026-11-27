@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Detection: the Monitoring Coverage Scan. After prediscovery maps an org's
+  infrastructure (on a new connection, then weekly), Aurora lists each asset,
+  finds what already monitors it (the provider's monitors and alarms, and its
+  own checks) and saves a read-only check for each failure nothing watches.
+  It does not duplicate a working alert. A check for an asset with no other
+  monitoring opens a case when it fails from the start, instead of waiting to
+  earn it. What is covered, and what is left open, is kept in the
+  "Monitoring Coverage" memory entry. Separate from the Alert Gap Audit, which
+  reads alert definitions in repos and opens PRs.
+
+### Changed
+- Detection: an incident's check is now written at the end of its RCA, not by
+  the postmortem. The postmortem only runs when someone clicks Resolve, so teams
+  that read RCAs in Slack never got one.
+
 ### Fixed
 - Investigations: a burst of alerts no longer drops RCAs. Before, an alert over
   the background-chat limit (5 per user per 5 minutes, shared with actions and

@@ -15,6 +15,7 @@ from typing import Optional
 from pydantic import BaseModel, Field, StrictFloat, StrictInt, StrictStr, ValidationError
 
 from services.detection import (
+    COVERAGE_SCAN_SOURCE,
     DEFAULT_INTERVAL_SECONDS,
     MIN_INTERVAL_SECONDS,
     ORIGIN_KINDS,
@@ -32,6 +33,7 @@ from services.detection.store import (
     record_replay,
     retire_check,
     save_check,
+    start_active,
     take_checks_for_review,
 )
 from utils.auth.command_gate import gate_command
@@ -44,6 +46,10 @@ _STATE_NOTES = {
     "silent": "It runs on its schedule and records results. A silent check notifies no one.",
     "proven": "It runs on its schedule. If it starts failing it opens a case.",
 }
+_UNMONITORED_NOTE = (
+    "Nothing else watches this, so it opens a case when it fails from the start. Two fires "
+    "in a row on nothing send it back to silent."
+)
 _VOUCHED_NOTE = (
     "A person asked for this check, so it opens a case when it fails. Two fires in a row "
     "on nothing send it back to silent."
@@ -107,6 +113,15 @@ class SaveDetectionCheckArgs(BaseModel):
         default="", description="The incident id, or the person who asked, that this check came from."
     )
     reason: str = Field(default="", description="Why it is being created or changed.")
+    unmonitored: bool = Field(
+        default=False,
+        description=(
+            "Monitoring Coverage Scan only, with origin_kind 'graph' or 'explore': true when "
+            "nothing else monitors this failure on this asset (no monitor, alarm, alert rule or "
+            "other check). Such a check opens a case when it fails from the start, instead of "
+            "waiting to earn it, because otherwise nobody would hear about it at all."
+        ),
+    )
     window_seconds: StrictInt = Field(
         default=0,
         description=(
@@ -194,6 +209,26 @@ def _asked_by_a_person(origin: dict) -> bool:
     return state is not None and not getattr(state, "is_background", True)
 
 
+_UNMONITORED_ORIGINS = frozenset(("graph", "explore"))
+
+
+def _starts_active(args, origin: dict) -> bool:
+    """Whether a check the coverage scan wrote for an unwatched asset opens cases at once.
+
+    Aurora's own checks start silent and earn trust from their record. That
+    leaves an asset nothing else watches with no alert at all for weeks, which
+    is the blind spot the scan exists to close. Only the scan's own session
+    may claim it, whatever the model wrote, and it can still be demoted the
+    usual way (two fires in a row on nothing).
+    """
+    if not args.unmonitored or origin["kind"] not in _UNMONITORED_ORIGINS:
+        return False
+    from utils.cloud.cloud_utils import get_state_context
+
+    state = get_state_context()
+    return state is not None and getattr(state, "trigger_source", None) == COVERAGE_SCAN_SOURCE
+
+
 def _parse_check(fields: dict):
     """(args, definition, origin, '') from the tool's keyword arguments, or an error as JSON last."""
     try:
@@ -261,14 +296,16 @@ def _keep_replay(cursor, org_id: str, saved: tuple, definition: dict, replayed) 
         )
 
 
-def _saved_response(saved: tuple, state: str, vouched: bool, replayed) -> str:
+def _saved_response(saved: tuple, state: str, vouched: bool, replayed, active: bool = False) -> str:
     check_id, revision, changed = saved
     response = {
         "status": "saved" if changed else "unchanged",
         "check_id": check_id,
         "revision": revision,
         "state": state,
-        "note": _VOUCHED_NOTE if vouched and state == "proven" else _STATE_NOTES.get(state, ""),
+        "note": (_VOUCHED_NOTE if vouched and state == "proven"
+                 else _UNMONITORED_NOTE if active and state == "proven"
+                 else _STATE_NOTES.get(state, "")),
     }
     if replayed:
         response["replay"] = replayed.record
@@ -305,13 +342,16 @@ def _store_check(user_id: str, args, definition: dict, origin: dict, replayed) -
             })
         if replayed:
             _keep_replay(cursor, org_id, saved, definition, replayed)
+        active = bool(saved[2] and _starts_active(args, origin))
+        if active:
+            start_active(cursor, org_id, saved[0])
         # Read back: an unchanged save of a proven check is still proven.
         cursor.execute(
             "SELECT state, vouched_by IS NOT NULL FROM detection_checks WHERE id = %s", (saved[0],),
         )
         state, vouched = cursor.fetchone()
         conn.commit()
-    return _saved_response(saved, state, vouched, replayed)
+    return _saved_response(saved, state, vouched, replayed, active)
 
 
 def save_detection_check(user_id: str | None = None, **fields) -> str:
