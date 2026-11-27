@@ -34,8 +34,9 @@ class SlackClient:
     Handles message sending, channel listing, and message reading.
     """
     
-    def __init__(self, access_token: str):
+    def __init__(self, access_token: str, *, retry_rate_limits: bool = True):
         self.access_token = access_token
+        self.retry_rate_limits = retry_rate_limits
         self.headers = {
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json"
@@ -71,6 +72,8 @@ class SlackClient:
     def _make_request(self, method: str, endpoint: str, data: Optional[Dict] = None, timeout: int = 30, max_retries: int = 3) -> Dict[str, Any]:
         """Make a request to Slack API with retry on 429 rate limits."""
         url = f"{SLACK_API_BASE}/{endpoint}"
+        if not self.retry_rate_limits:
+            max_retries = 0
         
         for attempt in range(max_retries + 1):
             try:
@@ -89,6 +92,9 @@ class SlackClient:
                 return self._validate_response(response.json(), endpoint)
                 
             except requests.RequestException as e:
+                if not self.retry_rate_limits:
+                    # The delivery worker schedules its own retries using the HTTP response.
+                    raise
                 if attempt < max_retries and "429" in str(e):
                     retry_after = self._get_retry_delay(attempt)
                     logger.warning("Rate limited on %s, retrying in %ds (attempt %d/%d)", endpoint, retry_after, attempt + 1, max_retries)

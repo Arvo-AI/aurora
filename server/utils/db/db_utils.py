@@ -841,7 +841,8 @@ def initialize_tables():
                      ALTER TABLE incidents ADD COLUMN IF NOT EXISTS slack_source_reply_ts VARCHAR(50);
                      ALTER TABLE incidents ADD COLUMN IF NOT EXISTS slack_source_reply_due TIMESTAMPTZ,
                          ADD COLUMN IF NOT EXISTS slack_source_target JSONB,
-                         ADD COLUMN IF NOT EXISTS slack_source_reply_attempts INTEGER NOT NULL DEFAULT 0;
+                         ADD COLUMN IF NOT EXISTS slack_source_reply_attempts INTEGER NOT NULL DEFAULT 0,
+                         ADD COLUMN IF NOT EXISTS slack_source_reply_errors INTEGER NOT NULL DEFAULT 0;
                      CREATE INDEX IF NOT EXISTS idx_incidents_slack_source_due
                          ON incidents(org_id, slack_source_reply_due) WHERE slack_source_reply_due IS NOT NULL;
                      CREATE INDEX IF NOT EXISTS idx_incidents_user_id ON incidents(user_id, started_at DESC);

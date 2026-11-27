@@ -364,8 +364,9 @@ def build_source_rca_reply(data: Dict[str, Any]):
 def send_source_rca_reply(client, channel: str, parent_ts: str, data: Dict[str, Any], delivery_id: str):
     """Post the findings under the provider's message without editing that message."""
     text, blocks = build_source_rca_reply(data)
-    return try_post_threaded(client, channel=channel, thread_ts=parent_ts, require_threaded=True,
-                             text=text, blocks=blocks, client_msg_id=delivery_id)
+    # The delivery worker verifies placement and persists any stray message for cleanup.
+    return client.send_message(channel=channel, thread_ts=parent_ts, text=text, blocks=blocks,
+                               client_msg_id=delivery_id)
 
 
 def send_slack_investigation_completed_notification(

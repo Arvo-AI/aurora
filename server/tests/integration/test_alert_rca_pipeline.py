@@ -324,7 +324,7 @@ class AlertPipeline(unittest.TestCase):
             aws_post("Service: power\nBattery offline", subject="Battery offline")
             wait_for(lambda: sql("SELECT count(*) FROM incidents WHERE org_id=%s AND alert_title='Battery offline' "
                                  "AND slack_source_reply_attempts=1", (org,)) == [(1,)], "unmatched delivery")
-            sql("UPDATE incidents SET slack_source_reply_due=NOW(), slack_source_reply_attempts=3 "
+            sql("UPDATE incidents SET slack_source_reply_due=NOW(), slack_source_reply_attempts=9 "
                 "WHERE org_id=%s AND alert_title='Battery offline'", (org,))
             retry_due_source_replies.delay()
             wait_for(lambda: sql("SELECT slack_source_reply_ts, slack_source_reply_due FROM incidents "

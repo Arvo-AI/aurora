@@ -114,6 +114,11 @@ def _published_at(data):
         return None
 
 
+def source_thread_window_end(data):
+    when = _published_at(data)
+    return when + _WINDOW if when is not None else None
+
+
 def _channel_page(client, params, team, cache, org):
     # Bursts share history pages for the same minute. Only closed windows
     # are cached so a late post is visible on the very next retry.
@@ -128,7 +133,7 @@ def _channel_page(client, params, team, cache, org):
         except Exception:
             logger.warning("Slack history cache unavailable")
     page = client._make_request("GET", "conversations.history", params, timeout=10, max_retries=0)
-    if key:
+    if key and (not page.get("has_more") or (page.get("response_metadata") or {}).get("next_cursor")):
         keep = [msg for msg in page.get("messages", []) if
                 (msg.get("app_id") or (msg.get("bot_profile") or {}).get("app_id")) in _APP_SOURCES]
         try:
