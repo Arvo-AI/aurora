@@ -378,6 +378,12 @@ class _Redis:
     def delete(self, key):
         self.kept.pop(key, None)
 
+    def eval(self, _script, _keys, key, seconds):
+        # The one script there is: hold a key, unless it is held for longer already.
+        if self.kept.get(key, (None, 0))[1] < self.now + int(seconds):
+            self.kept[key] = ("1", self.now + int(seconds))
+        return 1
+
 
 class _LimitedSlack(_SlackWithThreads):
     """Slack as it is for an app from outside its Marketplace: one call a minute to each method."""
@@ -387,7 +393,7 @@ class _LimitedSlack(_SlackWithThreads):
         self.redis, self.last, self.calls, self.refused = redis, {}, [], 0
 
     def _make_request(self, method, endpoint, params, **kwargs):
-        from connectors.slack_connector.client import SlackRateLimited
+        from connectors.slack_connector.client import SlackAPIError, SlackRateLimited
 
         if endpoint.startswith("conversations."):
             since = self.redis.now - self.last.get(endpoint, -60)
@@ -396,7 +402,24 @@ class _LimitedSlack(_SlackWithThreads):
                 raise SlackRateLimited(endpoint, 60 - since)
             self.last[endpoint] = self.redis.now
             self.calls.append((endpoint, params.get("ts")))
+        if endpoint == "conversations.replies" and params["ts"] not in self.replies:
+            raise SlackAPIError("thread_not_found")
         return super()._make_request(method, endpoint, params, **kwargs)
+
+
+def _read_over_turns(slack, redis, last_ts, threads=None):
+    """Read one channel the way the reader does, a minute between turns, until it is read."""
+    from services.detection import chat_pace
+    from services.detection.chat_intake import _gather
+
+    for _turn in range(10):
+        progress = chat_pace.resume("org", "C1", last_ts, "1795100400.000000")
+        try:
+            return _gather(slack, _TEAM, "C1", last_ts, "UBOT", threads, progress)
+        except chat_pace.Busy:
+            chat_pace.keep("org", "C1", progress)
+            redis.now += 60
+    raise AssertionError("the channel was never read")
 
 
 def _paced(monkeypatch):
@@ -408,9 +431,6 @@ def _paced(monkeypatch):
 
 
 def test_a_channel_slack_lets_be_read_one_call_a_minute_is_read_in_full_over_several_turns(monkeypatch):
-    from services.detection import chat_pace
-    from services.detection.chat_intake import _gather
-
     redis = _paced(monkeypatch)
     last_ts = "1795100200.000000"
     parents = [{"ts": "1795100%d00.000100" % n, "text": "thread %d" % n, "team": _TEAM, "user": "UMEM1",
@@ -419,17 +439,7 @@ def test_a_channel_slack_lets_be_read_one_call_a_minute_is_read_in_full_over_sev
                              "team": _TEAM, "user": "UMEM2"}] for p in parents}
     slack = _LimitedSlack(parents, replies, redis)
 
-    read, turns = None, 0
-    while read is None and turns < 10:
-        turns += 1
-        progress = chat_pace.resume("org", "C1", last_ts, "1795100400.000000")
-        try:
-            read = _gather(slack, _TEAM, "C1", last_ts, "UBOT", progress=progress)
-        except chat_pace.Busy:
-            chat_pace.keep("org", "C1", progress)
-            redis.now += 60
-
-    new, _context, newest = read
+    new, _context, newest = _read_over_turns(slack, redis, last_ts)
     assert sorted(m["text"] for m in new) == ["reply to thread 0", "reply to thread 1"]
     assert newest == "1795100300.000100"
     # Slack was asked each thing once, and once it had said no it was not asked too soon again.
@@ -438,19 +448,16 @@ def test_a_channel_slack_lets_be_read_one_call_a_minute_is_read_in_full_over_sev
     assert slack.refused == 1
 
 
-def test_a_thread_that_is_gone_does_not_stop_the_rest_of_the_channel_being_read(monkeypatch):
-    from connectors.slack_connector.client import SlackAPIError
-    from services.detection.chat_intake import _gather
+def test_a_deleted_thread_is_asked_about_once_and_the_thread_after_it_is_still_read(monkeypatch):
+    redis = _paced(monkeypatch)
+    last_ts = "1795100200.000000"
+    gone, live = "1795000000.000100", "1795000100.000100"
+    reply = {"ts": "1795100300.000100", "thread_ts": live, "text": "checkout is failing again",
+             "team": _TEAM, "user": "UMEM1"}
+    slack = _LimitedSlack([], {live: [{"ts": live, "text": "checkout"}, reply]}, redis)
 
-    _paced(monkeypatch)
-    said = {"ts": "1795100300.000100", "text": "payments is down", "team": _TEAM, "user": "UMEM1"}
+    new, _context, _newest = _read_over_turns(
+        slack, redis, last_ts, {gone: "1795100250.000100", live: reply["ts"]})
 
-    class _Slack_(_Slack):
-        def _make_request(self, method, endpoint, params, **kwargs):
-            if endpoint == "conversations.replies":
-                raise SlackAPIError("thread_not_found")
-            return super()._make_request(method, endpoint, params, **kwargs)
-
-    new, _context, _newest = _gather(_Slack_([said]), _TEAM, "C1", "1795100200.000000", "UBOT",
-                                     {"1795000000.000100": "1795100250.000100"})
-    assert [m["text"] for m in new] == ["payments is down"]
+    assert [m["text"] for m in new] == ["checkout is failing again"]
+    assert [call for call in slack.calls if call[1] == gone] == [("conversations.replies", gone)]

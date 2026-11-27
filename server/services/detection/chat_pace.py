@@ -12,7 +12,8 @@ lost: the reading stops where it is and goes on from there on a later turn.
 What it had already been given by Slack is kept for that, for a few minutes
 (see progress below), so a channel that needs several calls is read one call
 at a time and not started over each minute. That is message text, held in
-Redis for at most PROGRESS_SECONDS and dropped as soon as the reading is done.
+Redis for at most PROGRESS_SECONDS from when the reading began, and dropped as
+soon as the reading is done.
 
 Without Redis there is no pacing and no progress kept. A 429 still only stops
 the turn.
@@ -20,6 +21,7 @@ the turn.
 
 import json
 import logging
+import time
 from typing import Any, Dict, Optional
 
 from connectors.slack_connector.client import SlackAPIError, SlackRateLimited
@@ -37,8 +39,9 @@ REPLIES = "conversations.replies"
 SPACING_SECONDS = 50
 # How long a workspace stays known as limited after its last 429.
 LIMITED_SECONDS = 24 * 3600
-# How long what Slack already gave for an unfinished reading is kept.
-PROGRESS_SECONDS = 20 * 60
+# How long what Slack already gave for an unfinished reading is kept, counted
+# from when the reading began. A reading not finished by then starts over.
+PROGRESS_SECONDS = 30 * 60
 # Slack is taken at its word on how long to wait, up to this.
 MAX_WAIT_SECONDS = 15 * 60
 
@@ -68,7 +71,18 @@ def limited(team_id: str, endpoint: str = HISTORY) -> bool:
     try:
         return bool(redis and redis.exists(_key("limited", team_id, endpoint)))
     except Exception:
+        logger.warning("%s Could not tell whether workspace %s is rate limited: Redis did not answer",
+                       _LOG, sanitize(team_id))
         return False
+
+
+# Hold KEYS[1] for ARGV[1] seconds, unless it is already held for longer.
+_HOLD = """
+if redis.call('TTL', KEYS[1]) < tonumber(ARGV[1]) then
+    redis.call('SET', KEYS[1], '1', 'EX', ARGV[1])
+end
+return 1
+"""
 
 
 def _take(team_id: str, endpoint: str) -> None:
@@ -98,7 +112,8 @@ def _was_limited(team_id: str, endpoint: str, retry_after: Optional[int]) -> Non
         return
     try:
         redis.set(_key("limited", team_id, endpoint), "1", ex=LIMITED_SECONDS)
-        redis.set(_key("wait", team_id, endpoint), "1", ex=wait)
+        # Two calls can be turned away at once: the longer wait is the one kept.
+        redis.eval(_HOLD, 1, _key("wait", team_id, endpoint), wait)
     except Exception:
         logger.warning("%s Could not record the rate limit: Redis did not answer", _LOG)
 
@@ -129,14 +144,24 @@ class Progress:
     later turn that takes the reading up again, gets the first answer.
     """
 
-    def __init__(self, last_ts: str, upto: str, answers: Optional[Dict[str, Any]] = None):
+    def __init__(self, last_ts: str, upto: str, answers: Optional[Dict[str, Any]] = None,
+                 began: Optional[float] = None):
         self.last_ts, self.upto = last_ts, upto
         self.answers: Dict[str, Any] = answers or {}
+        self.began = time.time() if began is None else began
 
     def ask(self, client, team_id: str, endpoint: str, params: Dict[str, Any]) -> Dict[str, Any]:
         key = endpoint + " " + json.dumps(params, sort_keys=True)
         if key not in self.answers:
-            result = ask(client, team_id, endpoint, params)
+            try:
+                result = ask(client, team_id, endpoint, params)
+            except SlackAPIError as gone:
+                # A thread that was deleted has no replies. Kept as an answer
+                # like any other, so a reading taken up again does not spend
+                # its next call asking for it once more.
+                if endpoint != REPLIES or gone.error != "thread_not_found":
+                    raise
+                result = {}
             self.answers[key] = {
                 "messages": result.get("messages", []),
                 "has_more": bool(result.get("has_more")),
@@ -153,25 +178,39 @@ def resume(org_id: str, channel_id: str, last_ts: str, upto: str) -> Progress:
     try:
         kept = json.loads(redis.get(_key("progress", org_id, channel_id)) or "null") if redis else None
     except Exception:
+        logger.warning("%s Could not take up the reading of channel %s again: Redis did not answer",
+                       _LOG, sanitize(channel_id))
         kept = None
     if isinstance(kept, dict) and kept.get("last_ts") == last_ts and kept.get("upto"):
-        return Progress(last_ts, kept["upto"], kept.get("answers") or {})
+        return Progress(last_ts, kept["upto"], kept.get("answers") or {}, kept.get("began"))
     return Progress(last_ts, upto)
 
 
 def keep(org_id: str, channel_id: str, progress: Progress) -> None:
-    """Keep an unfinished reading for the turn that takes it up again."""
+    """Keep an unfinished reading for the turn that takes it up again.
+
+    Until PROGRESS_SECONDS after it began, however many times it is kept. Past
+    that it is dropped, and the channel is read from the start.
+    """
     redis = _redis()
     if redis is None or not progress.answers:
         return
+    left = int(progress.began + PROGRESS_SECONDS - time.time())
     try:
+        if left <= 0:
+            logger.warning("%s The reading of channel %s was not finished in %d minutes and starts over",
+                           _LOG, sanitize(channel_id), PROGRESS_SECONDS // 60)
+            redis.delete(_key("progress", org_id, channel_id))
+            return
         redis.set(
             _key("progress", org_id, channel_id),
-            json.dumps({"last_ts": progress.last_ts, "upto": progress.upto, "answers": progress.answers}),
-            ex=PROGRESS_SECONDS,
+            json.dumps({"last_ts": progress.last_ts, "upto": progress.upto, "began": progress.began,
+                        "answers": progress.answers}),
+            ex=left,
         )
     except Exception:
-        logger.warning("%s Could not keep an unfinished reading: Redis did not answer", _LOG)
+        logger.warning("%s Could not keep the unfinished reading of channel %s: Redis did not answer",
+                       _LOG, sanitize(channel_id))
 
 
 def done(org_id: str, channel_id: str) -> None:
@@ -182,4 +221,5 @@ def done(org_id: str, channel_id: str) -> None:
             redis.delete(_key("progress", org_id, channel_id))
     except Exception:
         # It expires by itself, and is not used once the cursor has moved.
-        logger.warning("%s Could not drop a finished reading: Redis did not answer", _LOG)
+        logger.warning("%s Could not drop the finished reading of channel %s: Redis did not answer",
+                       _LOG, sanitize(channel_id))

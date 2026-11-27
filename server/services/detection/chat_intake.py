@@ -26,7 +26,6 @@ import time
 from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from celery_config import celery_app
-from connectors.slack_connector.client import SlackAPIError
 from services.detection import chat_intake_enabled, chat_memory, chat_pace, chat_reader, chat_signals
 from services.detection.runner import _for_each_org, _org_cursor
 from utils.log_sanitizer import sanitize
@@ -190,7 +189,7 @@ def _new_replies(ask, channel_id: str, parents: List[dict], last_ts: str, upto: 
 
     Every thread with something new is read, and read to the end. The channel
     has one cursor: a reply left for a later turn would be behind it by then,
-    and never read. A thread that is gone has nothing to read.
+    and never read. A thread that is gone has nothing to read (chat_pace).
     """
     replies = []
     for parent in parents:
@@ -207,12 +206,7 @@ def _thread_replies(ask, channel_id: str, thread_ts: str, last_ts: str, upto: st
                   "limit": _REPLY_PAGE}
         if page_cursor:
             params["cursor"] = page_cursor
-        try:
-            result = ask(chat_pace.REPLIES, params)
-        except SlackAPIError as gone:
-            if gone.error != "thread_not_found":
-                raise
-            break
+        result = ask(chat_pace.REPLIES, params)
         replies.extend(m for m in result.get("messages", [])
                        if m.get("ts") and m["ts"] != thread_ts and float(m["ts"]) > float(last_ts))
         page_cursor = (result.get("response_metadata") or {}).get("next_cursor")
@@ -300,14 +294,15 @@ def _gather(client, team_id: str, channel_id: str, last_ts: str, bot_user_id: Op
     )
 
 
-def _keep(cur, org_id: str, turn: chat_signals.Turn, new: list, reports, newest_ts: str) -> None:
+def _keep(cur, org_id: str, turn: chat_signals.Turn, new: list, reports, newest_ts: str,
+          upto: str) -> None:
     """Store what one reading of a channel found, and move its cursor."""
     channel_id = turn.channel_id
     if new:
         chat_signals.record_read(cur, org_id, channel_id, len(new), len(reports or []),
                                  reports is not None)
     if reports is None:
-        if chat_signals.read_failed(cur, org_id, channel_id, newest_ts, turn.claim):
+        if chat_signals.read_failed(cur, org_id, channel_id, newest_ts, turn.claim, upto):
             chat_pace.done(org_id, channel_id)
             logger.warning("%s Gave up on %d message(s) in channel %s after repeated failures",
                            _LOG, len(new), sanitize(channel_id))
@@ -316,7 +311,7 @@ def _keep(cur, org_id: str, turn: chat_signals.Turn, new: list, reports, newest_
         kept = chat_signals.keep_report(cur, org_id, channel_id, report)
         if kept and report.asset:
             chat_signals.run_checks_now(cur, org_id, report.asset)
-    chat_signals.advance(cur, org_id, channel_id, newest_ts, turn.claim)
+    chat_signals.advance(cur, org_id, channel_id, newest_ts, turn.claim, upto)
     chat_pace.done(org_id, channel_id)
 
 
@@ -367,7 +362,7 @@ def _read_channel(client, workspace: _Workspace, turn: chat_signals.Turn, assets
 
     with _org_cursor(user_id, org_id) as (cur, conn):
         if cur is not None:
-            _keep(cur, org_id, turn, new, reports, newest_ts)
+            _keep(cur, org_id, turn, new, reports, newest_ts, progress.upto)
             conn.commit()
 
 
