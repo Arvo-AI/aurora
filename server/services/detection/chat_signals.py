@@ -262,25 +262,35 @@ def claim_channels(cursor, org_id: str, team_id: str, company: str,
     return [Turn(row[0], row[1], row[2], row[3], dict(row[4] or {})) for row in rows]
 
 
-def advance(cursor, org_id: str, channel_id: str, last_ts: str, claim: Any) -> None:
+def advance(cursor, org_id: str, channel_id: str, last_ts: str, claim: Any,
+            read_upto: Optional[str] = None) -> None:
     """The channel was read up to *last_ts*, by the turn holding *claim*.
 
     A turn that outlived its claim changes nothing: another has the channel by
-    then, and its cursor is the newer one. Threads noted as active are dropped
-    once read past, or after a day.
+    then, and its cursor is the newer one.
+
+    *read_upto* is the moment the reading took the channel at; *last_ts*, the
+    newest message it found, can be earlier. A thread noted as active is
+    dropped once its reply is no later than that moment: the thread was read
+    that far, whether or not the reply was still there. Otherwise after a day.
+
+    The channel still has something to read when a message was noted while
+    this turn held it, or a noted reply is later than the reading. It then
+    stays in line for the next turn.
     """
+    unread = """SELECT noted.key, noted.value FROM jsonb_each_text(threads) AS noted
+                WHERE noted.value::float8 > %s::float8
+                  AND noted.value::float8 > EXTRACT(EPOCH FROM NOW()) - 86400"""
+    upto = read_upto or last_ts
     cursor.execute(
         """UPDATE detection_chat_cursors
-           SET last_ts = %s, updated_at = NOW(), claimed_at = NULL, pending_since = NULL,
-               failed_attempts = 0,
-               threads = COALESCE((
-                   SELECT jsonb_object_agg(noted.key, noted.value)
-                   FROM jsonb_each_text(threads) AS noted
-                   WHERE noted.value::float8 > %s::float8
-                     AND noted.value::float8 > EXTRACT(EPOCH FROM NOW()) - 86400
-               ), '{}'::jsonb)
+           SET last_ts = %s, updated_at = NOW(), claimed_at = NULL, failed_attempts = 0,
+               pending_since = CASE WHEN pending_since > claimed_at THEN pending_since
+                                    WHEN EXISTS (""" + unread + """) THEN NOW() END,
+               threads = COALESCE((SELECT jsonb_object_agg(u.key, u.value) FROM (""" + unread + """) u),
+                                  '{}'::jsonb)
            WHERE org_id = %s AND channel_id = %s AND claimed_at = %s""",
-        (last_ts, last_ts, org_id, channel_id, claim),
+        (last_ts, upto, upto, org_id, channel_id, claim),
     )
 
 
@@ -300,7 +310,8 @@ def put_back(cursor, org_id: str, channel_id: str, claim: Any, first: bool = Fal
     )
 
 
-def read_failed(cursor, org_id: str, channel_id: str, newest_ts: str, claim: Any) -> bool:
+def read_failed(cursor, org_id: str, channel_id: str, newest_ts: str, claim: Any,
+                read_upto: Optional[str] = None) -> bool:
     """The channel's new messages could not be read. True when they are now given up on.
 
     They are tried again on the channel's next turn, MAX_FAILED_READS times.
@@ -323,7 +334,7 @@ def read_failed(cursor, org_id: str, channel_id: str, newest_ts: str, claim: Any
             (org_id, channel_id),
         )
         return False
-    advance(cursor, org_id, channel_id, newest_ts, claim)
+    advance(cursor, org_id, channel_id, newest_ts, claim, read_upto)
     return True
 
 
@@ -331,12 +342,19 @@ def note_activity(cursor, org_id: str, channel_id: str, thread_ts: Optional[str]
                   ts: Optional[str] = None) -> None:
     """A message just arrived in *channel_id* (a Slack event): read it on the next turn.
 
+    The channel keeps its place in line from the first message not yet read.
+    One that arrives while a turn holds the channel is noted as of now: that
+    turn may have taken the channel before the message was there, and must not
+    clear it (see advance).
+
     A reply in a thread is noted with its thread: the thread's first message can
     be further back than the history the next reading takes, and the reply
     would not be found from there. At most MAX_NOTED_THREADS a channel.
     """
     cursor.execute(
-        """UPDATE detection_chat_cursors SET pending_since = COALESCE(pending_since, NOW())
+        """UPDATE detection_chat_cursors
+           SET pending_since = CASE WHEN pending_since IS NULL OR pending_since <= claimed_at THEN NOW()
+                                    ELSE pending_since END
            WHERE org_id = %s AND channel_id = %s""",
         (org_id, channel_id),
     )
