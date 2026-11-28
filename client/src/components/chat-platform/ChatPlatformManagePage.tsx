@@ -29,7 +29,7 @@ import type { TeamsStatus } from "@/lib/services/teams";
 
 type PreferenceKey = NotificationPreferenceKey;
 
-// Two logical groups, each backed by a start + end boolean preference. The UI
+// Each card group is backed by a start + end boolean preference. The UI
 // exposes a single "when to notify" dropdown per group and derives/writes the
 // two underlying booleans, so the backend dispatcher gates stay unchanged.
 type NotifyMode = "never" | "start" | "end" | "both";
@@ -481,6 +481,17 @@ export function ChatPlatformManagePage({ config }: { config: ChatPlatformManageC
     setSavingGuest(false);
   };
 
+  const handleSourceReplies = async (enabled: boolean) => {
+    const key = "slack_investigation_complete_notifications";
+    setSavingPrefs((prev) => ({ ...prev, [key]: true }));
+    if (await persistPreference(key, enabled)) {
+      setPreferences((prev) => ({ ...prev, [key]: enabled }));
+    } else {
+      toast({ title: "Couldn't save alert thread replies", variant: "destructive" });
+    }
+    setSavingPrefs((prev) => ({ ...prev, [key]: false }));
+  };
+
   const handleGroupModeChange = async (
     group: typeof notificationGroups[number],
     mode: NotifyMode,
@@ -815,24 +826,35 @@ export function ChatPlatformManagePage({ config }: { config: ChatPlatformManageC
           <CardHeader>
             <CardTitle className="text-lg flex items-center gap-2">
               <Bell className="h-5 w-5" />
-              Incident Card
+              Notifications
             </CardTitle>
             <CardDescription>
-              The incident card is the structured banner Aurora posts (and keeps
-              updated) for an investigation — alert, severity, service, root
-              cause, links. It goes to <span className="font-medium">one</span>{" "}
-              channel. This does not affect Aurora replying when @mentioned, or
-              posting an investigation&apos;s conclusion to relevant team
-              channels — {config.copy.routingNote}
-              below.
+              Aurora can also send investigation findings to relevant team channels.
+              Configure team routing in the {config.displayName} memory below.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            {config.id === "slack" && (
+              <div className="flex items-center justify-between gap-4 p-4 border rounded-lg">
+                <div>
+                  <h4 className="font-medium text-sm">Alert thread replies</h4>
+                  <p className="text-xs text-muted-foreground">
+                    Reply with the completed RCA in the original CloudWatch, Sentry, PagerDuty, or incident.io alert thread, wherever it was posted.
+                  </p>
+                </div>
+                <Switch
+                  aria-label="Alert thread replies"
+                  checked={preferences.slack_investigation_complete_notifications}
+                  onCheckedChange={handleSourceReplies}
+                  disabled={isLoadingPrefs || savingPrefs.slack_investigation_complete_notifications || !canWrite}
+                />
+              </div>
+            )}
             {/* Per-event card behaviour: never / on start / on end / both. */}
             <div>
               <h4 className="text-sm font-medium mb-1">When to post the card</h4>
               <p className="text-xs text-muted-foreground mb-3">
-                Choose when the card is posted to the card channel for investigations and actions.
+                Choose when Aurora posts status cards to the selected channel.
               </p>
               <div className="space-y-4">
             {notificationGroups.map((group) => {
@@ -875,7 +897,7 @@ export function ChatPlatformManagePage({ config }: { config: ChatPlatformManageC
                 <div className="space-y-1 flex-1 min-w-0">
                   <h4 className="font-medium text-sm">Card channel</h4>
                   <p className="text-xs text-muted-foreground">
-                    Where Aurora posts the structured incident card. Must be an active channel.
+                    Choose an active channel for status cards.
                   </p>
                 </div>
                 <Popover open={cardPickerOpen} onOpenChange={setCardPickerOpen}>
@@ -967,7 +989,7 @@ export function ChatPlatformManagePage({ config }: { config: ChatPlatformManageC
                     </div>
                     <p className="text-xs text-muted-foreground -mt-1">
                       Aurora posts free-form teammate messages in these channels when relevant.
-                      The structured incident card goes to the card channel set in the Incident Card section above.
+                      Status cards go to the channel selected under Notifications.
                     </p>
                     {/* Search over the active list, so a long membership stays
                         manageable (mirrors the activate panel's search). */}

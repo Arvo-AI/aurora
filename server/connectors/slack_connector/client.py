@@ -50,8 +50,10 @@ class SlackClient:
     Handles message sending, channel listing, and message reading.
     """
     
-    def __init__(self, access_token: str, team_id: Optional[str] = None):
+    def __init__(self, access_token: str, team_id: Optional[str] = None, *, retry_rate_limits: bool = True):
         self.access_token = access_token
+        # False: a 429 raises SlackRateLimited at once, for callers that schedule their own retries.
+        self.retry_rate_limits = retry_rate_limits
         # The workspace the token belongs to, when the caller knows it. With it,
         # reads of messages are counted against that workspace's rate limit
         # together with the chat reader's (see read_limit).
@@ -96,6 +98,8 @@ class SlackClient:
         ahead of the chat reader, which shares the same limit and can come back
         later: the reader is told to keep off the method until this call is
         over, and learns of any 429 this call gets."""
+        if not self.retry_rate_limits:
+            max_retries = 0
         team_id = self.team_id if endpoint in read_limit.METHODS and max_retries > 0 else None
         if not team_id:
             return self._request(method, endpoint, data, timeout, max_retries)
@@ -140,6 +144,9 @@ class SlackClient:
                 return self._validate_response(response.json(), endpoint)
                 
             except requests.RequestException as e:
+                if not self.retry_rate_limits:
+                    # The delivery worker schedules its own retries using the HTTP response.
+                    raise
                 if attempt < max_retries and "429" in str(e):
                     retry_after = self._get_retry_delay(attempt)
                     logger.warning("Rate limited on %s, retrying in %ds (attempt %d/%d)", endpoint, retry_after, attempt + 1, max_retries)
@@ -151,9 +158,11 @@ class SlackClient:
         raise ValueError(f"Failed to communicate with Slack after {max_retries} retries: rate limited on {endpoint}")
     
     def send_message(self, channel: str, text: str, thread_ts: Optional[str] = None, 
-                     blocks: Optional[List[Dict]] = None) -> Dict[str, Any]:
+                     blocks: Optional[List[Dict]] = None, client_msg_id: Optional[str] = None) -> Dict[str, Any]:
         """Send a message to a Slack channel."""
         data = {"channel": channel, "text": text}
+        if client_msg_id:
+            data["client_msg_id"] = client_msg_id
         if thread_ts:
             data["thread_ts"] = thread_ts
         if blocks:

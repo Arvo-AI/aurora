@@ -8,6 +8,7 @@ import { SentryConnectionStep } from "@/components/sentry/SentryConnectionStep";
 import { SentryWebhookStep } from "@/components/sentry/SentryWebhookStep";
 import { getUserFriendlyError, copyToClipboard } from "@/lib/utils";
 import ConnectorAuthGuard from "@/components/connectors/ConnectorAuthGuard";
+import { AlertThreadReplyToggle } from "@/components/connectors/AlertThreadReplyToggle";
 import { SENTRY_PURPLE } from "@/components/sentry/constants";
 
 const PROVIDER_ID = 'sentry';
@@ -187,6 +188,11 @@ export default function SentryAuthPage() {
           </span>
         </div>
 
+        {isConnected && (
+          <div className="mb-4">
+            <AlertThreadReplyToggle source="sentry" />
+          </div>
+        )}
         {!isConnected ? (
           <SentryConnectionStep
             authToken={authToken}

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -104,17 +106,30 @@ def _extract_project_slug(payload: Dict[str, Any]) -> str:
             project_slug = candidate.get("project_slug")
             if project_slug:
                 return str(project_slug)[:255]
+            # Issue-alert webhooks can supply a numeric project and the slug
+            # only in the event's API URL.
+            project_path = re.search(r"/projects/[^/]+/([^/?#]+)/", str(candidate.get("url") or ""))
+            if project_path:
+                return project_path[1][:255]
+            if isinstance(project, (str, int)) and project:
+                return str(project)[:255]
     return "unknown"
 
 
 def _extract_issue_id(payload: Dict[str, Any]) -> Optional[str]:
-    """Extract a stable Sentry issue/group identifier."""
+    """Sentry event IDs and issue/group IDs refer to different objects."""
     data = payload.get("data") or {}
-    for candidate in (data.get("issue"), data.get("error"), data.get("event")):
-        if isinstance(candidate, dict):
-            iid = candidate.get("id") or candidate.get("issue_id") or candidate.get("groupID")
-            if iid:
-                return str(iid)
+    issue = data.get("issue") or {}
+    if issue.get("id") is not None:
+        return str(issue["id"])
+    event = data.get("event") or data.get("error") or {}
+    group = event.get("groupID") or event.get("group_id") or event.get("issue_id")
+    if group:
+        return str(group)
+    for field in ("web_url", "issue_url"):
+        match = re.search(r"/issues/(\d+)(?=/|[?#]|$)", str(event.get(field) or ""))
+        if match:
+            return match[1]
     return None
 
 
@@ -192,6 +207,14 @@ def process_sentry_event(
         issue_id = _extract_issue_id(payload)
         alert_metadata = _build_alert_metadata(payload, resource)
 
+        # A group may fire many times. Identical webhook retries share a digest,
+        # while new events on the same issue keep their own source payload.
+        digest = hashlib.sha256(json.dumps([resource, payload], sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        if issue_id:
+            alert_metadata["issueId"] = issue_id
+            alert_metadata["correlation_key"] = json.dumps([service, issue_id])
+        alert_metadata["source_post_at"] = metadata.get("timestamp")
+
         with db_pool.get_admin_connection() as conn:
             with conn.cursor() as cursor:
                 from utils.auth.stateless_auth import set_rls_context
@@ -204,17 +227,14 @@ def process_sentry_event(
                 cursor.execute(
                     """
                     INSERT INTO sentry_events
-                    (user_id, org_id, issue_id, issue_title, level, project_slug,
-                     resource, action, payload, received_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (org_id, issue_id, action) WHERE issue_id IS NOT NULL
-                    DO UPDATE
-                    SET issue_title = EXCLUDED.issue_title,
-                        level = EXCLUDED.level,
-                        project_slug = EXCLUDED.project_slug,
-                        resource = EXCLUDED.resource,
-                        payload = EXCLUDED.payload,
-                        received_at = EXCLUDED.received_at
+                    (user_id, org_id, group_id, issue_title, level, project_slug,
+                     resource, action, payload, received_at, delivery_key)
+                    SELECT %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM sentry_events WHERE org_id=%s AND user_id=%s
+                        AND delivery_key IS NULL AND resource=%s AND payload=%s::jsonb
+                    )
+                    ON CONFLICT (org_id, user_id, delivery_key) DO NOTHING
                     RETURNING id
                     """,
                     (
@@ -227,15 +247,20 @@ def process_sentry_event(
                         (resource or "")[:50],
                         (action or "")[:50],
                         json.dumps(payload),
-                        received_at,
+                        received_at, digest, org_id, user_id, resource, json.dumps(payload),
                     ),
                 )
                 event_result = cursor.fetchone()
                 event_id = event_result[0] if event_result else None
-                conn.commit()
 
                 if not event_id:
-                    logger.error("[SENTRY][WEBHOOK] Failed to persist event for user %s", user_id)
+                    logger.info("[SENTRY][WEBHOOK] Duplicate delivery for user %s", user_id)
+                    return
+
+                # Issue lifecycle updates and integration housekeeping are useful
+                # audit events. Only the initial issue notification starts an RCA.
+                if resource in {"installation", "comment"} or (resource == "issue" and action != "created"):
+                    conn.commit()
                     return
 
                 # source_alert_id is the integer PK of the source-specific event row.
@@ -243,7 +268,12 @@ def process_sentry_event(
                 # sentry_events.id, not a synthesized string.
                 source_alert_id = event_id
 
+                # The event is not committed yet. A failed correlation query aborts the
+                # transaction even when the correlator swallows the error (RELEASE then
+                # fails), so roll back to the savepoint to keep the event and open an incident.
+                correlation_result = None
                 try:
+                    cursor.execute("SAVEPOINT sp_correlation")
                     correlator = AlertCorrelator()
                     correlation_result = correlator.correlate(
                         cursor=cursor,
@@ -256,28 +286,42 @@ def process_sentry_event(
                         alert_metadata=alert_metadata,
                         org_id=org_id,
                     )
-
-                    if correlation_result.is_correlated and apply_correlation_outcome(
-                        cursor=cursor,
-                        user_id=user_id,
-                        incident_id=correlation_result.incident_id,
-                        source_type="sentry",
-                        source_alert_id=source_alert_id,
-                        alert_title=title,
-                        alert_service=service,
-                        alert_severity=severity,
-                        correlation_result=correlation_result,
-                        alert_metadata=alert_metadata,
-                        raw_payload=payload,
-                        org_id=org_id,
-                    ):
-                        conn.commit()
-                        return
+                    cursor.execute("RELEASE SAVEPOINT sp_correlation")
                 except Exception as corr_exc:
+                    cursor.execute("ROLLBACK TO SAVEPOINT sp_correlation")
+                    correlation_result = None
                     logger.warning(
                         "[SENTRY] Correlation check failed, proceeding with new incident: %s",
                         corr_exc,
                     )
+
+                if correlation_result and correlation_result.is_correlated:
+                    try:
+                        cursor.execute("SAVEPOINT sp_handle_correlated")
+                        applied = apply_correlation_outcome(
+                            cursor=cursor,
+                            user_id=user_id,
+                            incident_id=correlation_result.incident_id,
+                            source_type="sentry",
+                            source_alert_id=source_alert_id,
+                            alert_title=title,
+                            alert_service=service,
+                            alert_severity=severity,
+                            correlation_result=correlation_result,
+                            alert_metadata=alert_metadata,
+                            raw_payload=payload,
+                            org_id=org_id,
+                        )
+                        cursor.execute("RELEASE SAVEPOINT sp_handle_correlated")
+                        if applied:
+                            conn.commit()
+                            return
+                    except Exception as corr_exc:
+                        cursor.execute("ROLLBACK TO SAVEPOINT sp_handle_correlated")
+                        logger.warning(
+                            "[SENTRY] Attaching to the correlated incident failed, proceeding with new incident: %s",
+                            corr_exc,
+                        )
 
                 alert_fired_at = extract_alert_fired_at(
                     payload,
@@ -368,17 +412,20 @@ def process_sentry_event(
                     except Exception as e:
                         logger.warning("[SENTRY][WEBHOOK] Failed to notify SSE: %s", e)
 
-                    from chat.background.summarization import generate_incident_summary
-                    generate_incident_summary.delay(
-                        incident_id=str(incident_id),
-                        user_id=user_id,
-                        source_type="sentry",
-                        alert_title=title or "Sentry Alert",
-                        severity=severity,
-                        service=service,
-                        raw_payload=payload,
-                        alert_metadata=alert_metadata,
-                    )
+                    try:
+                        from chat.background.summarization import generate_incident_summary
+                        generate_incident_summary.delay(
+                            incident_id=str(incident_id),
+                            user_id=user_id,
+                            source_type="sentry",
+                            alert_title=title or "Sentry Alert",
+                            severity=severity,
+                            service=service,
+                            raw_payload=payload,
+                            alert_metadata=alert_metadata,
+                        )
+                    except Exception:
+                        logger.exception("[SENTRY] Could not queue incident summary")
 
                     try:
                         from chat.background.rca_dispatch import dispatch_alert_rca
@@ -392,6 +439,7 @@ def process_sentry_event(
                             rail_text=rail_text,
                             trigger_metadata={
                                 "source": "sentry",
+                                "alert_delivery": True,
                                 "resource": resource,
                                 "action": action,
                                 "issueId": issue_id,

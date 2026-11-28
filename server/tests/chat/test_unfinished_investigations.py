@@ -29,6 +29,48 @@ INCIDENT = "55555555-5555-5555-5555-555555555555"
 
 # --- the partial report ------------------------------------------------------------
 
+@pytest.mark.parametrize("metadata", [
+    {"stopReason": "max_tokens"},
+    {"stop_reason": "max_tokens"},
+    {"finish_reason": "length"},
+    {"finish_reason": "MAX_TOKENS"},
+    {"done_reason": "length"},
+    {"status": "incomplete", "incomplete_details": {"reason": "max_output_tokens"}},
+])
+def test_cut_off_report_is_saved_with_a_visible_note(metadata):
+    text = "Root cause undetermined. The probable cause is"
+    response = SimpleNamespace(content=text, response_metadata=metadata)
+    report = summarization._completed_report_text(response)
+    assert report.startswith(text)
+    assert "this report was cut off" in report
+
+
+@pytest.mark.parametrize("metadata", [
+    {"stopReason": "end_turn"},
+    {"finish_reason": "stop"},
+    {"finish_reason": "STOP"},
+    {"done_reason": "stop"},
+    {"finish_reason": "SAFETY"},
+    {"status": "incomplete", "incomplete_details": {"reason": "content_filter"}},
+    {},
+])
+def test_report_that_did_not_reach_the_limit_is_saved_unchanged(metadata):
+    text = "Root cause: the disk on node-3 filled up."
+    response = SimpleNamespace(content=text, response_metadata=metadata)
+    assert summarization._completed_report_text(response) == text
+
+
+def test_empty_completed_report_is_rejected():
+    with pytest.raises(ValueError, match="empty"):
+        summarization._completed_report_text(SimpleNamespace(content=[], response_metadata={"stopReason": "end_turn"}))
+
+
+def test_completed_report_can_have_an_undetermined_cause():
+    text = "Root cause undetermined. The terminal's input voltage was 0 V."
+    response = SimpleNamespace(content=[{"type": "text", "text": text}], response_metadata={"stopReason": "end_turn"})
+    assert summarization._completed_report_text(response) == text
+
+
 @pytest.mark.parametrize("reason, words", [
     ("time_limit", "reached its time limit"),
     ("stalled", "stopped making progress"),
@@ -322,6 +364,57 @@ def test_a_failed_summary_keeps_the_earlier_report(monkeypatch):
     assert sent == []
 
 
+def _failure_outcome(monkeypatch, has_report, keeps_earlier_report=False):
+    calls = []
+    monkeypatch.setattr(summarization, "_has_completed_report", lambda *a: has_report)
+    monkeypatch.setattr(summarization, "_keep_earlier_report",
+                        lambda incident_id, user_id, announce: calls.append(("keep", announce)))
+    monkeypatch.setattr(summarization, "_update_incident_summary",
+                        lambda incident_id, summary, status=None, user_id=None: calls.append(("write", summary, status)))
+    monkeypatch.setattr(summarization, "_notify_unwritten_partial_report",
+                        lambda user_id, incident_id, reason: calls.append(("notify", reason)))
+    summarization._record_failed_summary(
+        INCIDENT, USER, keeps_earlier_report, announce=False,
+        message="Summary generation failed. View investigation chat for details.", unfinished_reason=None,
+    )
+    return calls
+
+
+def test_a_failed_follow_up_keeps_the_completed_report(monkeypatch):
+    # A finished RCA has no unfinished reason, so the plan alone would not keep its report.
+    assert _failure_outcome(monkeypatch, has_report=True) == [("keep", False)]
+
+
+def test_a_failed_summary_with_no_completed_report_is_recorded_as_failed(monkeypatch):
+    assert _failure_outcome(monkeypatch, has_report=False) == [
+        ("write", "Summary generation failed. View investigation chat for details.", "error"),
+        ("notify", None),
+    ]
+
+
+def test_the_plan_still_keeps_an_unfinished_rcas_earlier_report(monkeypatch):
+    assert _failure_outcome(monkeypatch, has_report=False, keeps_earlier_report=True) == [("keep", False)]
+
+
+@pytest.mark.parametrize("row, error, expected", [((1,), None, True), (None, None, False),
+                                                  (None, RuntimeError("db down"), False)])
+def test_a_completed_report_is_found_by_its_rca_completed_event(monkeypatch, row, error, expected):
+    cursor = MagicMock()
+    cursor.fetchone.return_value = row
+    cursor.execute.side_effect = error
+    conn = MagicMock()
+    conn.cursor.return_value.__enter__.return_value = cursor
+    pool = MagicMock()
+    pool.get_admin_connection.return_value.__enter__.return_value = conn
+    monkeypatch.setattr(summarization, "db_pool", pool)
+    monkeypatch.setattr(summarization, "set_rls_context", lambda *a, **k: "org-1")
+
+    assert summarization._has_completed_report(INCIDENT, USER) is expected
+    sql, params = cursor.execute.call_args[0]
+    assert "incident_lifecycle_events" in sql and "'rca_completed'" in sql
+    assert params == (INCIDENT,)
+
+
 # --- notifications for a partial report ----------------------------------------------
 
 @pytest.fixture
@@ -355,15 +448,15 @@ def dispatch(monkeypatch):
     return _run
 
 
-def test_a_partial_report_updates_the_cards_only(dispatch):
+def test_a_partial_report_sends_email_without_slack_or_writeback(dispatch):
     sent = dispatch("time_limit")
-    assert "slack" in sent and "email" in sent
+    assert "slack" not in sent and "email" in sent
     assert "pagerduty" not in sent and "routing" not in sent
 
 
 def test_a_finished_report_is_posted_back_and_routed(dispatch):
     sent = dispatch(None)
-    assert {"slack", "email", "pagerduty", "routing"} <= set(sent)
+    assert set(sent) == {"email", "pagerduty", "routing"}
 
 
 def test_an_unreadable_unfinished_state_raises_so_the_summary_retries(monkeypatch):

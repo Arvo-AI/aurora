@@ -6,6 +6,7 @@ import { pagerdutyService, PagerDutyStatus } from "@/lib/services/pagerduty";
 import { PagerDutyConnectionStep } from "@/components/pagerduty/PagerDutyConnectionStep";
 import { PagerDutyConnectedView } from "@/components/pagerduty/PagerDutyConnectedView";
 import { PagerDutyNotesCard } from "@/components/pagerduty/PagerDutyNotesCard";
+import { AlertThreadReplyToggle } from "@/components/connectors/AlertThreadReplyToggle";
 import { PagerDutyWebhookStep } from "@/components/pagerduty/PagerDutyWebhookStep";
 import { TokenInputModal } from "@/components/pagerduty/TokenInputModal";
 import { ConnectionLoadingOverlay } from "@/components/ui/connection-loading-overlay";
@@ -313,6 +314,7 @@ export default function PagerDutyAuthPage() {
                 loading={loading}
               />
               <PagerDutyNotesCard status={status} />
+              <AlertThreadReplyToggle source="pagerduty" />
               <PagerDutyWebhookStep />
             </div>
           ) : null}

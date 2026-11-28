@@ -48,7 +48,6 @@ export interface ChatPlatformManageConfig {
   copy: {
     activateHint: string;
     emptyActive: string;
-    routingNote: string;
     disconnectBlurb: string;
   };
   /** Org toggle. Absent on platforms that don't have one. */
@@ -70,13 +69,6 @@ export const slackManageConfig: ChatPlatformManageConfig = {
   channelIcon: Hash,
   notificationGroups: [
     {
-      id: "investigation",
-      label: "Investigations",
-      description: "Status cards in your incidents channel when Aurora runs an RCA",
-      startKey: "slack_investigation_start_notifications",
-      endKey: "slack_investigation_complete_notifications",
-    },
-    {
       id: "actions",
       label: "Actions",
       description: "Status cards in your incidents channel when an Aurora Action runs",
@@ -85,7 +77,6 @@ export const slackManageConfig: ChatPlatformManageConfig = {
     },
   ],
   defaultPreferences: {
-    slack_investigation_start_notifications: true,
     slack_investigation_complete_notifications: true,
     slack_action_start_notifications: true,
     slack_action_complete_notifications: true,
@@ -95,7 +86,6 @@ export const slackManageConfig: ChatPlatformManageConfig = {
   copy: {
     activateHint: "Invite Aurora to channels in Slack, or activate channels below.",
     emptyActive: "No active channels yet. Invite Aurora to channels in Slack, or activate channels from the list below.",
-    routingNote: "that routing is always on and tuned in the Slack memory",
     disconnectBlurb: "Disconnect Slack from Aurora. You will stop receiving all Slack notifications.",
   },
   setupPath: "/connectors",
@@ -141,7 +131,6 @@ export const teamsManageConfig: ChatPlatformManageConfig = {
       "After Connect: add Aurora to each team in the Teams client, @mention the bot, then activate channels below.",
     emptyActive:
       "No active channels yet. Connect, add the app per team in Teams, @mention the bot, or activate channels below.",
-    routingNote: "that routing is always on and tuned in the Teams memory",
     disconnectBlurb: "Disconnect Microsoft Teams from Aurora. You will stop receiving all Teams notifications.",
   },
   setupPath: "/teams/setup",

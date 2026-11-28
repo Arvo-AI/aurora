@@ -1,0 +1,501 @@
+"""Run with the server image, a disposable initialized aurora_test DB and an isolated
+Redis broker: ALERT_PIPELINE_INTEGRATION=1 python -m unittest tests.integration.test_alert_rca_pipeline.
+The worker, webhook signatures, SQL, RCA prompt, summarizer and notifier are real.
+The agent's evidence, model summary, provider credentials and Slack HTTP are fixtures.
+"""
+import base64
+import hashlib
+import hmac
+import json
+import os
+import sys
+import time
+import unittest
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
+from datetime import datetime, timezone
+from threading import Barrier
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
+from uuid import uuid4
+
+
+def fake_vault(stack):
+    """Keep the production credential-row writes and org lookup, with an in-memory secret backend."""
+    secrets = {}
+    backend = Mock()
+
+    def store_secret(secret_name, secret_value):
+        secrets[secret_name] = secret_value
+        return secret_name
+
+    backend.store_secret.side_effect = store_secret
+    backend.get_secret.side_effect = secrets.__getitem__
+    stack.enter_context(patch("utils.secrets.secret_ref_utils.SecretRefManager.backend", new=backend))
+    stack.enter_context(patch("utils.auth.token_management._schedule_prediscovery"))
+    return backend
+
+
+@unittest.skipUnless(os.getenv("ALERT_PIPELINE_INTEGRATION") == "1", "requires disposable Postgres and Redis")
+class AlertPipeline(unittest.TestCase):
+    def test_report_uses_alert_observations_even_with_tool_citations(self):
+        from chat.background.citation_extractor import Citation
+        from chat.background.summarization import _build_summary_prompt_with_chat
+
+        readings = "Input voltage 0 V, battery charge 79%, battery voltage 26.2 V"
+        probe = Citation(1, "lookup", "read inventory", "No device telemetry", None, "test")
+        for citations in ([], [probe]):
+            with self.subTest(has_tool_evidence=bool(citations)):
+                prompt = _build_summary_prompt_with_chat(
+                    "cloudwatch", "UPS alert", "critical", "terminal", None,
+                    investigation_transcript="No independent device access",
+                    citations=citations, source_observations=readings,
+                )
+                self.assertIn(readings, prompt)
+
+    def test_cloudwatch_setup_selects_a_single_notification_per_org(self):
+        self.assertEqual(os.environ["POSTGRES_DB"], "aurora_test")
+        from flask import Flask
+        from routes.aws import cloudwatch_routes as aws
+        from utils.db.connection_pool import db_pool
+
+        app = Flask(__name__)
+        app.register_blueprint(aws.cloudwatch_bp)
+        topic = "arn:aws:sns:us-west-2:111111111111:alerts"
+
+        def post(user, message_id, kind="Notification", topic_arn=topic):
+            return app.test_client().post(f"/aws/cloudwatch/webhook/{user}", json={
+                "Message": "alarm", "MessageId": message_id, "Type": kind, "TopicArn": topic_arn,
+            }).status_code
+
+        def create_users():
+            org, users = str(uuid4()), [str(uuid4()), str(uuid4())]
+            with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+                cur.execute("INSERT INTO organizations(id,name,slug) VALUES (%s,'Setup test',%s)", (org, org))
+                cur.executemany("INSERT INTO users(id,email,password_hash,org_id) VALUES (%s,%s,'unused',%s)",
+                                [(user, user + "@example.test", org) for user in users])
+                conn.commit()
+            return users
+
+        with ExitStack() as stack:
+            vault = fake_vault(stack)
+            stack.enter_context(patch.object(aws, "_verify_sns_signature", return_value=True))
+            queue = stack.enter_context(patch.object(aws.process_cloudwatch_alarm, "delay"))
+            users = create_users()
+            gate = Barrier(2)
+            setup_lock = aws._cloudwatch_setup_lock
+
+            def simultaneous_setup(user):
+                gate.wait(timeout=10)  # Both have observed the same missing connection.
+                return setup_lock(user)
+
+            with patch.object(aws, "_cloudwatch_setup_lock", side_effect=simultaneous_setup):
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    self.assertEqual(list(pool.map(post, users, ["first", "second"])), [200, 200])
+            vault.store_secret.assert_called_once()
+            decisions = {call.args[1]["sns_message_id"]: call.kwargs["skip_rca"] for call in queue.call_args_list}
+            self.assertCountEqual(decisions.values(), [True, False])
+            for user, message_id in zip(users, ["first", "second"]):
+                self.assertEqual(post(user, message_id), 200)
+                self.assertEqual(queue.call_args.kwargs["skip_rca"], decisions[message_id])
+            self.assertEqual(post(users[0], "foreign", topic_arn=topic + "-other"), 403)
+            self.assertEqual(queue.call_count, 4)
+
+            # A confirmation can run before the first real alarm. A manually
+            # connected organization can likewise receive its very first SNS notification.
+            for setup in ("confirmation", "manual"):
+                with self.subTest(setup=setup):
+                    user = create_users()[0]
+                    queue.reset_mock()
+                    if setup == "confirmation":
+                        with patch.object(aws, "_handle_subscription_confirmation") as confirm:
+                            self.assertEqual(post(user, "confirm", "SubscriptionConfirmation"), 200)
+                            confirm.assert_called_once()
+                        queue.assert_not_called()
+                    else:
+                        aws.store_tokens_in_db(user, {}, "cloudwatch")
+                    self.assertEqual(post(user, "first-alarm"), 200)
+                    self.assertFalse(queue.call_args.kwargs["skip_rca"])
+
+    def test_from_signed_webhook_to_source_reply(self):
+        self.assertEqual(os.environ["POSTGRES_DB"], "aurora_test")
+        from celery.contrib.testing.worker import start_worker
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import padding, rsa
+        from flask import Flask
+        from celery_config import celery_app, _prewarm_ready
+        from utils.db.connection_pool import db_pool
+        from routes.aws import cloudwatch_routes as aws
+        from routes.incidentio import incidentio_routes as incidentio
+        from routes.sentry import sentry_routes as sentry
+        from tasks.slack_source_reply import retry_due_source_replies
+        with patch.dict(os.environ, INTERNAL_API_SECRET="integration-test-only"):
+            from main_chatbot import process_workflow_async
+
+        org, user = str(uuid4()), str(uuid4())
+        def sql(query, params=()):
+            with db_pool.get_admin_connection() as conn, conn.cursor() as cur:
+                cur.execute(query, params)
+                result = cur.fetchall() if cur.description else []
+                conn.commit()
+                return result
+
+        def fresh_alert_budget():
+            # The org's alert RCA budget counts rca_dispatched_at, and queued RCAs keep
+            # later alerts waiting behind them. Start a new window and empty the queue.
+            sql("UPDATE incidents SET rca_dispatched_at = rca_dispatched_at - interval '2 hours' "
+                "WHERE org_id=%s AND rca_dispatched_at IS NOT NULL", (org,))
+            sql("UPDATE incidents SET aurora_status='idle', rca_queue_reason=NULL, rca_queued_at=NULL, "
+                "rca_queued_request=NULL WHERE org_id=%s AND aurora_status='queued'", (org,))
+
+        sql("INSERT INTO organizations(id,name,slug) VALUES (%s,'RCA test',%s)", (org, org))
+        sql("INSERT INTO users(id,email,password_hash,org_id) VALUES (%s,%s,'unused',%s)",
+            (user, user + "@example.test", org))
+        sql("INSERT INTO slack_channels(user_id,org_id,channel_id,team_id,is_member) VALUES "
+            "(%s,%s,'C-alert','T-test',true),(%s,%s,'C-sentry','T-test',true)", (user, org, user, org))
+        application = Flask(__name__)
+        application.register_blueprint(aws.cloudwatch_bp)
+        application.register_blueprint(incidentio.incidentio_bp, url_prefix="/incidentio")
+        application.register_blueprint(sentry.sentry_bp, url_prefix="/sentry")
+        http = application.test_client()
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        topic = "arn:aws:sns:us-west-2:111111111111:alerts"
+        def aws_post(body, subject=None, message_id=None, expected_status=200):
+            envelope = dict(Type="Notification", Timestamp=ts, TopicArn=topic,
+                            MessageId=message_id or str(uuid4()), SignatureVersion="2",
+                            SigningCertURL="https://sns.us-west-2.amazonaws.com/test.pem",
+                            Message=body if isinstance(body, str) else json.dumps(body))
+            if subject:
+                envelope["Subject"] = subject
+            envelope["Signature"] = base64.b64encode(key.sign(
+                aws._build_sns_string_to_sign(envelope).encode(), padding.PKCS1v15(), hashes.SHA256()
+            )).decode()
+            response = http.post(f"/aws/cloudwatch/webhook/{user}", json=envelope)
+            self.assertEqual(response.status_code, expected_status)
+            return response.json
+
+        def sentry_post(payload=None, resource="event_alert"):
+            body = json.dumps(payload or {"action": "triggered", "data": {"event": {"event_id": "c"*32,
+                              "web_url": "https://example.sentry.io/issues/447/events/" + "c"*32, "title": "Error in checkout",
+                              "project": {"slug": "checkout"}, "level": "error"}}}).encode()
+            self.assertEqual(http.post(f"/sentry/webhook/{user}", data=body, headers={
+                "Sentry-Hook-Resource": resource,
+                "Sentry-Hook-Signature": hmac.new(b"test-secret", body, hashlib.sha256).hexdigest()
+            }).status_code, 202)
+
+        findings = "Evidence from the test sensor shows the service lost power."
+        contexts, replies, messages = [], [], {"C-alert": [], "C-sentry": [], "C-configured": []}
+        def add_post(channel, app_id, title, detail):
+            parent = f"{int(time.time())}.{len(messages[channel])+1:06d}"
+            messages[channel].append(dict(ts=parent, app_id=app_id, team="T-test", text=title,
+                                          attachments=[{"text": detail}]))
+            return parent
+
+        async def investigate(wf, state, socket, owner, incident_id):
+            contexts.append((state.rca_context["source"], state.question))
+            if "QA stream failure" in state.question:
+                async def broken_stream(state):
+                    yield "token", "Starting investigation"
+                    raise RuntimeError("simulated stream failure")
+                wf.stream = broken_stream
+                return await process_workflow_async(wf, state, socket, owner, incident_id)
+            sql("UPDATE chat_sessions SET messages=%s WHERE id=%s", (json.dumps([
+                {"sender": "assistant", "text": findings}]), state.session_id))
+            return True
+
+        post_attempts = []
+        fail_post = [True]
+        def slack_http(client, method, endpoint, data=None, **kwargs):
+            if endpoint == "users.conversations":
+                return {"ok": True, "channels": [{"id": channel} for channel in messages]}
+            if endpoint == "conversations.history":
+                return {"ok": True, "messages": list(messages[data["channel"]])}
+            if endpoint == "chat.postMessage":
+                post_attempts.append(dict(data))
+                if fail_post and fail_post.pop():
+                    raise ValueError("simulated Slack transport failure")
+                blocks = json.dumps(data["blocks"])
+                if "QA truncated RCA" in blocks:
+                    self.assertIn("this report was cut off", blocks)
+                else:
+                    self.assertIn(findings, blocks)
+                self.assertTrue(data["client_msg_id"])
+                self.assertTrue(data["thread_ts"])
+                replies.append((data["channel"], data.get("thread_ts")))
+                return {"ok": True, "ts": str(time.time()), "message": {"thread_ts": data.get("thread_ts")}}
+            raise AssertionError(endpoint)
+
+        def wait_for(predicate, description):
+            deadline = time.monotonic() + 100
+            while time.monotonic() < deadline:
+                if predicate():
+                    return
+                time.sleep(.2)
+            self.fail(f"Timed out waiting for {description}; contexts={len(contexts)}, replies={replies}")
+
+        with ExitStack() as stack:
+            def replace(path, **kw):
+                return stack.enter_context(patch(path, **kw))
+            slack_creds = {"access_token": "local-fixture", "team_id": "T-test"}
+            replace("tasks.slack_source_reply.get_credentials_from_db", return_value=slack_creds)
+            replace("utils.auth.stateless_auth.get_credentials_from_db", side_effect=lambda u,p: slack_creds if p=="slack" else None)
+            replace("utils.notifications.dispatcher.get_org_preference",
+                    side_effect=lambda org, key, default=None: default if key.startswith("slack_") else False)
+            replace("connectors.slack_connector.client.SlackClient._make_request", new=slack_http)
+            replace("utils.notifications.slack_notification_service._get_incidents_channel_id", return_value="C-configured")
+            routing = replace("utils.notifications.team_routing.trigger_team_routing_agent")
+            replace("utils.notifications.dispatcher._has_teams_connected", return_value=False)
+            replace("services.correlation.recurrence_agent.run_recurrence_check", return_value={})
+            replace("services.memory.incident_index.append_incident_line")
+            replace("services.memory.incident_index.generate_root_cause_synopsis", return_value=findings)
+            replace("services.memory.collector.extract_memories_from_session.delay")
+            replace("services.actions.executor.dispatch_on_incident_actions")
+            replace("chat.background.task._get_worker_agent")
+            replace("chat.backend.agent.workflow.Workflow", side_effect=lambda *args: SimpleNamespace(_last_state=None))
+            stack.enter_context(patch.dict(sys.modules, main_chatbot=SimpleNamespace(process_workflow_async=investigate)))
+            summarize = replace("chat.background.summarization.tracked_invoke", return_value=SimpleNamespace(content=findings))
+            replace("chat.background.summarization.create_chat_model")
+            replace("chat.background.summarization._fetch_fix_suggestions", return_value=[])
+            replace("chat.background.task._get_connected_integrations", return_value={})
+            replace("chat.background.rca_prompt_builder.get_user_providers", return_value=[])
+            replace("routes.aws.cloudwatch_routes._get_sns_certificate", return_value=SimpleNamespace(public_key=key.public_key))
+            vault = fake_vault(stack)
+            replace("routes.sentry.sentry_routes._get_stored_sentry_credentials", return_value={"client_secret":"test-secret"})
+            replace("services.detection.runner._org_representatives", return_value=[(user, org)])
+            queue = "alert-qa-" + org
+            celery_app.conf.update(task_default_queue=queue, task_routes={})
+            celery_app.amqp.flush_routes()
+            _prewarm_ready.set()
+            # Exercise the real Redis broker, task registry, and worker. Tasks
+            # unrelated to delivery (e.g. visualizations) are ancillary.
+            stack.enter_context(start_worker(celery_app, pool="solo", perform_ping_check=False,
+                                             queues=(queue,), loglevel="INFO", shutdown_timeout=30))
+            # The first signed alarm creates a visible incident, including on redelivery,
+            # without spending an RCA slot or replying to its Slack parent.
+            setup_id = str(uuid4())
+            setup_alarm = {"AlarmName": "Setup alarm", "NewStateValue": "ALARM", "NewStateReason": "Setup check"}
+            setup_parent = add_post("C-alert", "A6L22LZNH", "Setup alarm", "Setup check")
+            with patch.object(aws.process_cloudwatch_alarm, "delay", side_effect=RuntimeError("broker unavailable")):
+                aws_post(setup_alarm, message_id=setup_id, expected_status=500)
+            aws_post(setup_alarm, message_id=setup_id)
+            aws_post(setup_alarm, message_id=setup_id)
+            wait_for(lambda: sql("SELECT rca_celery_task_id, aurora_chat_session_id, aurora_summary FROM incidents "
+                                 "WHERE org_id=%s AND alert_title='Setup alarm'", (org,)) == [(None, None, findings)],
+                     "one visible setup incident with its summary and no investigation")
+            expected = []
+            for n in range(2):
+                title = f"[CRITICAL] fault {n} on terminal 42"
+                body = f"Terminal: 42\nSeverity: critical\nSignal value: {n}"
+                custom = dict(version="1.0", source="custom", content=dict(title=title, description=body))
+                expected.append(("C-alert", add_post("C-alert", "A6L22LZNH", title, body)))
+                identity = str(uuid4())
+                aws_post(custom, message_id=identity)
+                if n == 0:
+                    aws_post(custom, message_id=identity)
+            plain = "Client: terminal-43\nPower lost"
+            aws_post(plain, subject="[V2] CRITICAL offline")
+            alarm = dict(AlarmName="critical CPU", AlarmArn="arn:aws:cloudwatch:region:account:alarm:cpu",
+                         NewStateValue="ALARM", NewStateReason="CPU above threshold",
+                         Trigger={"Dimensions":[{"name":"InstanceId", "value":"i-test"}]})
+            expected.append(("C-alert", add_post("C-alert","A6L22LZNH", alarm["AlarmName"],alarm["AlarmArn"])))
+            aws_post(alarm)
+            expected.append(("C-sentry", add_post("C-sentry","A011MFBJEUU","checkout","https://test.sentry.io/issues/447/")))
+            sentry_post()
+            sentry_post()
+            wait_for(lambda: len(contexts) == 5, "five investigations within the shared limit")
+            self.assertEqual(sorted(x[0] for x in contexts), ["cloudwatch"]*4 + ["sentry"])
+            self.assertTrue(all(question for _, question in contexts))
+            wait_for(lambda: len(replies) == 3, "three immediate replies")
+            expected.append(("C-alert", add_post("C-alert","A6L22LZNH","[V2] CRITICAL offline",plain)))
+            sql("UPDATE incidents SET slack_source_reply_due=NOW() WHERE org_id=%s AND slack_source_reply_due IS NOT NULL", (org,))
+            retry_due_source_replies.delay()
+            wait_for(lambda: sorted(replies)==sorted(expected), "late and retried replies")
+            aws_post(dict(alarm, NewStateValue="OK"))
+            wait_for(lambda: sql("SELECT count(*) FROM incidents WHERE org_id=%s AND status='resolved'",(org,))==[(1,)], "CloudWatch OK")
+            self.assertEqual(sql("SELECT count(*) FROM incidents WHERE org_id=%s AND slack_source_reply_ts IS NOT NULL",
+                                 (org,)), [(5,)])
+
+            # Over the org's five alert RCAs per window, both connectors still open
+            # incidents and queue their RCAs instead of starting them.
+            aws_post("Client: terminal-99\nPower lost", subject="Rate-limited SNS")
+            sentry_post({"action": "created", "data": {"issue": {
+                "id": "899", "title": "Rate-limited Sentry",
+            }}}, resource="issue")
+            retry_due_source_replies.delay().get(timeout=20, disable_sync_subtasks=False)
+            self.assertEqual(sql("SELECT alert_title, aurora_status, rca_celery_task_id, slack_source_reply_ts "
+                                 "FROM incidents WHERE org_id=%s "
+                                 "AND alert_title IN ('Rate-limited SNS','Rate-limited Sentry') "
+                                 "ORDER BY alert_title", (org,)),
+                             [("Rate-limited SNS", "queued", None, None), ("Rate-limited Sentry", "queued", None, None)])
+            self.assertEqual(sql("SELECT count(*) FROM chat_sessions WHERE org_id=%s AND incident_id IS NOT NULL",
+                                 (org,)), [(5,)])
+            self.assertEqual(len(contexts), 5)
+            # Begin a fresh budget window for the remaining delivery scenarios.
+            fresh_alert_budget()
+
+            # Some SNS topics have no Slack subscriber. Exhaust the lookup delay
+            # without sleeping for minutes. An unmatched alert stays quiet.
+            aws_post("Service: power\nBattery offline", subject="Battery offline")
+            wait_for(lambda: sql("SELECT count(*) FROM incidents WHERE org_id=%s AND alert_title='Battery offline' "
+                                 "AND slack_source_reply_attempts=1", (org,)) == [(1,)], "unmatched delivery")
+            sql("UPDATE incidents SET slack_source_reply_due=NOW(), slack_source_reply_attempts=9 "
+                "WHERE org_id=%s AND alert_title='Battery offline'", (org,))
+            retry_due_source_replies.delay()
+            wait_for(lambda: sql("SELECT slack_source_reply_ts, slack_source_reply_due FROM incidents "
+                                 "WHERE org_id=%s AND alert_title='Battery offline'", (org,)) == [(None, None)],
+                     "exhausted lookup without a standalone message")
+            self.assertCountEqual(replies, expected)
+            for kind in ("incident_initial_summary", "incident_rca_summary"):
+                prompts = [call.args[1][0].content for call in summarize.call_args_list
+                           if call.kwargs.get("request_type") == kind]
+                self.assertTrue(any("Signal value: 0" in prompt for prompt in prompts), kind)
+            aws_post({"unrecognized": "object"})
+            aws_post(dict(alarm, NewStateValue="INSUFFICIENT_DATA"))
+            wait_for(lambda: sql("SELECT count(*) FROM cloudwatch_alarms WHERE org_id=%s AND state_value IN "
+                                 "('', 'INSUFFICIENT_DATA')", (org,)) == [(2,)], "non-firing audit rows")
+            self.assertEqual(sql("SELECT count(*) FROM incidents WHERE org_id=%s", (org,)), [(9,)])
+
+
+            # A v1 worker can still execute its original upsert while v2 workers
+            # store immutable occurrences. An exact replay of a legacy event is inert.
+            legacy = {"action": "created", "data": {"issue": {"id": "445", "title": "Earlier incident"}}}
+            sql("INSERT INTO sentry_events (org_id,user_id,issue_id,action,resource,payload,received_at) "
+                "VALUES (%s,%s,'445','created','issue',%s,NOW()) ON CONFLICT (org_id,issue_id,action) "
+                "WHERE issue_id IS NOT NULL DO UPDATE SET payload=EXCLUDED.payload", (org,user,json.dumps(legacy)))
+            from routes.sentry.tasks import process_sentry_event
+            process_sentry_event.delay(legacy, {"resource": "issue"}, user).get(timeout=20, disable_sync_subtasks=False)
+            self.assertEqual(sql("SELECT count(*) FROM incidents WHERE org_id=%s", (org,)), [(9,)])
+
+            parent = add_post("C-alert", "A6L22LZNH", "QA stream failure", "Signal unavailable")
+            aws_post("Signal unavailable", subject="QA stream failure")
+            def failed_run():
+                return sql(
+                    "SELECT i.aurora_status, s.status, i.slack_source_reply_ts FROM incidents i "
+                    "JOIN chat_sessions s ON s.id=i.aurora_chat_session_id::text "
+                    "WHERE i.org_id=%s AND i.alert_title='QA stream failure'", (org,)
+                ) == [("error", "failed", None)]
+            wait_for(failed_run, "failed workflow recorded without a completed RCA")
+            retry_due_source_replies.delay().get(timeout=20, disable_sync_subtasks=False)
+            self.assertNotIn(("C-alert", parent), replies)
+            self.assertCountEqual(replies, expected)
+
+            title = "QA truncated RCA"
+            parent = add_post("C-alert", "A6L22LZNH", title, "Signal unavailable")
+            report_attempts = []
+            def generate_report(model, messages, *, request_type, **kwargs):
+                if request_type == "incident_rca_summary":
+                    report_attempts.append(request_type)
+                    self.assertFalse(any(p.get("thread_ts") == parent for p in post_attempts))
+                    if len(report_attempts) == 1:
+                        return SimpleNamespace(content="The cause is", response_metadata={"stopReason": "max_tokens"})
+                return SimpleNamespace(content=findings, response_metadata={"stopReason": "end_turn"})
+
+            summarize.side_effect = generate_report
+            aws_post("Signal unavailable", subject=title)
+            expected.append(("C-alert", parent))
+            wait_for(lambda: sorted(replies) == sorted(expected), "the cut-off report posted once, with its note")
+            self.assertEqual(len(report_attempts), 1)
+            truncated = [p for p in post_attempts if p.get("thread_ts") == parent]
+            self.assertEqual(len(truncated), 1)
+            self.assertIn("this report was cut off", json.dumps(truncated[0].get("blocks")))
+            self.assertTrue(all(p.get("thread_ts") and (findings in json.dumps(p.get("blocks")) or p in truncated)
+                                for p in post_attempts), "Every outbound Slack post must be a threaded final report")
+            # The Sentry issue subscription sends both creation and later
+            # lifecycle changes. A resolution can also arrive without its creation.
+            issue = {"id": "629", "title": "Synthetic checkout exception", "level": "error",
+                     "project": {"slug": "qa-store"}, "permalink": "https://test.sentry.io/issues/629/"}
+            parent = add_post("C-sentry", "A011MFBJEUU", issue["title"], issue["permalink"])
+            expected.append(("C-sentry", parent))
+            before = len(contexts)
+            for action in ("created", "created", "resolved"):
+                sentry_post({"action": action, "data": {"issue": issue}}, resource="issue")
+            sentry_post({"action": "resolved", "data": {"issue": dict(issue, id="630")}}, resource="issue")
+            wait_for(lambda: sorted(replies) == sorted(expected), "one final reply under the Sentry issue")
+            retry_due_source_replies.delay().get(timeout=20, disable_sync_subtasks=False)
+            self.assertEqual(sql("SELECT action, count(*) FROM sentry_events WHERE org_id=%s "
+                                 "AND group_id IN ('629','630') GROUP BY action ORDER BY action", (org,)),
+                             [("created", 1), ("resolved", 2)])
+            self.assertEqual(len(contexts), before + 1)
+            self.assertCountEqual(replies, expected)
+            completed = sql("SELECT id FROM incidents WHERE org_id=%s AND aurora_status='complete' "
+                            "AND rca_unfinished_reason IS NULL", (org,))
+            self.assertCountEqual(
+                [call.args[1]["incident_id"] for call in routing.call_args_list],
+                [str(incident_id) for (incident_id,) in completed],
+            )
+
+            # The configured main channel has no local registry row or description.
+            # Verify completed incidents against Slack's actual bot memberships.
+            from utils.auth.stateless_auth import store_org_preference
+            from utils.notifications.dispatcher import notify_investigation_completed
+            store_org_preference(org, "slack_incidents_channel_id", "C-configured", strict=True)
+            pd_url = "https://acme.pagerduty.com/incidents/P001"
+            add_post("C-alert", "A1FKYAUUX", "API is down", pd_url)
+            parent = add_post("C-configured", "A1FKYAUUX", "API is down", pd_url)
+            [(incident_id,)] = sql(
+                "INSERT INTO incidents (org_id,user_id,source_type,source_alert_id,alert_title,"
+                "started_at,aurora_status,aurora_summary,alert_metadata) "
+                "VALUES (%s,%s,'pagerduty',42,'API is down',NOW(),'complete',%s,%s) RETURNING id",
+                (org, user, findings, json.dumps({"incidentId": "P001"})),
+            )
+            for _ in range(2):
+                notify_investigation_completed(user, str(incident_id))
+            expected.append(("C-configured", parent))
+            wait_for(lambda: sorted(replies) == sorted(expected), "PagerDuty RCA under its main-channel alert")
+            [(target, reply_ts)] = sql(
+                "SELECT slack_source_target,slack_source_reply_ts FROM incidents WHERE id=%s", (incident_id,)
+            )
+            self.assertEqual((target["channel"], target["ts"]), ("C-configured", parent))
+            self.assertTrue(reply_ts)
+
+            # Exercise incident.io from signed HTTP intake. The incident webhook uses an
+            # internal ID, its Slack announcement uses a number, and alerts have their own URLs.
+            fresh_alert_budget()
+            summarize.side_effect = None
+            secret = "incidentio-test-secret"
+            replace("routes.incidentio.incidentio_routes.get_token_data", return_value={"webhook_secret": secret})
+            native_postback = replace("utils.notifications.incidentio_notification_service.send_incidentio_incident_update")
+            base = "https://app.incident.io/acme"
+            for topic_name, webhook_object, slack_url in (
+                ("public_incident.incident_created_v2", {"incident": {
+                    "id": "01INCIDENT", "reference": "INC-42", "name": "QA refrigeration failure",
+                    "permalink": f"{base}/incidents/01INCIDENT", "created_at": ts,
+                }}, f"{base}/incidents/42"),
+                ("public_alert.alert_created_v1", {
+                    "id": "01ALERT", "title": "QA tunnel queue stalled", "created_at": ts,
+                    "source_url": "https://monitor.example.test/alerts/10",
+                }, f"{base}/alerts/01ALERT"),
+            ):
+                parent = add_post("C-configured", "A01DEGPUHHC", "incident.io announcement", slack_url)
+                expected.append(("C-configured", parent))
+                body = json.dumps({"event_type": topic_name, topic_name: webhook_object}).encode()
+                msg_id, timestamp = str(uuid4()), str(int(time.time()))
+                signature = hmac.new(secret.encode(), f"{msg_id}.{timestamp}.".encode() + body, hashlib.sha256).digest()
+                response = http.post(f"/incidentio/alerts/webhook/{user}", data=body, content_type="application/json",
+                                     headers={"webhook-id": msg_id, "webhook-timestamp": timestamp,
+                                              "webhook-signature": "v1," + base64.b64encode(signature).decode()})
+                self.assertEqual(response.status_code, 200)
+                wait_for(lambda: sorted(replies) == sorted(expected), f"automatic RCA reply for {topic_name}")
+                [(incident_id, target, reply_ts)] = sql(
+                    "SELECT id, slack_source_target, slack_source_reply_ts FROM incidents WHERE org_id=%s "
+                    "AND source_type='incidentio' AND alert_metadata->>'event_type'=%s AND aurora_status='complete'",
+                    (org, topic_name),
+                )
+                self.assertEqual((target["channel"], target["ts"]), ("C-configured", parent))
+                self.assertTrue(reply_ts)
+                notify_investigation_completed(user, str(incident_id))
+            retry_due_source_replies.delay().get(timeout=20, disable_sync_subtasks=False)
+            self.assertCountEqual(replies, expected)
+            native_postback.assert_not_called()  # Direct delivery works with native postback disabled.
+
+            self.assertNotIn(("C-alert", setup_parent), replies)
+            self.assertEqual(aws.get_token_data(user, "cloudwatch"),
+                             {"approved_topic_arn": topic, "setup_notification_id": setup_id})
+            vault.store_secret.assert_called_once()
+            self.assertTrue(aws._set_cloudwatch_active(user, False))
+            self.assertEqual(aws_post("Disabled webhook")["reason"], "connection_disabled")
+            self.assertTrue(aws._set_cloudwatch_active(user, True))
+            with patch.object(aws, "get_token_data", side_effect=OSError("test store unavailable")):
+                aws_post("Retry after storage recovery", expected_status=503)
+            vault.store_secret.assert_called_once()

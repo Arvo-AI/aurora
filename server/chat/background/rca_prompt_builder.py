@@ -86,6 +86,7 @@ def _extract_rail_text_from_payload(payload: Dict[str, Any]) -> str:
     _RAIL_FIELDS = {
         'title', 'message', 'body', 'description', 'text', 'summary',
         'alert_title', 'event_title', 'rulename', 'name', 'condition_name',
+        'subject', 'alarmname', 'newstatereason', 'alarmdescription',
     }
     parts: List[str] = []
 

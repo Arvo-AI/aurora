@@ -371,7 +371,7 @@ def list_ingested_events(user_id):
                 set_rls_context(cursor, conn, user_id, log_prefix="[Sentry]")
 
                 base_query = """
-                    SELECT id, issue_id, issue_title, level, project_slug, resource, action,
+                    SELECT id, COALESCE(group_id, issue_id), issue_title, level, project_slug, resource, action,
                            payload, received_at, created_at
                     FROM sentry_events
                     WHERE org_id = %s

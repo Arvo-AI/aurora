@@ -31,6 +31,7 @@ export function NotificationToggle({
         </p>
       </div>
       <Switch
+        aria-label={title}
         checked={checked}
         onCheckedChange={onChange}
         disabled={isLoading || disabled}
