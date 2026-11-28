@@ -268,7 +268,12 @@ def process_sentry_event(
                 # sentry_events.id, not a synthesized string.
                 source_alert_id = event_id
 
+                # The event is not committed yet. A failed correlation query aborts the
+                # transaction even when the correlator swallows the error (RELEASE then
+                # fails), so roll back to the savepoint to keep the event and open an incident.
+                correlation_result = None
                 try:
+                    cursor.execute("SAVEPOINT sp_correlation")
                     correlator = AlertCorrelator()
                     correlation_result = correlator.correlate(
                         cursor=cursor,
@@ -281,28 +286,42 @@ def process_sentry_event(
                         alert_metadata=alert_metadata,
                         org_id=org_id,
                     )
-
-                    if correlation_result.is_correlated and apply_correlation_outcome(
-                        cursor=cursor,
-                        user_id=user_id,
-                        incident_id=correlation_result.incident_id,
-                        source_type="sentry",
-                        source_alert_id=source_alert_id,
-                        alert_title=title,
-                        alert_service=service,
-                        alert_severity=severity,
-                        correlation_result=correlation_result,
-                        alert_metadata=alert_metadata,
-                        raw_payload=payload,
-                        org_id=org_id,
-                    ):
-                        conn.commit()
-                        return
+                    cursor.execute("RELEASE SAVEPOINT sp_correlation")
                 except Exception as corr_exc:
+                    cursor.execute("ROLLBACK TO SAVEPOINT sp_correlation")
+                    correlation_result = None
                     logger.warning(
                         "[SENTRY] Correlation check failed, proceeding with new incident: %s",
                         corr_exc,
                     )
+
+                if correlation_result and correlation_result.is_correlated:
+                    try:
+                        cursor.execute("SAVEPOINT sp_handle_correlated")
+                        applied = apply_correlation_outcome(
+                            cursor=cursor,
+                            user_id=user_id,
+                            incident_id=correlation_result.incident_id,
+                            source_type="sentry",
+                            source_alert_id=source_alert_id,
+                            alert_title=title,
+                            alert_service=service,
+                            alert_severity=severity,
+                            correlation_result=correlation_result,
+                            alert_metadata=alert_metadata,
+                            raw_payload=payload,
+                            org_id=org_id,
+                        )
+                        cursor.execute("RELEASE SAVEPOINT sp_handle_correlated")
+                        if applied:
+                            conn.commit()
+                            return
+                    except Exception as corr_exc:
+                        cursor.execute("ROLLBACK TO SAVEPOINT sp_handle_correlated")
+                        logger.warning(
+                            "[SENTRY] Attaching to the correlated incident failed, proceeding with new incident: %s",
+                            corr_exc,
+                        )
 
                 alert_fired_at = extract_alert_fired_at(
                     payload,
