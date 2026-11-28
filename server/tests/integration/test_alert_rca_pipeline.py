@@ -208,7 +208,11 @@ class AlertPipeline(unittest.TestCase):
                 post_attempts.append(dict(data))
                 if fail_post and fail_post.pop():
                     raise ValueError("simulated Slack transport failure")
-                self.assertIn(findings, json.dumps(data["blocks"]))
+                blocks = json.dumps(data["blocks"])
+                if "QA truncated RCA" in blocks:
+                    self.assertIn("this report was cut off", blocks)
+                else:
+                    self.assertIn(findings, blocks)
                 self.assertTrue(data["client_msg_id"])
                 self.assertTrue(data["thread_ts"])
                 replies.append((data["channel"], data.get("thread_ts")))
@@ -381,9 +385,12 @@ class AlertPipeline(unittest.TestCase):
             summarize.side_effect = generate_report
             aws_post("Signal unavailable", subject=title)
             expected.append(("C-alert", parent))
-            wait_for(lambda: sorted(replies) == sorted(expected), "only the finished report posted after regeneration")
-            self.assertEqual(len(report_attempts), 2)
-            self.assertTrue(all(p.get("thread_ts") and findings in json.dumps(p.get("blocks"))
+            wait_for(lambda: sorted(replies) == sorted(expected), "the cut-off report posted once, with its note")
+            self.assertEqual(len(report_attempts), 1)
+            truncated = [p for p in post_attempts if p.get("thread_ts") == parent]
+            self.assertEqual(len(truncated), 1)
+            self.assertIn("this report was cut off", json.dumps(truncated[0].get("blocks")))
+            self.assertTrue(all(p.get("thread_ts") and (findings in json.dumps(p.get("blocks")) or p in truncated)
                                 for p in post_attempts), "Every outbound Slack post must be a threaded final report")
             # The Sentry issue subscription sends both creation and later
             # lifecycle changes. A resolution can also arrive without its creation.

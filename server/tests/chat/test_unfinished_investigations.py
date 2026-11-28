@@ -37,10 +37,27 @@ INCIDENT = "55555555-5555-5555-5555-555555555555"
     {"done_reason": "length"},
     {"status": "incomplete", "incomplete_details": {"reason": "max_output_tokens"}},
 ])
-def test_cut_off_report_is_rejected_even_when_it_has_text(metadata):
-    response = SimpleNamespace(content="Root cause undetermined. The probable cause is", response_metadata=metadata)
-    with pytest.raises(ValueError):
-        summarization._completed_report_text(response)
+def test_cut_off_report_is_saved_with_a_visible_note(metadata):
+    text = "Root cause undetermined. The probable cause is"
+    response = SimpleNamespace(content=text, response_metadata=metadata)
+    report = summarization._completed_report_text(response)
+    assert report.startswith(text)
+    assert "this report was cut off" in report
+
+
+@pytest.mark.parametrize("metadata", [
+    {"stopReason": "end_turn"},
+    {"finish_reason": "stop"},
+    {"finish_reason": "STOP"},
+    {"done_reason": "stop"},
+    {"finish_reason": "SAFETY"},
+    {"status": "incomplete", "incomplete_details": {"reason": "content_filter"}},
+    {},
+])
+def test_report_that_did_not_reach_the_limit_is_saved_unchanged(metadata):
+    text = "Root cause: the disk on node-3 filled up."
+    response = SimpleNamespace(content=text, response_metadata=metadata)
+    assert summarization._completed_report_text(response) == text
 
 
 def test_empty_completed_report_is_rejected():

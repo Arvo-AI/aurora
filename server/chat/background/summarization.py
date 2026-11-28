@@ -31,17 +31,33 @@ logger = logging.getLogger(__name__)
 _LOG_PREFIX = "[IncidentSummary]"
 
 
+# Stop reasons that mean the report reached the output limit: max_tokens
+# (Anthropic, Bedrock, Gemini lowercased) and length (OpenAI, OpenRouter, Ollama).
+_CUT_OFF_STOP_REASONS = {"max_tokens", "length"}
+_CUT_OFF_NOTE = (
+    "\n\nNote: this report was cut off because it reached the model's output limit. "
+    "The full investigation is in the investigation chat."
+)
+
+
 def _completed_report_text(response) -> str:
-    """A provider can return usable-looking prose even when it cut the report off."""
-    metadata = getattr(response, "response_metadata", {}) or {}
-    reason = metadata.get("stopReason") or metadata.get("stop_reason") or metadata.get("finish_reason") or metadata.get("done_reason")
-    if reason and str(reason).lower() not in {"end_turn", "stop", "stop_sequence", "eos", "eos_token", "completed"}:
-        raise ValueError(f"RCA report generation did not finish ({reason})")
-    if metadata.get("status") in {"incomplete", "failed", "cancelled"} or metadata.get("incomplete_details"):
-        raise ValueError("The model returned an incomplete RCA report")
+    """The report text, with a visible note when the model cut it off.
+
+    Only an empty report fails. A cut-off report is still saved: the
+    investigation worked, and a retry would most likely stop at the same place.
+    """
     text = extract_text_from_content(response.content).strip()
     if not text:
         raise ValueError("The model returned an empty RCA report")
+    metadata = getattr(response, "response_metadata", {}) or {}
+    reason = metadata.get("stopReason") or metadata.get("stop_reason") or metadata.get("finish_reason") or metadata.get("done_reason")
+    details = metadata.get("incomplete_details")
+    hit_limit = (reason and str(reason).lower() in _CUT_OFF_STOP_REASONS) or (
+        isinstance(details, dict) and details.get("reason") == "max_output_tokens"  # OpenAI Responses
+    )
+    if hit_limit:
+        logger.warning("%s RCA report reached the output limit; saving it with a note", _LOG_PREFIX)
+        return text + _CUT_OFF_NOTE
     return text
 
 
@@ -938,8 +954,8 @@ def generate_incident_summary_from_chat(
             model_name=ModelConfig.EMAIL_REPORT_MODEL,
             request_type="incident_rca_summary",
         )
-        # Raising here goes through the task's bounded retry, before a complete
-        # state, a saved report, or any completion notification can be emitted.
+        # An empty report raises here and goes through the task's bounded retry,
+        # before a complete state, a saved report, or any completion notification.
         summary = _completed_report_text(response)
 
         logger.info(
