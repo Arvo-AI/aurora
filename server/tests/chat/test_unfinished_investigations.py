@@ -364,6 +364,57 @@ def test_a_failed_summary_keeps_the_earlier_report(monkeypatch):
     assert sent == []
 
 
+def _failure_outcome(monkeypatch, has_report, keeps_earlier_report=False):
+    calls = []
+    monkeypatch.setattr(summarization, "_has_completed_report", lambda *a: has_report)
+    monkeypatch.setattr(summarization, "_keep_earlier_report",
+                        lambda incident_id, user_id, announce: calls.append(("keep", announce)))
+    monkeypatch.setattr(summarization, "_update_incident_summary",
+                        lambda incident_id, summary, status=None, user_id=None: calls.append(("write", summary, status)))
+    monkeypatch.setattr(summarization, "_notify_unwritten_partial_report",
+                        lambda user_id, incident_id, reason: calls.append(("notify", reason)))
+    summarization._record_failed_summary(
+        INCIDENT, USER, keeps_earlier_report, announce=False,
+        message="Summary generation failed. View investigation chat for details.", unfinished_reason=None,
+    )
+    return calls
+
+
+def test_a_failed_follow_up_keeps_the_completed_report(monkeypatch):
+    # A finished RCA has no unfinished reason, so the plan alone would not keep its report.
+    assert _failure_outcome(monkeypatch, has_report=True) == [("keep", False)]
+
+
+def test_a_failed_summary_with_no_completed_report_is_recorded_as_failed(monkeypatch):
+    assert _failure_outcome(monkeypatch, has_report=False) == [
+        ("write", "Summary generation failed. View investigation chat for details.", "error"),
+        ("notify", None),
+    ]
+
+
+def test_the_plan_still_keeps_an_unfinished_rcas_earlier_report(monkeypatch):
+    assert _failure_outcome(monkeypatch, has_report=False, keeps_earlier_report=True) == [("keep", False)]
+
+
+@pytest.mark.parametrize("row, error, expected", [((1,), None, True), (None, None, False),
+                                                  (None, RuntimeError("db down"), False)])
+def test_a_completed_report_is_found_by_its_rca_completed_event(monkeypatch, row, error, expected):
+    cursor = MagicMock()
+    cursor.fetchone.return_value = row
+    cursor.execute.side_effect = error
+    conn = MagicMock()
+    conn.cursor.return_value.__enter__.return_value = cursor
+    pool = MagicMock()
+    pool.get_admin_connection.return_value.__enter__.return_value = conn
+    monkeypatch.setattr(summarization, "db_pool", pool)
+    monkeypatch.setattr(summarization, "set_rls_context", lambda *a, **k: "org-1")
+
+    assert summarization._has_completed_report(INCIDENT, USER) is expected
+    sql, params = cursor.execute.call_args[0]
+    assert "incident_lifecycle_events" in sql and "'rca_completed'" in sql
+    assert params == (INCIDENT,)
+
+
 # --- notifications for a partial report ----------------------------------------------
 
 @pytest.fixture

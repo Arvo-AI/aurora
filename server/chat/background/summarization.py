@@ -1136,16 +1136,12 @@ def generate_incident_summary_from_chat(
                 "incident_id": incident_id,
                 "status": "completed_soft_limit",
             }
-        if keeps_earlier_report:
-            _keep_earlier_report(incident_id, user_id, announce=finishes_rca or stopped_early)
-        else:
-            _update_incident_summary(
-                incident_id,
-                "Summary generation timed out. View investigation chat for details.",
-                status="error",
-                user_id=user_id,
-            )
-            _notify_unwritten_partial_report(user_id, incident_id, unfinished_reason if stopped_early else None)
+        _record_failed_summary(
+            incident_id, user_id, keeps_earlier_report,
+            announce=finishes_rca or stopped_early,
+            message="Summary generation timed out. View investigation chat for details.",
+            unfinished_reason=unfinished_reason if stopped_early else None,
+        )
         return {
             "incident_id": incident_id,
             "status": "timeout",
@@ -1162,16 +1158,12 @@ def generate_incident_summary_from_chat(
             )
             raise self.retry(exc=e)
 
-        if keeps_earlier_report:
-            _keep_earlier_report(incident_id, user_id, announce=finishes_rca or stopped_early)
-        else:
-            _update_incident_summary(
-                incident_id,
-                "Summary generation failed. View investigation chat for details.",
-                status="error",
-                user_id=user_id,
-            )
-            _notify_unwritten_partial_report(user_id, incident_id, unfinished_reason if stopped_early else None)
+        _record_failed_summary(
+            incident_id, user_id, keeps_earlier_report,
+            announce=finishes_rca or stopped_early,
+            message="Summary generation failed. View investigation chat for details.",
+            unfinished_reason=unfinished_reason if stopped_early else None,
+        )
         return {
             "incident_id": incident_id,
             "status": "failed",
@@ -1224,6 +1216,41 @@ def _read_unfinished_state(incident_id: str, user_id: str) -> tuple:
     if not row or len(row) != 2 or not isinstance(row[0], (str, type(None))):
         return None, 0
     return row[0], int(row[1] or 0)
+
+
+def _record_failed_summary(
+    incident_id: str, user_id: str, keeps_earlier_report: bool, announce: bool,
+    message: str, unfinished_reason: Optional[str],
+) -> None:
+    """A summary failed for good. Only a newly written report replaces a completed one."""
+    if keeps_earlier_report or _has_completed_report(incident_id, user_id):
+        _keep_earlier_report(incident_id, user_id, announce=announce)
+        return
+    _update_incident_summary(incident_id, message, status="error", user_id=user_id)
+    _notify_unwritten_partial_report(user_id, incident_id, unfinished_reason)
+
+
+def _has_completed_report(incident_id: str, user_id: str) -> bool:
+    """Whether a report for this incident was already saved as complete.
+
+    The incident's status cannot tell: every rewrite, a follow-up's included,
+    sets it to 'summarizing' first. The rca_completed event is written with each
+    complete report. A failed read counts as no report.
+    """
+    try:
+        with db_pool.get_admin_connection() as conn:
+            with conn.cursor() as cursor:
+                if not set_rls_context(cursor, conn, user_id, log_prefix=_LOG_PREFIX):
+                    return False
+                cursor.execute(
+                    "SELECT 1 FROM incident_lifecycle_events "
+                    "WHERE incident_id = %s AND event_type = 'rca_completed' LIMIT 1",
+                    (incident_id,),
+                )
+                return cursor.fetchone() is not None
+    except Exception:
+        logger.exception(f"{_LOG_PREFIX} Could not check for an earlier report of {incident_id}")
+        return False
 
 
 def _keep_earlier_report(incident_id: str, user_id: str, announce: bool) -> None:
