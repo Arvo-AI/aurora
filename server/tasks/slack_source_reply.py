@@ -124,6 +124,11 @@ def _remove_unthreaded_message(client, target):
 
 @celery_app.task(name="tasks.slack_source_reply.deliver")
 def deliver_source_reply(user_id, incident_id):
+    _deliver_source_reply(user_id, incident_id)
+
+
+def _deliver_source_reply(user_id, incident_id):
+    """The task body, outside the decorator so it runs without Celery (stubbed in CI)."""
     from utils.notifications.dispatcher import _get_incident_data
     from utils.notifications.slack_notification_service import send_source_rca_reply
 

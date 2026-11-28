@@ -31,7 +31,7 @@ def delivery(monkeypatch):
     def run(attempts=0, errors=0, target=None, now=1001):
         monkeypatch.setattr(worker, "time", SimpleNamespace(time=lambda: now))
         cur.fetchone.side_effect = [(True,), (attempts, errors, target)]
-        worker.deliver_source_reply.run("user", incident)
+        worker._deliver_source_reply("user", incident)
         reply, target_json, failures, delay, _, _ = cur.execute.call_args.args[1]
         return reply, failures, delay
 
