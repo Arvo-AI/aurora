@@ -129,7 +129,6 @@ class AlertPipeline(unittest.TestCase):
         from routes.incidentio import incidentio_routes as incidentio
         from routes.sentry import sentry_routes as sentry
         from tasks.slack_source_reply import retry_due_source_replies
-        from utils.cache.redis_client import get_redis_client
         with patch.dict(os.environ, INTERNAL_API_SECRET="integration-test-only"):
             from main_chatbot import process_workflow_async
 
@@ -140,6 +139,14 @@ class AlertPipeline(unittest.TestCase):
                 result = cur.fetchall() if cur.description else []
                 conn.commit()
                 return result
+
+        def fresh_alert_budget():
+            # The org's alert RCA budget counts rca_dispatched_at, and queued RCAs keep
+            # later alerts waiting behind them. Start a new window and empty the queue.
+            sql("UPDATE incidents SET rca_dispatched_at = rca_dispatched_at - interval '2 hours' "
+                "WHERE org_id=%s AND rca_dispatched_at IS NOT NULL", (org,))
+            sql("UPDATE incidents SET aurora_status='idle', rca_queue_reason=NULL, rca_queued_at=NULL, "
+                "rca_queued_request=NULL WHERE org_id=%s AND aurora_status='queued'", (org,))
 
         sql("INSERT INTO organizations(id,name,slug) VALUES (%s,'RCA test',%s)", (org, org))
         sql("INSERT INTO users(id,email,password_hash,org_id) VALUES (%s,%s,'unused',%s)",
@@ -309,21 +316,23 @@ class AlertPipeline(unittest.TestCase):
             self.assertEqual(sql("SELECT count(*) FROM incidents WHERE org_id=%s AND slack_source_reply_ts IS NOT NULL",
                                  (org,)), [(5,)])
 
-            # Both connectors still ingest alerts when the user's five slots are spent.
+            # Over the org's five alert RCAs per window, both connectors still open
+            # incidents and queue their RCAs instead of starting them.
             aws_post("Client: terminal-99\nPower lost", subject="Rate-limited SNS")
             sentry_post({"action": "created", "data": {"issue": {
                 "id": "899", "title": "Rate-limited Sentry",
             }}}, resource="issue")
             retry_due_source_replies.delay().get(timeout=20, disable_sync_subtasks=False)
-            self.assertEqual(sql("SELECT alert_title, rca_celery_task_id, slack_source_reply_ts FROM incidents "
-                                 "WHERE org_id=%s AND alert_title IN ('Rate-limited SNS','Rate-limited Sentry') "
+            self.assertEqual(sql("SELECT alert_title, aurora_status, rca_celery_task_id, slack_source_reply_ts "
+                                 "FROM incidents WHERE org_id=%s "
+                                 "AND alert_title IN ('Rate-limited SNS','Rate-limited Sentry') "
                                  "ORDER BY alert_title", (org,)),
-                             [("Rate-limited SNS", None, None), ("Rate-limited Sentry", None, None)])
+                             [("Rate-limited SNS", "queued", None, None), ("Rate-limited Sentry", "queued", None, None)])
             self.assertEqual(sql("SELECT count(*) FROM chat_sessions WHERE org_id=%s AND incident_id IS NOT NULL",
                                  (org,)), [(5,)])
             self.assertEqual(len(contexts), 5)
-            # Begin a fresh rate-limit window for the remaining delivery scenarios.
-            get_redis_client().delete(f"background_chat_rate_limit:{user}")
+            # Begin a fresh budget window for the remaining delivery scenarios.
+            fresh_alert_budget()
 
             # Some SNS topics have no Slack subscriber. Exhaust the lookup delay
             # without sleeping for minutes. An unmatched alert stays quiet.
@@ -442,7 +451,7 @@ class AlertPipeline(unittest.TestCase):
 
             # Exercise incident.io from signed HTTP intake. The incident webhook uses an
             # internal ID, its Slack announcement uses a number, and alerts have their own URLs.
-            get_redis_client().delete(f"background_chat_rate_limit:{user}")
+            fresh_alert_budget()
             summarize.side_effect = None
             secret = "incidentio-test-secret"
             replace("routes.incidentio.incidentio_routes.get_token_data", return_value={"webhook_secret": secret})

@@ -129,6 +129,8 @@ x-common-env: &common-env
   INVESTIGATION_TIMEOUT_SECONDS: ${INVESTIGATION_TIMEOUT_SECONDS:-3600}
   # Stop an investigation that makes no progress for this long, in seconds. 0 turns it off.
   INVESTIGATION_STALL_SECONDS: ${INVESTIGATION_STALL_SECONDS:-600}
+  # Max background investigations one user may start per 5-minute window.
+  BACKGROUND_CHAT_RATE_LIMIT_MAX: ${BACKGROUND_CHAT_RATE_LIMIT_MAX:-20}
   EMBEDDING_MODEL: ${EMBEDDING_MODEL}
 
   # Root-cause recurrence detection (dedup layer 1): off | shadow | live

@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Investigations: a burst of alerts no longer drops RCAs. Before, an alert over
+  the background-chat limit (5 per user per 5 minutes, shared with actions and
+  other background runs) got no investigation at all, and 20 minutes later
+  showed "Investigation Failed". Every alert webhook now starts its RCA
+  through one shared helper with a per-org budget for alert RCAs (5 per
+  5 minutes, 30 per hour, 6 running at once). An alert over budget is queued
+  on its incident ("Not investigated yet", with the reason) and started
+  automatically when budget frees up, each with its own investigation, most
+  severe first and then oldest first. Any queued incident can be started by
+  hand with "Run investigation now". The stale-investigation sweep no longer
+  fails incidents that are deliberately waiting. Actions, team routing and
+  other background runs keep their own limit and no longer use up the alert
+  budget.
+- Investigations: that per-user limit for manual RCAs, actions and other
+  non-alert background runs is now 20 per 5 minutes instead of 5. Set
+  `BACKGROUND_CHAT_RATE_LIMIT_MAX` to change it (clamped to 1–1000).
+
+## [1.5.28] - 2026-11-27
+
+### Fixed
+- Dynamic alerting for Slack stays within Slack's rate limit. Where Slack
+  allows an app about one read of a workspace's messages a minute (an app that
+  is not in the Slack Marketplace), most reads were refused, each reading task
+  ran for 90 seconds, and after three refusals the new messages in a channel
+  were skipped. Aurora now learns the limit per workspace, spaces its calls,
+  and goes on with a half-read channel on the next turn. A refusal for asking
+  too often, or Slack being unreachable, no longer counts against a channel.
+  Channels with no new message are looked at every 30 minutes in such a
+  workspace, where Slack sends Aurora message events for them, and a deleted
+  thread no longer fails its channel. Aurora's other reads of Slack messages
+  (the agent's channel history and thread tools, alert threading) go ahead of
+  this background reading, which shares the same limit.
+- Change gating reviews a pull request stacked on another open pull request's
+  branch. It was skipped as not targeting the default branch.
+- Actions are scoped to their own organization in the query itself. Where the
+  database role bypasses row-level security (the default compose Postgres
+  user), one organization's on-incident actions ran on other organizations'
+  incidents, and scheduled actions were dispatched once per organization.
+
 ## [1.5.27] - 2026-11-25
 
 ### Added

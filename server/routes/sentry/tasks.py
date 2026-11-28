@@ -428,56 +428,25 @@ def process_sentry_event(
                         logger.exception("[SENTRY] Could not queue incident summary")
 
                     try:
-                        from chat.background.task import (
-                            run_background_chat,
-                            create_background_chat_session,
-                            is_background_chat_allowed,
+                        from chat.background.rca_dispatch import dispatch_alert_rca
+
+                        rca_prompt, rail_text = build_rca_prompt("sentry", title, payload, user_id=user_id)
+                        dispatch_alert_rca(
+                            user_id=user_id,
+                            incident_id=incident_id,
+                            source="sentry",
+                            prompt=rca_prompt,
+                            rail_text=rail_text,
+                            trigger_metadata={
+                                "source": "sentry",
+                                "alert_delivery": True,
+                                "resource": resource,
+                                "action": action,
+                                "issueId": issue_id,
+                            },
+                            session_title=f"RCA: {title}",
+                            log_prefix="[SENTRY][WEBHOOK]",
                         )
-
-                        if not is_background_chat_allowed(user_id):
-                            logger.info("[SENTRY][WEBHOOK] Skipping background RCA — rate limited for user %s", user_id)
-                        else:
-                            session_id = create_background_chat_session(
-                                user_id=user_id,
-                                title=f"RCA: {title}",
-                                org_id=org_id,
-                                trigger_metadata={
-                                    "source": "sentry",
-                                    "alert_delivery": True,
-                                    "resource": resource,
-                                    "action": action,
-                                    "issueId": issue_id,
-                                },
-                                incident_id=str(incident_id),
-                            )
-
-                            rca_prompt, rail_text = build_rca_prompt("sentry", title, payload, user_id=user_id)
-
-                            task = run_background_chat.delay(
-                                user_id=user_id,
-                                session_id=session_id,
-                                initial_message=rca_prompt,
-                                trigger_metadata={
-                                    "source": "sentry",
-                                    "alert_delivery": True,
-                                    "resource": resource,
-                                    "action": action,
-                                    "issueId": issue_id,
-                                },
-                                incident_id=str(incident_id),
-                                rail_text=rail_text,
-                            )
-
-                            cursor.execute(
-                                "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
-                                (task.id, str(incident_id)),
-                            )
-                            conn.commit()
-
-                            logger.info(
-                                "[SENTRY][WEBHOOK] Triggered background RCA for session %s (task_id=%s)",
-                                session_id, task.id,
-                            )
                     except Exception:
                         logger.exception("[SENTRY][WEBHOOK] Failed to trigger RCA")
 

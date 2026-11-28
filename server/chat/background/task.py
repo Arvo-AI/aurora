@@ -22,6 +22,7 @@ from utils.auth.stateless_auth import set_rls_context, get_org_id_for_user
 from connectors.google_chat_connector.client import get_chat_app_client
 from connectors.slack_connector.client import get_slack_client_for_user
 from utils.db.connection_pool import db_pool
+from chat.intake_limit import consume_background_chat_slot
 from chat.investigation_timeout import (
     investigation_soft_timeout_seconds,
     investigation_stale_after_seconds,
@@ -322,9 +323,6 @@ def _ensure_llm_context_history(
         return None
 
 
-_RATE_LIMIT_WINDOW_SECONDS = 300  # 5 minute window
-_RATE_LIMIT_MAX_REQUESTS = 5  # Max 5 background chats per window
-
 # RCA sources that use rca_context in system prompt
 _RCA_SOURCES = {'cloudwatch', 'sentry', 'grafana', 'datadog', 'netdata', 'splunk', 'elastic', 'slack', 'teams', 'google_chat', 'pagerduty', 'dynatrace', 'jenkins', 'cloudbees', 'spinnaker', 'newrelic', 'chat', 'opsgenie', 'incidentio', 'jira', 'servicenow', 'action'}
 
@@ -354,34 +352,17 @@ if _redis_client is None:
 
 
 def is_background_chat_allowed(user_id: str) -> bool:
-    """Check if user is allowed to create another background chat using Redis.
-    
-    Uses Redis INCR with expiration for counter-based rate limiting.
-    Allows up to 5 background chats per 5 minute window.
-    This prevents alert floods from creating dozens of expensive RCA chats.
-    
-    Args:
-        user_id: The user ID
-        
-    Returns:
-        True if allowed, False if rate limited
+    """True when this user may start another non-alert background investigation.
+
+    Redis counter over a fixed 5-minute window. Override the cap with
+    BACKGROUND_CHAT_RATE_LIMIT_MAX (default 20, clamped to 1–1000).
+
+    Covers housekeeping and user-requested runs (actions, team routing,
+    postmortems, chat-triggered RCAs). Alert-driven RCAs do not use it: they go
+    through ``rca_dispatch.dispatch_alert_rca``, which has its own per-org
+    budget and queues instead of dropping, so neither starves the other.
     """
-    key = f"background_chat_rate_limit:{user_id}"
-    
-    # Increment counter and get new value
-    count = _redis_client.incr(key)
-    
-    # Set expiration on first request in window
-    if count == 1:
-        _redis_client.expire(key, _RATE_LIMIT_WINDOW_SECONDS)
-    
-    if count > _RATE_LIMIT_MAX_REQUESTS:
-        ttl = _redis_client.ttl(key)
-        logger.warning(f"[BackgroundChat] Rate limited user {user_id} - {count}/{_RATE_LIMIT_MAX_REQUESTS} requests, {ttl}s remaining")
-        return False
-    
-    logger.debug(f"[BackgroundChat] User {user_id} request {count}/{_RATE_LIMIT_MAX_REQUESTS}")
-    return True
+    return consume_background_chat_slot(user_id, _redis_client)
 
 
 def _get_connected_integrations(user_id: str) -> Dict[str, bool]:
@@ -2889,6 +2870,8 @@ def _is_task_dead(task_id: str, last_activity, threshold, cursor=None, incident_
 # still be queued behind long investigations, so it keeps the old allowance.
 _DEAD_WORKER_MINUTES = 5
 _NEVER_STARTED_MINUTES = 20
+# Alert RCAs deliberately held back (rca_dispatch.py): never started, never lost.
+_NOT_YET_INVESTIGATED = ('queued',)
 
 
 def _db_now(cursor) -> datetime:
@@ -3238,39 +3221,85 @@ def _sweep_stale_background_chats() -> Dict[str, Any]:
                             "Investigation worker died unexpectedly", rca_run_task_id,
                         )
 
+                    # --- 3a. Unpublished reservations on analyzed incidents ---
+                    # A re-delivered alert can queue (and the drain reserve) an
+                    # incident that is already 'analyzed'. Section 3 below only
+                    # looks at 'investigating' rows, so a reservation whose worker
+                    # died before publishing is requeued here, with the same
+                    # reservation checks and stale cutoff. Nothing else about
+                    # analyzed incidents is touched.
+                    cursor.execute(
+                        "UPDATE incidents SET aurora_status = 'queued', rca_queue_reason = 'dispatch_failed', "
+                        "rca_queued_at = COALESCE(rca_queued_at, NOW() AT TIME ZONE 'UTC'), rca_dispatched_at = NULL, updated_at = NOW() "
+                        "WHERE user_id = %s AND status = 'analyzed' AND updated_at < %s "
+                        "AND COALESCE(aurora_status, 'idle') = 'idle' AND rca_celery_task_id IS NULL "
+                        "AND rca_run_task_id IS NULL AND rca_queued_request IS NOT NULL",
+                        (uid, stale_threshold)
+                    )
+                    conn.commit()
+
                     # --- 3. Stuck investigating (RCA done or orphaned, no active session) ---
+                    # An incident deliberately waiting for budget (queued) was
+                    # never started, so it cannot have been lost: it is skipped here.
                     cursor.execute("""
                         SELECT i.id, i.aurora_status,
                                CASE WHEN i.rca_run_task_id IS NOT NULL THEN i.aurora_chat_session_id END,
-                               i.rca_run_task_id
+                               i.rca_run_task_id,
+                               (COALESCE(i.aurora_status, 'idle') = 'idle' AND i.rca_celery_task_id IS NULL
+                                AND i.rca_run_task_id IS NULL AND i.rca_queued_request IS NOT NULL) AS unpublished
                         FROM incidents i
                         WHERE i.status = 'investigating' AND i.updated_at < %s AND i.user_id = %s
+                          AND COALESCE(i.aurora_status, 'idle') != 'queued'
                           AND NOT EXISTS (
                               SELECT 1 FROM chat_sessions cs
                               WHERE cs.id::text = i.aurora_chat_session_id::text
                                 AND cs.status = 'in_progress'
                           )
                     """, (stale_threshold, uid))
-                    for inc_id, cur_aurora, rca_session_id, rca_run_task_id in cursor.fetchall():
+                    for row in cursor.fetchall():
+                        inc_id, cur_aurora, rca_session_id, rca_run_task_id = row[:4]
+                        unpublished = len(row) > 4 and bool(row[4])
+                        if cur_aurora in _NOT_YET_INVESTIGATED:
+                            continue
+                        if unpublished:
+                            # Reserved by the alert dispatcher, but the worker that
+                            # held the reservation died before publishing the task.
+                            # Its request is still on the row: queue it again. The
+                            # WHERE repeats the SELECT's test, so a reservation
+                            # renewed since then (updated_at moved) is left alone.
+                            cursor.execute(
+                                "UPDATE incidents SET aurora_status = 'queued', rca_queue_reason = 'dispatch_failed', "
+                                "rca_queued_at = COALESCE(rca_queued_at, NOW() AT TIME ZONE 'UTC'), rca_dispatched_at = NULL, updated_at = NOW() "
+                                "WHERE id = %s AND status = 'investigating' AND updated_at < %s "
+                                "AND COALESCE(aurora_status, 'idle') = 'idle' AND rca_celery_task_id IS NULL "
+                                "AND rca_run_task_id IS NULL AND rca_queued_request IS NOT NULL",
+                                (inc_id, stale_threshold)
+                            )
+                            conn.commit()
+                            continue
+                        # Both UPDATEs repeat the SELECT's tests: the incident was
+                        # not queued since (a queued request must not be dropped),
+                        # and is still stale (a reservation made since moved
+                        # updated_at, and keeps its state).
                         if cur_aurora in ('complete', 'error'):
                             cursor.execute(
-                                "UPDATE incidents SET status = 'analyzed', analyzed_at = COALESCE(analyzed_at, NOW()), updated_at = NOW() WHERE id = %s AND status = 'investigating' RETURNING id",
-                                (inc_id,)
+                                "UPDATE incidents SET status = 'analyzed', analyzed_at = COALESCE(analyzed_at, NOW()), updated_at = NOW() WHERE id = %s AND status = 'investigating' AND updated_at < %s AND COALESCE(aurora_status, 'idle') != 'queued' RETURNING id",
+                                (inc_id, stale_threshold)
                             )
                         else:
                             cursor.execute(
-                                """UPDATE incidents SET aurora_status = 'error',
-                                       status = CASE WHEN status = 'resolved' THEN status ELSE 'analyzed' END,
-                                       analyzed_at = COALESCE(analyzed_at, NOW()), rca_celery_task_id = NULL, updated_at = NOW()
-                                   WHERE id = %s AND status != 'merged' RETURNING id""",
-                                (inc_id,)
+                                "UPDATE incidents SET aurora_status = 'error', status = 'analyzed', analyzed_at = COALESCE(analyzed_at, NOW()), rca_celery_task_id = NULL, updated_at = NOW() WHERE id = %s AND status != 'merged' AND updated_at < %s AND COALESCE(aurora_status, 'idle') != 'queued' RETURNING id",
+                                (inc_id, stale_threshold)
                             )
-                        if cursor.fetchone():
+                        cleaned = cursor.fetchone() is not None
+                        if cleaned:
                             if cur_aurora not in ('complete', 'error'):
                                 _record_rca_error(cursor, str(inc_id), uid)
                             orphaned_count += 1
                         conn.commit()
-                        if cur_aurora not in ('complete', 'error'):
+                        # Only for a row the UPDATE actually failed: one queued or
+                        # reserved since the SELECT gets no failure report.
+                        if cleaned and cur_aurora not in ('complete', 'error'):
                             _report_or_fail_dead_rca(
                                 uid, str(inc_id), rca_session_id,
                                 "Investigation became orphaned and was cleaned up", rca_run_task_id,

@@ -402,52 +402,24 @@ def process_newrelic_event(
 
                     # Trigger background RCA
                     try:
-                        from chat.background.task import (
-                            run_background_chat,
-                            create_background_chat_session,
-                            is_background_chat_allowed,
+                        from chat.background.rca_dispatch import dispatch_alert_rca
+
+                        status_str = payload.get("state") or payload.get("currentState") or "unknown"
+                        rca_prompt, rail_text = build_rca_prompt("newrelic", event_title, payload, user_id=user_id)
+                        dispatch_alert_rca(
+                            user_id=user_id,
+                            incident_id=incident_id,
+                            source="newrelic",
+                            prompt=rca_prompt,
+                            rail_text=rail_text,
+                            trigger_metadata={
+                                "source": "newrelic",
+                                "issueId": alert_metadata.get("issueId"),
+                                "status": status_str,
+                            },
+                            session_title=f"RCA: {event_title}",
+                            log_prefix="[NEWRELIC][WEBHOOK]",
                         )
-
-                        if not is_background_chat_allowed(user_id):
-                            logger.info("[NEWRELIC][WEBHOOK] Skipping background RCA — rate limited for user %s", user_id)
-                        else:
-                            status_str = payload.get("state") or payload.get("currentState") or "unknown"
-                            session_id = create_background_chat_session(
-                                user_id=user_id,
-                                title=f"RCA: {event_title}",
-                                trigger_metadata={
-                                    "source": "newrelic",
-                                    "issueId": alert_metadata.get("issueId"),
-                                    "status": status_str,
-                                },
-                                incident_id=str(incident_id),
-                            )
-
-                            rca_prompt, rail_text = build_rca_prompt("newrelic", event_title, payload, user_id=user_id)
-
-                            task = run_background_chat.delay(
-                                user_id=user_id,
-                                session_id=session_id,
-                                initial_message=rca_prompt,
-                                trigger_metadata={
-                                    "source": "newrelic",
-                                    "issueId": alert_metadata.get("issueId"),
-                                    "status": status_str,
-                                },
-                                incident_id=str(incident_id),
-                                rail_text=rail_text,
-                            )
-
-                            cursor.execute(
-                                "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
-                                (task.id, str(incident_id)),
-                            )
-                            conn.commit()
-
-                            logger.info(
-                                "[NEWRELIC][WEBHOOK] Triggered background RCA for session %s (task_id=%s)",
-                                session_id, task.id,
-                            )
                     except Exception as e:
                         logger.error("[NEWRELIC][WEBHOOK] Failed to trigger RCA: %s", e)
 

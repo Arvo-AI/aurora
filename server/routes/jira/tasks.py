@@ -335,60 +335,22 @@ def _dispatch_rca(
     issue_key: str, payload: Dict[str, Any],
 ) -> None:
     """Kick off the background RCA chat for a freshly-created Jira incident."""
-    session_id = None
-    task = None
     try:
-        from chat.background.task import (
-            run_background_chat,
-            create_background_chat_session,
-            is_background_chat_allowed,
-        )
-
-        if not is_background_chat_allowed(user_id):
-            logger.info("[JIRA][WEBHOOK] Skipping RCA - rate limited for user %s", user_id)
-            return
-
-        session_id = create_background_chat_session(
-            user_id=user_id,
-            title=f"RCA: {alert_title}",
-            trigger_metadata={"source": "jira", "issue_key": issue_key},
-            incident_id=str(incident_id),
-        )
+        from chat.background.rca_dispatch import dispatch_alert_rca
 
         rca_prompt, rail_text = build_rca_prompt("jira", alert_title, payload, user_id=user_id)
-
-        task = run_background_chat.delay(
+        dispatch_alert_rca(
             user_id=user_id,
-            session_id=session_id,
-            initial_message=rca_prompt,
-            trigger_metadata={"source": "jira", "issue_key": issue_key},
-            incident_id=str(incident_id),
+            incident_id=incident_id,
+            source="jira",
+            prompt=rca_prompt,
             rail_text=rail_text,
-        )
-
-        cursor.execute(
-            "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
-            (task.id, str(incident_id)),
-        )
-        conn.commit()
-
-        logger.info(
-            "[JIRA][WEBHOOK] Triggered RCA for %s session=%s task=%s",
-            sanitize(issue_key), session_id, task.id,
+            trigger_metadata={"source": "jira", "issue_key": issue_key},
+            session_title=f"RCA: {alert_title}",
+            log_prefix="[JIRA][WEBHOOK]",
         )
     except Exception:
         logger.exception("[JIRA][WEBHOOK] Failed to trigger RCA")
-        # If the session was created but the task never got enqueued, mark it
-        # failed so it doesn't sit forever as in_progress with no worker.
-        if session_id and task is None:
-            try:
-                cursor.execute(
-                    "UPDATE chat_sessions SET status = %s WHERE id = %s",
-                    ("failed", session_id),
-                )
-                conn.commit()
-            except Exception:
-                logger.debug("[JIRA][WEBHOOK] Failed to mark RCA session failed", exc_info=True)
 
 
 @celery_app.task(

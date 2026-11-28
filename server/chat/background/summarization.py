@@ -746,10 +746,13 @@ def generate_incident_summary(
         logger.error(
             f"{_LOG_PREFIX} Timeout generating summary for incident {incident_id}"
         )
+        # status=None, as on success: the initial summary is only text. Its
+        # failure must not overwrite the RCA's state, e.g. knock a queued RCA
+        # out of the queue (a burst is when these calls fail most).
         _update_incident_summary(
             incident_id,
             "Summary generation timed out. View raw alert for details.",
-            status="error",
+            status=None,
             user_id=user_id,
         )
         return {
@@ -769,11 +772,12 @@ def generate_incident_summary(
             )
             raise self.retry(exc=e)
 
-        # After max retries, mark as failed
+        # After max retries, say so in the summary. aurora_status is left alone
+        # (see the timeout branch above).
         _update_incident_summary(
             incident_id,
             "Summary generation failed. View raw alert for details.",
-            status="error",
+            status=None,
             user_id=user_id,
         )
         return {

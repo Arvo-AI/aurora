@@ -259,11 +259,7 @@ def trigger_delayed_rca(
         extract_runbook_url,
         fetch_runbook_content,
     )
-    from chat.background.task import (
-        run_background_chat,
-        create_background_chat_session,
-        is_background_chat_allowed,
-    )
+    from chat.background.rca_dispatch import FAILED as RCA_FAILED, dispatch_alert_rca
 
     logger.info(
         "[PAGERDUTY][RCA-DELAYED] Starting delayed RCA check for incident %s (db_id=%s)",
@@ -300,14 +296,6 @@ def trigger_delayed_rca(
                         "[PAGERDUTY][RCA-DELAYED] RCA already exists for incident %s (session=%s), skipping",
                         incident_id,
                         row[0],
-                    )
-                    return
-
-                # Check if user preferences and limits allow background chat
-                if not is_background_chat_allowed(user_id):
-                    logger.info(
-                        "[PAGERDUTY][RCA-DELAYED] Background chat not allowed for user %s",
-                        user_id,
                     )
                     return
 
@@ -384,44 +372,30 @@ def trigger_delayed_rca(
                         "[PAGERDUTY][RCA-DELAYED] No runbook found after delay, proceeding with RCA without runbook"
                     )
 
-                # Create and trigger RCA session
-                session_id = create_background_chat_session(
+                # Reads above hold no locks; end the transaction before the
+                # dispatcher takes the incident row on its own connection.
+                conn.commit()
+
+                # Start now if the org has budget, otherwise queue on the incident
+                outcome = dispatch_alert_rca(
                     user_id=user_id,
-                    title=f"RCA: {incident_title}",
+                    incident_id=incident_db_id,
+                    source="pagerduty",
+                    prompt=rca_prompt,
+                    rail_text=rail_text,
                     trigger_metadata={
                         "source": "pagerduty",
                         "incident_id": incident_id,
                         "incident_number": incident_number,
                         "urgency": incident_urgency,
                     },
-                    incident_id=incident_db_id,  # Link session to incident
+                    session_title=f"RCA: {incident_title}",
+                    log_prefix="[PAGERDUTY][RCA-DELAYED]",
                 )
-                # Start RCA task and immediately store task ID for cancellation support
-                task = run_background_chat.delay(
-                    user_id=user_id,
-                    session_id=session_id,
-                    initial_message=rca_prompt,
-                    trigger_metadata={
-                        "source": "pagerduty",
-                        "incident_id": incident_id,
-                        "incident_number": incident_number,
-                    },
-                    incident_id=incident_db_id,
-                    rail_text=rail_text,
-                )
-                
-                # Store Celery task ID immediately for cancellation support
-                cursor.execute(
-                    "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
-                    (task.id, incident_db_id)
-                )
-                conn.commit()
-                
-                logger.info(
-                    "[PAGERDUTY][RCA-DELAYED] Successfully triggered RCA for incident %s (task_id=%s)",
-                    incident_id,
-                    task.id,
-                )
+                if outcome == RCA_FAILED:
+                    # Nothing was started or queued (a temporary DB error). This
+                    # task is keyed on the incident, so retrying it is safe.
+                    raise RuntimeError("RCA dispatch failed; retrying")
 
     except Exception as exc:
         logger.exception(

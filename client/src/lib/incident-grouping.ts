@@ -41,8 +41,19 @@ export function isInvestigating(incident: Incident): boolean {
   return incident.auroraStatus === 'running' || incident.auroraStatus === 'summarizing';
 }
 
+/** The RCA has not run yet: it is waiting for the org's investigation budget. */
+export function isNotInvestigatedYet(incident: Incident): boolean {
+  return incident.auroraStatus === 'queued';
+}
+
+/**
+ * Measured from when the RCA was started, not when the alert arrived: time an
+ * incident spent queued for budget is not time its investigation stalled.
+ * Incidents never queued fall back to startedAt, as before.
+ */
 export function isStalled(incident: Incident, now: number): boolean {
-  return incident.status === 'investigating' && now - Date.parse(incident.startedAt) > STALL_MS;
+  return incident.status === 'investigating' && !isNotInvestigatedYet(incident)
+    && now - Date.parse(incident.rcaDispatchedAt ?? incident.startedAt) > STALL_MS;
 }
 
 /** Time-dependent, so evaluated at render time rather than baked into the group. */

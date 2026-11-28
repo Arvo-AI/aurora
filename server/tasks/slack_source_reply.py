@@ -7,7 +7,7 @@ from uuid import UUID, uuid5
 from requests import HTTPError
 
 from celery_config import celery_app
-from connectors.slack_connector.client import SlackAPIError, SlackClient
+from connectors.slack_connector.client import SlackAPIError, SlackClient, SlackRateLimited
 from utils.auth.stateless_auth import get_credentials_from_db, get_org_preference, set_rls_context
 from utils.cache.redis_client import get_redis_client
 from utils.db.connection_pool import db_pool
@@ -43,6 +43,8 @@ def _next_error_delay(error, errors):
     if isinstance(error, SlackAPIError) and error.error in _PERMANENT_SLACK_ERRORS:
         return None
     delay = 30 * 2 ** (errors - 1)
+    if isinstance(error, SlackRateLimited):
+        return max(delay, error.retry_after or 0)
     if isinstance(error, HTTPError) and error.response is not None:
         response = error.response
         if response.status_code == 429:

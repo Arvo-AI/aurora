@@ -352,12 +352,8 @@ def _sync_existing(
     # pre-update status and each start an RCA. The second waits here and then
     # sees what the first committed.
     #
-    # NO KEY UPDATE, not UPDATE: the lock is still held while _dispatch_rca
-    # creates the RCA chat session on another connection, and that insert's
-    # foreign key to incidents takes a KEY SHARE lock on this row. KEY SHARE
-    # conflicts with FOR UPDATE, so the insert would wait on our own transaction
-    # for ever; it does not conflict with NO KEY UPDATE, which still serializes
-    # concurrent syncs and plain updates of the row.
+    # _dispatch_rca commits (releasing this lock) before the shared dispatcher
+    # locks the row on its own connection, so the dispatcher never waits on us.
     cursor.execute(
         "SELECT status, rca_celery_task_id FROM incidents WHERE id = %s FOR NO KEY UPDATE",
         (incident_id,),
@@ -387,10 +383,9 @@ def _sync_existing(
     new_status = row[0] if row else old_status
     reopened = old_status == "resolved" and new_status != "resolved"
     if payload is not None and _needs_rca(new_status, old_task, reopened=reopened, retrying=retrying):
-        # The row stays locked and the new state uncommitted until the RCA task id
-        # is recorded, so both land together or neither does. A dispatch failure
-        # rolls the incident back to its last committed state and raises, and the
-        # Celery retry meets the same reopen (or the same missing RCA) again.
+        # _dispatch_rca commits the new state, then starts the RCA or queues it on
+        # the incident. If it can do neither it raises, and the Celery retry
+        # (``retrying``) meets the same missing RCA and dispatches again.
         logger.info(
             "%s Incident %s is active with no RCA (%s); investigating now",
             _LOG, incident_id, "reopened in ServiceNow" if reopened else "retried delivery",
@@ -643,66 +638,41 @@ def _dispatch_rca(
     cursor, conn, user_id: str, incident_id, title: str,
     number: str, sys_id: str, payload: Dict[str, Any],
 ) -> None:
-    """Queue the background RCA chat for an incident and record its task id.
+    """Start the incident's RCA through the shared alert RCA dispatcher.
 
-    Commits the connection once the task id is stored, so whatever the caller
-    staged on it (a reopen's new state) becomes durable together with the task
-    id. On any failure the connection is rolled back instead, the chat session
-    is marked failed, and ``RcaDispatchError`` is raised so the Celery delivery
-    retries from the last committed state. A rate-limited user gets no RCA:
-    the function returns without committing and the caller commits as usual.
+    Builds the prompt first: if that fails the connection is rolled back and
+    ``RcaDispatchError`` is raised so the Celery delivery retries from the last
+    committed state. Otherwise it commits whatever the caller staged (a
+    reopen's new state), which also releases the caller's row lock, because
+    ``dispatch_alert_rca`` locks the incident on its own connection. The
+    dispatcher starts the RCA now or queues it on the incident when the org is
+    over its alert RCA budget; only when it could do neither (``missing`` or
+    ``failed``) is ``RcaDispatchError`` raised, and the retried delivery
+    dispatches again.
     """
-    session_id = None
-    task = None
-    trigger_metadata = {"source": SOURCE, "number": number, "sys_id": sys_id}
+    from chat.background.rca_dispatch import FAILED, MISSING, dispatch_alert_rca
+
     try:
-        from chat.background.task import (
-            create_background_chat_session,
-            is_background_chat_allowed,
-            run_background_chat,
-        )
-
-        if not is_background_chat_allowed(user_id):
-            logger.info("%s Skipping RCA - rate limited for user %s", _LOG, user_id)
-            return
-
-        session_id = create_background_chat_session(
-            user_id=user_id,
-            title=f"RCA: {title}",
-            trigger_metadata=trigger_metadata,
-            incident_id=str(incident_id),
-        )
-
         rca_prompt, rail_text = build_rca_prompt(SOURCE, title, payload, user_id=user_id)
-
-        task = run_background_chat.delay(
-            user_id=user_id,
-            session_id=session_id,
-            initial_message=rca_prompt,
-            trigger_metadata=trigger_metadata,
-            incident_id=str(incident_id),
-            rail_text=rail_text,
-        )
-
-        cursor.execute(
-            "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
-            (task.id, str(incident_id)),
-        )
-        conn.commit()
-        logger.info("%s Triggered RCA for %s session=%s task=%s", _LOG, sanitize(number), session_id, task.id)
     except Exception as exc:
-        logger.exception("%s Failed to trigger RCA", _LOG)
+        logger.exception("%s Failed to build the RCA prompt", _LOG)
         try:
             conn.rollback()
         except Exception:
             logger.debug("%s Rollback after the failed RCA dispatch failed", _LOG, exc_info=True)
-        if session_id and task is None:
-            try:
-                cursor.execute(
-                    "UPDATE chat_sessions SET status = %s WHERE id = %s",
-                    ("failed", session_id),
-                )
-                conn.commit()
-            except Exception:
-                logger.debug("%s Failed to mark RCA session failed", _LOG, exc_info=True)
         raise RcaDispatchError(f"RCA dispatch failed for incident {incident_id}") from exc
+
+    conn.commit()
+    outcome = dispatch_alert_rca(
+        user_id=user_id,
+        incident_id=incident_id,
+        source=SOURCE,
+        prompt=rca_prompt,
+        rail_text=rail_text,
+        trigger_metadata={"source": SOURCE, "number": number, "sys_id": sys_id},
+        session_title=f"RCA: {title}",
+        log_prefix=_LOG,
+    )
+    if outcome in (MISSING, FAILED):
+        raise RcaDispatchError(f"RCA dispatch failed for incident {incident_id}")
+    logger.info("%s RCA for %s %s", _LOG, sanitize(number), outcome)

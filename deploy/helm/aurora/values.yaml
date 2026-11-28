@@ -365,6 +365,9 @@ config:
   # Stop an investigation that makes no progress for this long, in seconds.
   # Minimum 120; "0" turns the check off.
   INVESTIGATION_STALL_SECONDS: "600"
+  # Max non-alert background investigations (manual RCA, actions) one user
+  # may start per 5-minute window. Clamped to 1–1000.
+  BACKGROUND_CHAT_RATE_LIMIT_MAX: "20"
 
   # --- AI Safety Guardrails ---
   # Input rail + signature matcher + LLM safety judge. All three activate with

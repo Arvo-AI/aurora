@@ -980,26 +980,6 @@ def _extract_service(fields: Dict[str, Any]) -> str:
     return fields.get("incident_type") or "unknown"
 
 
-def _mark_rca_skipped(incident_id: str, reason: str) -> None:
-    """Record on the incident that RCA was intentionally skipped (with reason).
-
-    Surfaces skips (e.g. rate limiting) on the dashboard instead of leaving the
-    operator with only a log line and an incident stuck at 'idle'.
-    """
-    from utils.db.connection_pool import db_pool
-    try:
-        with db_pool.get_admin_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    "UPDATE incidents SET aurora_status = %s, aurora_summary = %s, "
-                    "updated_at = CURRENT_TIMESTAMP WHERE id = %s",
-                    ("skipped", reason, str(incident_id)),
-                )
-                conn.commit()
-    except Exception as exc:
-        logger.warning("[INCIDENTIO] Failed to mark RCA skipped for incident %s: %s", incident_id, exc)
-
-
 def _trigger_rca_pipeline(
     user_id: str,
     incident_id: str,
@@ -1024,66 +1004,24 @@ def _trigger_rca_pipeline(
     )
 
     try:
-        from chat.background.task import (
-            run_background_chat,
-            create_background_chat_session,
-            is_background_chat_allowed,
-        )
+        from chat.background.rca_dispatch import dispatch_alert_rca
 
-        if not is_background_chat_allowed(user_id):
-            # Rate limited: don't silently drop the alert. Record the reason on
-            # the incident so it's visible on the dashboard instead of just an
-            # INFO log the operator never sees. RCA can be re-run manually.
-            logger.info("[INCIDENTIO] Background RCA rate-limited for user %s", user_id)
-            _mark_rca_skipped(
-                incident_id,
-                "RCA skipped: background-investigation rate limit reached. "
-                "Re-run the investigation manually from this incident.",
-            )
-            return
-
-        chat_title = f"RCA: {fields['incident_name']}"
-        session_id = create_background_chat_session(
+        rca_prompt, rail_text = build_rca_prompt("incidentio", fields["incident_name"], payload, user_id=user_id)
+        dispatch_alert_rca(
             user_id=user_id,
-            title=chat_title,
+            incident_id=incident_id,
+            source="incidentio",
+            prompt=rca_prompt,
+            rail_text=rail_text,
             trigger_metadata={
                 "source": "incidentio",
                 "incident_id": fields["incident_id"],
                 "incident_name": fields["incident_name"],
                 "permalink": fields["permalink"],
             },
-            incident_id=str(incident_id),
+            session_title=f"RCA: {fields['incident_name']}",
+            log_prefix="[INCIDENTIO]",
         )
-
-        rca_prompt, rail_text = build_rca_prompt("incidentio", fields["incident_name"], payload, user_id=user_id)
-
-        task = run_background_chat.delay(
-            user_id=user_id,
-            session_id=session_id,
-            initial_message=rca_prompt,
-            trigger_metadata={
-                "source": "incidentio",
-                "incident_id": fields["incident_id"],
-                "incident_name": fields["incident_name"],
-            },
-            incident_id=str(incident_id),
-            rail_text=rail_text,
-        )
-
-        # Store task ID for cancellation support
-        from utils.db.connection_pool import db_pool
-        try:
-            with db_pool.get_admin_connection() as conn:
-                with conn.cursor() as cursor:
-                    cursor.execute(
-                        "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
-                        (task.id, str(incident_id)),
-                    )
-                    conn.commit()
-        except Exception as exc:
-            logger.warning("[INCIDENTIO] Failed to store RCA task ID for incident %s: %s", incident_id, exc)
-
-        logger.info("[INCIDENTIO] Triggered RCA for incident %s (task=%s)", incident_id, task.id)
 
     except Exception as exc:
         logger.exception("[INCIDENTIO] Failed to trigger RCA: %s", exc)

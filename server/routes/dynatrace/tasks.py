@@ -177,36 +177,19 @@ def process_dynatrace_problem(
         )
 
         try:
-            from chat.background.task import (
-                run_background_chat, create_background_chat_session, is_background_chat_allowed,
-            )
-            if not is_background_chat_allowed(user_id):
-                logger.info("[DYNATRACE] Skipping RCA - rate limited for user %s", user_id)
-                return
+            from chat.background.rca_dispatch import dispatch_alert_rca
 
-            session_id = create_background_chat_session(
-                user_id=user_id,
-                title=f"RCA: {title}",
-                trigger_metadata={"source": "dynatrace", "problem_id": payload.get("ProblemID")},
-                incident_id=str(incident_id),
-            )
             rca_prompt, rail_text = build_rca_prompt("dynatrace", title, payload, user_id=user_id)
-            task = run_background_chat.delay(
-                user_id=user_id, session_id=session_id,
-                initial_message=rca_prompt,
-                trigger_metadata={"source": "dynatrace", "problem_id": payload.get("ProblemID")},
-                incident_id=str(incident_id),
+            dispatch_alert_rca(
+                user_id=user_id,
+                incident_id=incident_id,
+                source="dynatrace",
+                prompt=rca_prompt,
                 rail_text=rail_text,
+                trigger_metadata={"source": "dynatrace", "problem_id": payload.get("ProblemID")},
+                session_title=f"RCA: {title}",
+                log_prefix="[DYNATRACE]",
             )
-            with db_pool.get_admin_connection() as conn:
-                cursor = conn.cursor()
-                set_rls_context(cursor, conn, user_id, log_prefix="[DYNATRACE:task_id_update]")
-                cursor.execute(
-                    "UPDATE incidents SET rca_celery_task_id = %s WHERE id = %s",
-                    (task.id, str(incident_id)),
-                )
-                conn.commit()
-            logger.info("[DYNATRACE] Triggered RCA for session %s (task=%s)", session_id, task.id)
         except Exception as chat_exc:
             logger.exception("[DYNATRACE] Failed to trigger background chat: %s", chat_exc)
 
